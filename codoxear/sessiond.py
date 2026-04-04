@@ -88,6 +88,29 @@ def _read_jsonl_from_offset(path: Path, offset: int, max_bytes: int = 256 * 1024
     return _read_jsonl_from_offset_impl(path, offset, max_bytes=max_bytes)
 
 
+def _ui_response_text(req: dict[str, Any]) -> str | None:
+    if req.get("cancelled") is True:
+        return None
+    if isinstance(req.get("confirmed"), bool):
+        return "yes" if req.get("confirmed") else "no"
+    value = req.get("value")
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            if not isinstance(item, str):
+                continue
+            text = item.strip()
+            if not text:
+                continue
+            parts.append(text)
+        if parts:
+            return ", ".join(parts)
+    return None
+
+
 def _process_group_alive(root_pid: int) -> bool:
     if root_pid <= 0:
         return False
@@ -194,6 +217,7 @@ class Sessiond:
             return
         meta = {
             "session_id": st.session_id,
+            "backend": "codex",
             "owner": OWNER_TAG if OWNER_TAG else None,
             "broker_pid": os.getpid(),
             "sessiond_pid": os.getpid(),
@@ -327,6 +351,30 @@ class Sessiond:
                 if fd is not None:
                     try:
                         _inject(fd, text=text, suffix=enter)
+                    except Exception:
+                        traceback.print_exc()
+                return
+
+            if cmd == "ui_response":
+                response_text = _ui_response_text(req)
+                fd: int | None = None
+                suffix = _encode_enter()
+                with self._lock:
+                    st = self.state
+                    if not st:
+                        resp = {"error": "no state"}
+                    else:
+                        fd = st.pty_master_fd
+                        resp = {"ok": True}
+                _send_socket_json_line(conn, resp)
+                if fd is not None and response_text is not None:
+                    try:
+                        _inject(fd, text=response_text, suffix=suffix)
+                    except Exception:
+                        traceback.print_exc()
+                elif fd is not None and req.get("cancelled") is True:
+                    try:
+                        _write_all(fd, _seq_bytes("\\x1b"))
                     except Exception:
                         traceback.print_exc()
                 return
