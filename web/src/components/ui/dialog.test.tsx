@@ -171,6 +171,36 @@ describe("overlay primitives", () => {
     expect(root.querySelector('[data-testid="dialog-backdrop"]')).toBeNull();
   });
 
+  it("restores focus to the opener after backdrop dismissal", async () => {
+    root = document.createElement("div");
+    document.body.appendChild(root);
+
+    const opener = document.createElement("button");
+    opener.textContent = "Open dismissible dialog";
+    document.body.appendChild(opener);
+    opener.focus();
+
+    render(<DismissibleDialogHarness />, root);
+    await flush();
+
+    const backdrop = root.querySelector('[data-testid="dialog-backdrop"]') as HTMLButtonElement | null;
+    expect(backdrop).not.toBeNull();
+
+    // Browsers focus the clicked backdrop button before the dialog unmounts.
+    backdrop?.focus();
+    expect(document.activeElement).toBe(backdrop);
+
+    await act(async () => {
+      backdrop?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+
+    expect(root.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(opener);
+
+    opener.remove();
+  });
+
   it("dismisses the dialog when Escape is pressed", async () => {
     root = document.createElement("div");
     document.body.appendChild(root);

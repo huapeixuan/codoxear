@@ -338,6 +338,7 @@ class TestPiBackendRouting(unittest.TestCase):
                         "backend": "codex",
                         "agent_backend": "codex",
                         "owner": "",
+                        "supports_web_control": True,
                         "broker_pid": os.getpid(),
                         "codex_pid": os.getpid(),
                         "cwd": "/tmp/pi-cwd",
@@ -367,8 +368,8 @@ class TestPiBackendRouting(unittest.TestCase):
             self.assertEqual(persisted["agent_backend"], "pi")
             self.assertEqual(persisted["session_path"], str(session_path))
 
-    def test_list_sessions_includes_pi_sidecar_without_session_path(self) -> None:
-        """A pi sidecar without session_path is valid (PTY-wrapped piox)."""
+    def test_list_sessions_includes_supported_pi_sidecar_without_session_path(self) -> None:
+        """A brokered pi sidecar without session_path is valid (PTY-wrapped piox)."""
         mgr = _make_manager()
         mgr._discover_existing_if_stale = SessionManager._discover_existing_if_stale.__get__(mgr, SessionManager)  # type: ignore[method-assign]
         with tempfile.TemporaryDirectory() as td:
@@ -402,6 +403,7 @@ class TestPiBackendRouting(unittest.TestCase):
                         "session_id": "pi-thread-pty",
                         "backend": "pi",
                         "owner": "",
+                        "supports_web_control": True,
                         "broker_pid": os.getpid(),
                         "codex_pid": os.getpid(),
                         "cwd": "/tmp/pi-cwd",
@@ -419,6 +421,36 @@ class TestPiBackendRouting(unittest.TestCase):
 
             sids = sorted(row["session_id"] for row in rows)
             self.assertEqual(sids, ["good-session", "pty-session"])
+
+    def test_list_sessions_hides_unsupported_terminal_pi_sidecar(self) -> None:
+        mgr = _make_manager()
+        mgr._discover_existing_if_stale = SessionManager._discover_existing_if_stale.__get__(mgr, SessionManager)  # type: ignore[method-assign]
+        with tempfile.TemporaryDirectory() as td:
+            sock_dir = Path(td)
+            pty_sock = sock_dir / "pty-session.sock"
+            pty_sock.touch()
+            (sock_dir / "pty-session.json").write_text(
+                json.dumps(
+                    {
+                        "session_id": "pi-thread-pty",
+                        "backend": "pi",
+                        "owner": "",
+                        "broker_pid": os.getpid(),
+                        "codex_pid": os.getpid(),
+                        "cwd": "/tmp/pi-cwd",
+                        "start_ts": 456.0,
+                        "sock_path": str(pty_sock),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("codoxear.server.SOCK_DIR", sock_dir), patch.object(
+                mgr, "_sock_call", return_value={"busy": False, "queue_len": 0, "token": None}
+            ), patch("codoxear.server._discover_pi_session_for_cwd", return_value=None):
+                rows = mgr.list_sessions()
+
+            self.assertEqual(rows, [])
 
     def test_discover_existing_skips_invalid_service_tier_sidecar_when_requested(self) -> None:
         mgr = _make_manager()

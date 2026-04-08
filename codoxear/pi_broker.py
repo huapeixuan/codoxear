@@ -222,6 +222,7 @@ class PiBroker:
             "session_id": st.session_id,
             "backend": "pi",
             "owner": OWNER_TAG if OWNER_TAG else None,
+            "supports_web_control": True,
             "broker_pid": os.getpid(),
             "agent_pid": st.codex_pid,
             "codex_pid": st.codex_pid,

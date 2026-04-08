@@ -220,6 +220,7 @@ class Sessiond:
             "session_id": st.session_id,
             "backend": AGENT_BACKEND,
             "owner": OWNER_TAG if OWNER_TAG else None,
+            "supports_web_control": True,
             "broker_pid": os.getpid(),
             "sessiond_pid": os.getpid(),
             "codex_pid": st.codex_pid,

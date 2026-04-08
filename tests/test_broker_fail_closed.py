@@ -92,6 +92,92 @@ class TestBrokerFailClosed(unittest.TestCase):
 
         self.assertEqual(seen, [new])
 
+    def test_pi_discover_log_watcher_skips_full_session_scan_once_log_is_bound(self) -> None:
+        fake_stdin = SimpleNamespace(isatty=lambda: False, fileno=lambda: 9)
+        with tempfile.TemporaryDirectory() as td, patch("codoxear.broker.sys.stdin", fake_stdin), patch.dict(
+            "os.environ", {"PI_HOME": td}, clear=False
+        ), patch("codoxear.broker.AGENT_BACKEND", "pi"), patch("codoxear.broker.BACKEND", get_agent_backend("pi")):
+            broker = Broker(cwd="/tmp", codex_args=[])
+            current = Path(td) / "current.jsonl"
+            current.write_text('{"type":"session","id":"current","cwd":"/tmp"}\n', encoding="utf-8")
+            broker.state = _broker_state(codex_pid=1234, sock_path=Path(td) / "broker.sock")
+            broker.state.log_path = current
+            broker.state.known_rollout_paths = {current}
+
+            with patch("codoxear.broker._proc_find_open_rollout_log", return_value=None), patch(
+                "codoxear.broker._find_new_session_log", return_value=None
+            ) as find_new, patch("codoxear.broker.os.waitpid", return_value=(1234, 0)), patch(
+                "codoxear.broker.time.sleep", return_value=None
+            ):
+                broker._discover_log_watcher()
+
+        find_new.assert_not_called()
+
+    def test_pi_discover_log_watcher_scans_when_log_is_not_bound_yet(self) -> None:
+        fake_stdin = SimpleNamespace(isatty=lambda: False, fileno=lambda: 9)
+        with tempfile.TemporaryDirectory() as td, patch("codoxear.broker.sys.stdin", fake_stdin), patch.dict(
+            "os.environ", {"PI_HOME": td}, clear=False
+        ), patch("codoxear.broker.AGENT_BACKEND", "pi"), patch("codoxear.broker.BACKEND", get_agent_backend("pi")):
+            broker = Broker(cwd="/tmp", codex_args=[])
+            broker.state = _broker_state(codex_pid=1234, sock_path=Path(td) / "broker.sock")
+
+            def _capture_scan(**_kwargs):
+                broker._stop.set()
+                return None
+
+            with patch("codoxear.broker._proc_find_open_rollout_log", return_value=None), patch(
+                "codoxear.broker._find_new_session_log", side_effect=_capture_scan
+            ) as find_new, patch("codoxear.broker.os.waitpid", return_value=(0, 0)), patch(
+                "codoxear.broker.time.sleep", return_value=None
+            ):
+                broker._discover_log_watcher()
+
+        find_new.assert_called_once()
+
+    def test_pi_discover_log_watcher_scans_current_session_subdir_when_available(self) -> None:
+        fake_stdin = SimpleNamespace(isatty=lambda: False, fileno=lambda: 9)
+        with tempfile.TemporaryDirectory() as td, patch("codoxear.broker.sys.stdin", fake_stdin), patch.dict(
+            "os.environ", {"PI_HOME": td}, clear=False
+        ), patch("codoxear.broker.AGENT_BACKEND", "pi"), patch("codoxear.broker.BACKEND", get_agent_backend("pi")):
+            broker = Broker(cwd="/tmp/pi-work", codex_args=[])
+            expected_dir = Path(td) / "agent" / "sessions" / "--tmp-pi-work--"
+            broker.state = _broker_state(codex_pid=1234, sock_path=Path(td) / "broker.sock")
+
+            def _capture_scan(**_kwargs):
+                broker._stop.set()
+                return None
+
+            with patch("codoxear.broker._proc_find_open_rollout_log", return_value=None), patch(
+                "codoxear.broker._find_new_session_log", side_effect=_capture_scan
+            ) as find_new, patch("codoxear.broker.os.waitpid", return_value=(0, 0)), patch(
+                "codoxear.broker.time.sleep", return_value=None
+            ):
+                broker._discover_log_watcher()
+
+        self.assertEqual(find_new.call_args.kwargs["sessions_dir"].resolve(), expected_dir.resolve())
+
+    def test_pi_run_initializes_known_rollout_paths_from_current_session_subdir(self) -> None:
+        fake_stdin = SimpleNamespace(isatty=lambda: False, fileno=lambda: 9)
+        _FakeThread.started_targets = []
+        with tempfile.TemporaryDirectory() as td, patch("codoxear.broker.sys.stdin", fake_stdin), patch.dict(
+            "os.environ", {"PI_HOME": td}, clear=False
+        ), patch("codoxear.broker.AGENT_BACKEND", "pi"), patch("codoxear.broker.BACKEND", get_agent_backend("pi")):
+            broker = Broker(cwd="/tmp/pi-work", codex_args=[])
+            expected_dir = Path(td) / "agent" / "sessions" / "--tmp-pi-work--"
+            with patch("codoxear.broker._require_proc"), patch("codoxear.broker._term_size", return_value=(24, 80)), patch(
+                "codoxear.broker.pty.fork", return_value=(1234, 55)
+            ), patch("codoxear.broker._set_winsize"), patch("codoxear.broker.signal.signal"), patch(
+                "codoxear.broker.os.waitpid", return_value=(1234, 0)
+            ), patch("codoxear.broker.os.close"), patch.object(broker, "_write_meta"), patch(
+                "codoxear.broker.threading.Thread", _FakeThread
+            ), patch("codoxear.broker._iter_session_logs", return_value=[]) as iter_logs:
+                broker.run()
+
+        sessions_dir_arg = iter_logs.call_args.kwargs.get("sessions_dir")
+        if sessions_dir_arg is None:
+            sessions_dir_arg = iter_logs.call_args.args[0]
+        self.assertEqual(sessions_dir_arg.resolve(), expected_dir.resolve())
+
     def test_teardown_managed_process_group_kills_real_process_group(self) -> None:
         proc = subprocess.Popen(["sh", "-c", "sleep 100"], start_new_session=True)
         try:
@@ -277,6 +363,7 @@ class TestBrokerFailClosed(unittest.TestCase):
 
         self.assertEqual(meta["backend"], "pi")
         self.assertEqual(meta["agent_backend"], "pi")
+        self.assertTrue(meta["supports_web_control"])
 
     def test_pi_resume_run_binds_log_path_from_session_arg_before_first_write(self) -> None:
         fake_stdin = SimpleNamespace(isatty=lambda: False, fileno=lambda: 9)

@@ -138,6 +138,7 @@ class TestPiBroker(unittest.TestCase):
 
         self.assertIsNone(meta["log_path"])
         self.assertEqual(meta["session_path"], str(session_path))
+        self.assertTrue(meta["supports_web_control"])
 
     def test_state_returns_busy_queue_and_token(self) -> None:
         rpc = _FakeRpc()

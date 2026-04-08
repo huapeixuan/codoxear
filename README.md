@@ -202,6 +202,13 @@ Backend-specific session logs live under the backend home:
 - Codex: `~/.codex/sessions/rollout-*.jsonl`
 - Pi: `~/.pi/agent/sessions/*.jsonl`
 
+### Frontend development
+
+1. Start the Python server: `python3 -m codoxear.server`
+2. Start Vite: `cd web && npm install && npm run dev`
+3. Open the Vite URL for frontend work; `/api/*` is proxied to Python.
+4. Build production assets with `cd web && npm run build`.
+
 ## License
 
 MIT, see `LICENSE`.

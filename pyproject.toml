@@ -21,4 +21,4 @@ packages = ["codoxear"]
 include-package-data = true
 
 [tool.setuptools.package-data]
-codoxear = ["static/*"]
+codoxear = ["static/*", "static/dist/**/*", "static/dist/.vite/manifest.json"]

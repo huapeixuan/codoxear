@@ -755,6 +755,27 @@ class Broker:
         except ProcessLookupError:
             return
 
+    def _pi_scan_sessions_dir(self) -> Path:
+        if AGENT_BACKEND != "pi":
+            return self.sessions_dir
+        declared_log_path = _session_log_path_from_args(
+            args=self.codex_args,
+            agent_backend=AGENT_BACKEND,
+            sessions_dir=self.sessions_dir,
+        )
+        if declared_log_path is not None:
+            candidate = declared_log_path.parent
+        else:
+            candidate = _pi_session_dir_from_args(args=self.codex_args, cwd=self.cwd, sessions_dir=self.sessions_dir)
+        if candidate is None:
+            return self.sessions_dir
+        try:
+            if candidate.exists() and candidate.is_dir():
+                return candidate.resolve()
+        except Exception:
+            return self.sessions_dir
+        return self.sessions_dir
+
     def _discover_log_watcher(self) -> None:
         try:
             while not self._stop.is_set():
@@ -782,10 +803,13 @@ class Broker:
                             self._maybe_register_or_switch_rollout(log_path=lp)
                             time.sleep(0.25)
                             continue
-                    if AGENT_BACKEND == "pi":
+                    if AGENT_BACKEND == "pi" and current_log_path is None:
+                        # Once Pi is already bound to a concrete session log, avoid
+                        # rescanning the whole sessions tree on every watcher tick.
+                        scan_sessions_dir = self._pi_scan_sessions_dir()
                         claimed_paths = _claimed_log_paths_from_sock_meta(sock_dir=SOCK_DIR, exclude_sock=sock_path)
                         discovered = _find_new_session_log(
-                            sessions_dir=self.sessions_dir,
+                            sessions_dir=scan_sessions_dir,
                             agent_backend="pi",
                             cwd=self.cwd,
                             after_ts=0.0,
@@ -1069,6 +1093,7 @@ class Broker:
             "session_id": st.session_id,
             "backend": AGENT_BACKEND,
             "owner": OWNER_TAG if OWNER_TAG else None,
+            "supports_web_control": True,
             "broker_pid": os.getpid(),
             "sessiond_pid": os.getpid(),
             "codex_pid": st.codex_pid,
@@ -1375,7 +1400,7 @@ class Broker:
             resume_session_id=self._resume_session_id,
         )
         if AGENT_BACKEND == "pi":
-            st.known_rollout_paths = set(_iter_session_logs(self.sessions_dir, agent_backend="pi"))
+            st.known_rollout_paths = set(_iter_session_logs(self._pi_scan_sessions_dir(), agent_backend="pi"))
         st.sock_path = SOCK_DIR / f"broker-{os.getpid()}.sock"
         self.state = st
         declared_log_path = _session_log_path_from_args(args=self.codex_args, agent_backend=AGENT_BACKEND, sessions_dir=self.sessions_dir)

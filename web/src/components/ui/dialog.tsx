@@ -51,6 +51,7 @@ export function Dialog({ open, onOpenChange, children }: DialogProps) {
         <button
           type="button"
           data-testid="dialog-backdrop"
+          data-dialog-owned="true"
           aria-label="Close dialog"
           onClick={() => onOpenChange?.(false)}
           className="absolute inset-0 bg-slate-950/45"
@@ -81,11 +82,12 @@ export function DialogContent({ className, children, titleId, ariaLabel }: Dialo
     return () => {
       const previousFocus = previousFocusRef.current;
       const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const activeElementIsDialogOwned = activeElement?.closest('[data-dialog-owned="true"]') != null;
 
       if (
         previousFocus &&
         previousFocus.isConnected &&
-        (!activeElement || activeElement === document.body || content.contains(activeElement))
+        (!activeElement || activeElement === document.body || content.contains(activeElement) || activeElementIsDialogOwned)
       ) {
         queueMicrotask(() => {
           if (previousFocus.isConnected) {

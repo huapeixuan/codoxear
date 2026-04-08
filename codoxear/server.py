@@ -10,6 +10,7 @@ import http.server
 import io
 import json
 import math
+import mimetypes
 import os
 import re
 import secrets
@@ -119,8 +120,14 @@ def _strip_url_prefix(prefix: str, path: str) -> str | None:
     return None
 
 
+ROOT_DIR = Path(__file__).resolve().parent.parent
+WEB_DIR = ROOT_DIR / "web"
+WEB_DIST_DIR = WEB_DIR / "dist"
+LEGACY_STATIC_DIR = ROOT_DIR / "codoxear" / "static"
+PACKAGED_WEB_DIST_DIR = LEGACY_STATIC_DIR / "dist"
+
 APP_DIR = _default_app_dir()
-STATIC_DIR = Path(__file__).resolve().parent / "static"
+STATIC_DIR = LEGACY_STATIC_DIR
 STATIC_ASSET_VERSION_PLACEHOLDER = "__CODOXEAR_ASSET_VERSION__"
 STATIC_ASSET_VERSION_FILES = ("app.js", "app.css")
 SOCK_DIR = APP_DIR / "socks"
@@ -173,6 +180,7 @@ SUPPORTED_PI_REASONING_EFFORTS = ("off", "minimal", "low", "medium", "high", "xh
 
 DEFAULT_HOST = os.environ.get("CODEX_WEB_HOST", "::")
 DEFAULT_PORT = int(os.environ.get("CODEX_WEB_PORT", "8743"))
+USE_LEGACY_WEB = os.environ.get("CODOXEAR_USE_LEGACY_WEB", "0") == "1"
 HARNESS_DEFAULT_IDLE_MINUTES = 5
 HARNESS_DEFAULT_MAX_INJECTIONS = 10
 HARNESS_SWEEP_SECONDS = float(os.environ.get("CODEX_WEB_HARNESS_SWEEP_SECONDS", "2.5"))
@@ -2541,6 +2549,10 @@ def _display_pi_busy(s: Session, *, broker_busy: bool) -> bool:
     return True
 
 
+def _supports_web_control(meta: dict[str, Any]) -> bool:
+    return meta.get("supports_web_control") is True
+
+
 class SessionManager:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -3721,11 +3733,14 @@ class SessionManager:
                             cwd=cwd,
                             ignored_paths=claimed,
                         )
-                    if inferred_pi_session_path is not None:
-                        backend = "pi"
-                        agent_backend = "pi"
-                        session_path_discovered = True
-                        _patch_metadata_pi_binding(sock, inferred_pi_session_path)
+                if inferred_pi_session_path is not None:
+                    backend = "pi"
+                    agent_backend = "pi"
+                    session_path_discovered = True
+                    _patch_metadata_pi_binding(sock, inferred_pi_session_path)
+
+                if backend == "pi" and (not owned) and (not _supports_web_control(meta)):
+                    continue
 
                 log_path = _metadata_log_path(meta=meta, backend=backend, sock=sock)
                 if inferred_pi_session_path is not None:
@@ -5305,48 +5320,183 @@ def _read_static_bytes(path: Path) -> bytes:
     return data.replace(placeholder, version)
 
 
+def _is_path_within(root: Path, candidate: Path) -> bool:
+    try:
+        candidate.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _candidate_web_dist_dirs() -> list[Path]:
+    out: list[Path] = []
+    for candidate in (WEB_DIST_DIR, PACKAGED_WEB_DIST_DIR):
+        if candidate not in out:
+            out.append(candidate)
+    return out
+
+
+def _served_web_dist_dir() -> Path | None:
+    for candidate in _candidate_web_dist_dirs():
+        if (candidate / "index.html").is_file():
+            return candidate
+    return None
+
+
+def _vite_manifest_path(dist_dir: Path | None = None) -> Path:
+    if dist_dir is None:
+        for candidate_dir in _candidate_web_dist_dirs():
+            vite_manifest = candidate_dir / ".vite" / "manifest.json"
+            if vite_manifest.is_file():
+                return vite_manifest
+            manifest = candidate_dir / "manifest.json"
+            if manifest.is_file():
+                return manifest
+        dist_dir = WEB_DIST_DIR
+    vite_manifest = dist_dir / ".vite" / "manifest.json"
+    if vite_manifest.is_file():
+        return vite_manifest
+    return dist_dir / "manifest.json"
+
+
+def _hashed_asset_suffix(asset_path: str) -> str | None:
+    stem = Path(asset_path).stem
+    if "-" not in stem:
+        return None
+    suffix = stem.rsplit("-", 1)[-1].strip()
+    return suffix or None
+
+
+def _manifest_asset_token(asset_path: str) -> str | None:
+    asset_path = asset_path.strip()
+    if not asset_path:
+        return None
+    hashed = _hashed_asset_suffix(asset_path)
+    if hashed:
+        return hashed
+    return hashlib.sha256(asset_path.encode("utf-8")).hexdigest()[:12]
+
+
+def _asset_version_from_manifest(manifest: dict[str, object]) -> str:
+    if not isinstance(manifest, dict):
+        return "dev"
+    entry = manifest.get("src/main.tsx")
+    if not isinstance(entry, dict):
+        entry = manifest.get("index.html")
+    if not isinstance(entry, dict):
+        for value in manifest.values():
+            if isinstance(value, dict) and value.get("file"):
+                entry = value
+                break
+    if not isinstance(entry, dict):
+        return "dev"
+    parts: list[str] = []
+    js_token = _manifest_asset_token(str(entry.get("file") or ""))
+    if js_token:
+        parts.append(js_token)
+    css_files = entry.get("css")
+    if isinstance(css_files, list):
+        for css_path in css_files:
+            css_token = _manifest_asset_token(str(css_path or ""))
+            if css_token:
+                parts.append(css_token)
+    return "-".join(parts) or "dev"
+
+
+def _current_app_version() -> str:
+    served_dist_dir = _served_web_dist_dir()
+    if served_dist_dir is not None:
+        manifest_path = _vite_manifest_path(served_dist_dir)
+        try:
+            manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            manifest_data = {}
+        version = _asset_version_from_manifest(manifest_data if isinstance(manifest_data, dict) else {})
+        if version != "dev":
+            return version
+    return _static_asset_version()
+
+
+def _rewrite_web_index_html(data: str) -> str:
+    if not URL_PREFIX:
+        return data
+    prefix_body = re.escape(URL_PREFIX.lstrip("/"))
+    pattern = rf'((?:href|src|content)=["\'])/(?!/|{prefix_body}/)'
+    return re.sub(pattern, rf'\1{URL_PREFIX}/', data)
+
+
+def _read_web_index() -> tuple[str, str]:
+    dist_dir = _served_web_dist_dir()
+    if dist_dir is not None:
+        dist_index = dist_dir / "index.html"
+        return _rewrite_web_index_html(dist_index.read_text(encoding="utf-8")), "text/html; charset=utf-8"
+    legacy_index = LEGACY_STATIC_DIR / "index.html"
+    return _read_static_bytes(legacy_index).decode("utf-8"), "text/html; charset=utf-8"
+
+
+def _resolve_public_web_asset(rel: str) -> Path | None:
+    rel_path = Path(rel.lstrip("/"))
+    served_dist_dir = _served_web_dist_dir()
+    if served_dist_dir is not None:
+        dist_candidate = (served_dist_dir / rel_path).resolve()
+        if _is_path_within(served_dist_dir.resolve(), dist_candidate) and dist_candidate.is_file():
+            return dist_candidate
+    legacy_candidate = (LEGACY_STATIC_DIR / rel_path).resolve()
+    if _is_path_within(LEGACY_STATIC_DIR.resolve(), legacy_candidate) and legacy_candidate.is_file():
+        return legacy_candidate
+    return None
+
+
+def _content_type_for_path(path: Path) -> str:
+    if path.suffix == ".html":
+        return "text/html; charset=utf-8"
+    if path.suffix == ".js":
+        return "text/javascript; charset=utf-8"
+    if path.suffix == ".css":
+        return "text/css; charset=utf-8"
+    if path.suffix == ".webmanifest":
+        return "application/manifest+json; charset=utf-8"
+    if path.suffix == ".svg":
+        return "image/svg+xml; charset=utf-8"
+    guessed, _ = mimetypes.guess_type(path.name)
+    return guessed or "application/octet-stream"
+
+
+def _cache_control_for_path(path: Path) -> str:
+    if "/assets/" in path.as_posix():
+        return "public, max-age=31536000, immutable"
+    return "no-store"
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version = "codoxear/0.1"
 
+    def _send_bytes(self, data: bytes, ctype: str, *, cache_control: str = "no-store") -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", cache_control)
+        if cache_control == "no-store":
+            # UI is used for interactive debugging; serve HTML and legacy assets without caching
+            # so changes show up immediately on refresh.
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _send_path(self, path: Path) -> None:
+        data = _read_static_bytes(path)
+        self._send_bytes(data, _content_type_for_path(path), cache_control=_cache_control_for_path(path))
+
     def _send_static(self, rel: str) -> None:
         path = (STATIC_DIR / rel.lstrip("/")).resolve()
-        if not str(path).startswith(str(STATIC_DIR.resolve())):
+        if not _is_path_within(STATIC_DIR.resolve(), path):
             self.send_error(404)
             return
         if not path.exists() or not path.is_file():
             self.send_error(404)
             return
-        data = _read_static_bytes(path)
-        if path.suffix == ".html":
-            ctype = "text/html; charset=utf-8"
-        elif path.suffix == ".js":
-            ctype = "text/javascript; charset=utf-8"
-        elif path.suffix == ".css":
-            ctype = "text/css; charset=utf-8"
-        elif path.suffix == ".webmanifest":
-            ctype = "application/manifest+json; charset=utf-8"
-        elif path.suffix == ".png":
-            ctype = "image/png"
-        elif path.suffix in (".jpg", ".jpeg"):
-            ctype = "image/jpeg"
-        elif path.suffix == ".webp":
-            ctype = "image/webp"
-        elif path.suffix == ".svg":
-            ctype = "image/svg+xml; charset=utf-8"
-        elif path.suffix == ".ico":
-            ctype = "image/x-icon"
-        else:
-            ctype = "application/octet-stream"
-        self.send_response(200)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(data)))
-        # UI is used for interactive debugging; serve assets without caching so changes
-        # (including inline JS) show up immediately on refresh.
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Pragma", "no-cache")
-        self.send_header("Expires", "0")
-        self.end_headers()
-        self.wfile.write(data)
+        self._send_path(path)
 
     def _unauthorized(self) -> None:
         _json_response(self, 401, {"error": "unauthorized"})
@@ -5370,13 +5520,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return
                 path = stripped
             if path == "/favicon.ico":
+                resolved = _resolve_public_web_asset("favicon.ico")
+                if resolved is not None:
+                    self._send_path(resolved)
+                    return
                 self._send_static("favicon.png")
                 return
             if path == "/manifest.webmanifest":
-                self._send_static("manifest.webmanifest")
+                resolved = _resolve_public_web_asset("manifest.webmanifest")
+                if resolved is None:
+                    self.send_error(404)
+                    return
+                self._send_path(resolved)
                 return
             if path == "/service-worker.js":
-                self._send_static("service-worker.js")
+                resolved = _resolve_public_web_asset("service-worker.js")
+                if resolved is None:
+                    self.send_error(404)
+                    return
+                self._send_path(resolved)
                 return
             if path == "/app.js":
                 self._send_static("app.js")
@@ -5385,11 +5547,30 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send_static("app.css")
                 return
             if path == "/favicon.png":
+                resolved = _resolve_public_web_asset("favicon.png")
+                if resolved is not None:
+                    self._send_path(resolved)
+                    return
                 self._send_static("favicon.png")
                 return
             if path == "/":
-                self._send_static("index.html")
+                body, ctype = _read_web_index()
+                self._send_bytes(body.encode("utf-8"), ctype)
                 return
+            if path.startswith("/assets/") and not USE_LEGACY_WEB:
+                served_dist_dir = _served_web_dist_dir()
+                if served_dist_dir is not None:
+                    candidate = (served_dist_dir / path.lstrip("/")).resolve()
+                    if _is_path_within(served_dist_dir.resolve(), candidate) and candidate.is_file():
+                        self._send_path(candidate)
+                        return
+                self.send_error(404)
+                return
+            if not USE_LEGACY_WEB and path.startswith("/") and "/" not in path[1:] and not path.startswith("/api/"):
+                resolved = _resolve_public_web_asset(path)
+                if resolved is not None:
+                    self._send_path(resolved)
+                    return
             if path.startswith("/static/"):
                 self._send_static(path[len("/static/") :])
                 return
@@ -5496,7 +5677,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     self,
                     200,
                     {
-                        "app_version": _static_asset_version(),
+                        "app_version": _current_app_version(),
                         "sessions": sessions,
                         "recent_cwds": recent_cwds,
                         "new_session_defaults": new_session_defaults,
