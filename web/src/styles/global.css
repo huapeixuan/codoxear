@@ -411,6 +411,76 @@ select {
   padding: 0.15rem 0.1rem 0.25rem;
 }
 
+.sessionGroup {
+  display: flex;
+  flex-direction: column;
+}
+
+.sessionGroupShell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+  border-radius: 1.6rem;
+  background: color-mix(in srgb, var(--card) 84%, white 16%);
+  box-shadow: 0 16px 40px -36px rgba(15, 23, 42, 0.6);
+}
+
+.sessionGroupHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.3rem 0.35rem 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  color: inherit;
+}
+
+.sessionGroupHeading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.sessionGroupTitle {
+  font-size: 0.98rem;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.sessionGroupSubtitle {
+  color: var(--legacy-muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.sessionGroupToggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--legacy-muted);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
+.sessionGroupList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
 .sessionCard {
   width: 100%;
   padding: 0;

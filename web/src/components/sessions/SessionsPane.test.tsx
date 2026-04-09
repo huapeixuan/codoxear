@@ -1,6 +1,7 @@
 import { render } from "preact";
 import { act } from "preact/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
 import { AppProviders } from "../../app/providers";
 import { SessionsPane } from "./SessionsPane";
 
@@ -8,9 +9,12 @@ vi.mock("../../lib/api", () => ({
   api: {
     createSession: vi.fn().mockResolvedValue({ ok: true, broker_pid: 42 }),
     editSession: vi.fn().mockResolvedValue({ ok: true, alias: "Updated session" }),
+    editCwdGroup: vi.fn().mockResolvedValue({ ok: true, cwd: "/tmp", collapsed: true }),
     deleteSession: vi.fn().mockResolvedValue({ ok: true }),
   },
 }));
+
+let root: HTMLDivElement | null = null;
 
 function createStaticStore(state: any) {
   let currentState = state;
@@ -35,10 +39,24 @@ async function flush() {
   await Promise.resolve();
 }
 
-describe("SessionsPane", () => {
-  let root: HTMLDivElement | null = null;
+function renderSessionsPane(state: any) {
+  const sessionsStore = createStaticStore(state);
 
+  root = document.createElement("div");
+  document.body.appendChild(root);
+  render(
+    <AppProviders sessionsStore={sessionsStore as any}>
+      <SessionsPane />
+    </AppProviders>,
+    root,
+  );
+
+  return sessionsStore;
+}
+
+describe("SessionsPane", () => {
   afterEach(() => {
+    vi.clearAllMocks();
     vi.unstubAllGlobals();
     if (root) {
       render(null, root);
@@ -48,7 +66,7 @@ describe("SessionsPane", () => {
   });
 
   it("renders the sessions surface with active session cards and metadata badges", () => {
-    const sessionsStore = createStaticStore({
+    renderSessionsPane({
       items: [
         {
           session_id: "sess-1",
@@ -63,29 +81,23 @@ describe("SessionsPane", () => {
       activeSessionId: "sess-1",
       loading: false,
       newSessionDefaults: null,
+      recentCwds: [],
+      cwdGroups: {},
+      tmuxAvailable: false,
     });
 
-    root = document.createElement("div");
-    document.body.appendChild(root);
-    render(
-      <AppProviders sessionsStore={sessionsStore as any}>
-        <SessionsPane />
-      </AppProviders>,
-      root,
-    );
-
-    expect(root.querySelector("[data-testid='sessions-surface']")).not.toBeNull();
-    expect(root.querySelectorAll("[data-testid='session-card']")).toHaveLength(1);
-    const activeCard = root.querySelector<HTMLButtonElement>("[data-testid='session-card'][aria-current='true']");
+    expect(root?.querySelector("[data-testid='sessions-surface']")).not.toBeNull();
+    expect(root?.querySelectorAll("[data-testid='session-card']")).toHaveLength(1);
+    const activeCard = root?.querySelector<HTMLButtonElement>("[data-testid='session-card'][aria-current='true']");
     expect(activeCard).not.toBeNull();
     expect(activeCard?.getAttribute("aria-current")).toBe("true");
-    expect(root.textContent).toContain("Inbox cleanup");
-    expect(root.textContent).toContain("pi");
-    expect(root.textContent).toContain("web");
+    expect(root?.textContent).toContain("Inbox cleanup");
+    expect(root?.textContent).toContain("pi");
+    expect(root?.textContent).toContain("web");
   });
 
   it("renders compact session rows with dense metadata hooks", () => {
-    const sessionsStore = createStaticStore({
+    renderSessionsPane({
       items: [
         {
           session_id: "sess-compact-1",
@@ -101,18 +113,12 @@ describe("SessionsPane", () => {
       activeSessionId: "sess-compact-1",
       loading: false,
       newSessionDefaults: null,
+      recentCwds: [],
+      cwdGroups: {},
+      tmuxAvailable: false,
     });
 
-    root = document.createElement("div");
-    document.body.appendChild(root);
-    render(
-      <AppProviders sessionsStore={sessionsStore as any}>
-        <SessionsPane />
-      </AppProviders>,
-      root,
-    );
-
-    const card = root.querySelector("[data-testid='session-card']");
+    const card = root?.querySelector("[data-testid='session-card']");
     expect(card?.querySelector(".sessionCardButton.compactSessionButton")).not.toBeNull();
     expect(card?.querySelector(".sessionTitleRow")).not.toBeNull();
     expect(card?.querySelector(".sessionMetaBadges")).not.toBeNull();
@@ -120,7 +126,7 @@ describe("SessionsPane", () => {
   });
 
   it("uses the first user message as the primary title when no alias is present", () => {
-    const sessionsStore = createStaticStore({
+    renderSessionsPane({
       items: [
         {
           session_id: "4a145abccb9a48889dc7f3e5bed735f2",
@@ -132,19 +138,13 @@ describe("SessionsPane", () => {
       activeSessionId: null,
       loading: false,
       newSessionDefaults: null,
+      recentCwds: [],
+      cwdGroups: {},
+      tmuxAvailable: false,
     });
 
-    root = document.createElement("div");
-    document.body.appendChild(root);
-    render(
-      <AppProviders sessionsStore={sessionsStore as any}>
-        <SessionsPane />
-      </AppProviders>,
-      root,
-    );
-
-    const title = root.querySelector(".sessionTitle")?.textContent || "";
-    const preview = root.querySelector(".sessionPreview")?.textContent || "";
+    const title = root?.querySelector(".sessionTitle")?.textContent || "";
+    const preview = root?.querySelector(".sessionPreview")?.textContent || "";
     expect(title).toContain("我准备用 preact + vite 重构web端，请帮我出个规划");
     expect(preview).toContain("/Users/huapeixuan/Documents/Code/codoxear");
     expect(title).not.toContain("4a145abccb9a48889dc7f3e5bed735f2");
@@ -155,7 +155,7 @@ describe("SessionsPane", () => {
     const refresh = vi.fn().mockResolvedValue(undefined);
     const confirm = vi.fn().mockReturnValue(true);
     vi.stubGlobal("confirm", confirm);
-    const sessionsStore = createStaticStore({
+    const sessionsStore = renderSessionsPane({
       items: [
         {
           session_id: "sess-1",
@@ -167,23 +167,16 @@ describe("SessionsPane", () => {
       activeSessionId: "sess-1",
       loading: false,
       newSessionDefaults: null,
+      recentCwds: [],
+      cwdGroups: {},
+      tmuxAvailable: false,
     });
     sessionsStore.refresh = refresh;
 
-    root = document.createElement("div");
-    document.body.appendChild(root);
-    render(
-      <AppProviders sessionsStore={sessionsStore as any}>
-        <SessionsPane />
-      </AppProviders>,
-      root,
-    );
-
-    const deleteButton = Array.from(root.querySelectorAll("button")).find((button) => button.textContent?.includes("Delete"));
+    const deleteButton = Array.from(root?.querySelectorAll("button") || []).find((button) => button.textContent?.includes("Delete"));
     expect(deleteButton).not.toBeUndefined();
     deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    await Promise.resolve();
-    await Promise.resolve();
+    await flush();
 
     expect(api.deleteSession).toHaveBeenCalledWith("sess-1");
     expect(refresh).toHaveBeenCalled();
@@ -192,7 +185,7 @@ describe("SessionsPane", () => {
 
   it("duplicates a session with its launch settings and selects the new broker pid", async () => {
     const { api } = await import("../../lib/api");
-    const sessionsStore = createStaticStore({
+    const sessionsStore = renderSessionsPane({
       items: [
         {
           session_id: "sess-1",
@@ -211,11 +204,13 @@ describe("SessionsPane", () => {
       tmuxAvailable: true,
       recentCwds: ["/tmp/project"],
       newSessionDefaults: null,
+      cwdGroups: {},
     });
 
-    sessionsStore.refresh = vi.fn(async () => {
+    sessionsStore.refresh = vi.fn(async (options?: { preferNewest?: boolean }) => {
       sessionsStore.setState({
         ...sessionsStore.getState(),
+        activeSessionId: options?.preferNewest ? "sess-2" : sessionsStore.getState().activeSessionId,
         items: [
           ...sessionsStore.getState().items,
           {
@@ -229,16 +224,7 @@ describe("SessionsPane", () => {
       });
     });
 
-    root = document.createElement("div");
-    document.body.appendChild(root);
-    render(
-      <AppProviders sessionsStore={sessionsStore as any}>
-        <SessionsPane />
-      </AppProviders>,
-      root,
-    );
-
-    const duplicateButton = Array.from(root.querySelectorAll("button")).find((button) => button.textContent?.includes("Duplicate"));
+    const duplicateButton = Array.from(root?.querySelectorAll("button") || []).find((button) => button.textContent?.includes("Duplicate"));
     expect(duplicateButton).not.toBeUndefined();
 
     duplicateButton?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
@@ -260,7 +246,7 @@ describe("SessionsPane", () => {
   it("opens the edit dialog and saves the legacy sidebar fields", async () => {
     const { api } = await import("../../lib/api");
     const refresh = vi.fn().mockResolvedValue(undefined);
-    const sessionsStore = createStaticStore({
+    const sessionsStore = renderSessionsPane({
       items: [
         {
           session_id: "sess-1",
@@ -279,34 +265,26 @@ describe("SessionsPane", () => {
       loading: false,
       newSessionDefaults: null,
       recentCwds: [],
+      cwdGroups: {},
       tmuxAvailable: false,
     });
     sessionsStore.refresh = refresh;
 
-    root = document.createElement("div");
-    document.body.appendChild(root);
-    render(
-      <AppProviders sessionsStore={sessionsStore as any}>
-        <SessionsPane />
-      </AppProviders>,
-      root,
-    );
-
-    const editButton = Array.from(root.querySelectorAll("button")).find((button) => button.textContent?.includes("Edit"));
+    const editButton = Array.from(root?.querySelectorAll("button") || []).find((button) => button.textContent?.includes("Edit"));
     expect(editButton).not.toBeUndefined();
     editButton?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await flush();
 
-    const nameInput = root.querySelector('input[name="sessionName"]') as HTMLInputElement;
+    const nameInput = root?.querySelector('input[name="sessionName"]') as HTMLInputElement;
     expect(nameInput?.value).toBe("Inbox cleanup");
 
-    const dependencySelect = root.querySelector('select[name="dependencySessionId"]') as HTMLSelectElement;
+    const dependencySelect = root?.querySelector('select[name="dependencySessionId"]') as HTMLSelectElement;
     await act(async () => {
       dependencySelect.value = "sess-2";
       dependencySelect.dispatchEvent(new Event("change", { bubbles: true }));
     });
 
-    const saveButton = Array.from(root.querySelectorAll("button")).find((button) => button.textContent?.includes("Save changes"));
+    const saveButton = Array.from(root?.querySelectorAll("button") || []).find((button) => button.textContent?.includes("Save changes"));
     expect(saveButton).not.toBeUndefined();
     saveButton?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await flush();
@@ -316,6 +294,116 @@ describe("SessionsPane", () => {
       priority_offset: 0,
       snooze_until: null,
       dependency_session_id: "sess-2",
+    });
+    expect(refresh).toHaveBeenCalled();
+  });
+
+  it("groups same-cwd sessions together and orders groups by freshest activity", () => {
+    renderSessionsPane({
+      items: [
+        {
+          session_id: "sess-1",
+          alias: "Docs polish",
+          cwd: "/work/docs",
+          agent_backend: "pi",
+          updated_ts: 30,
+        },
+        {
+          session_id: "sess-2",
+          alias: "Bug bash",
+          cwd: "/work/api",
+          agent_backend: "codex",
+          updated_ts: 120,
+        },
+        {
+          session_id: "sess-3",
+          alias: "Release notes",
+          cwd: "/work/docs",
+          agent_backend: "pi",
+          updated_ts: 20,
+        },
+      ],
+      activeSessionId: "sess-3",
+      loading: false,
+      newSessionDefaults: null,
+      recentCwds: [],
+      cwdGroups: {},
+      tmuxAvailable: false,
+    });
+
+    const groups = Array.from(root?.querySelectorAll<HTMLElement>(".sessionGroup") || []);
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.querySelector(".sessionGroupTitle")?.textContent?.trim())).toEqual([
+      "api",
+      "docs",
+    ]);
+    expect(groups[0]?.textContent).toContain("/work/api");
+    expect(groups[1]?.textContent).toContain("Docs polish");
+    expect(groups[1]?.textContent).toContain("Release notes");
+
+    const groupedCards = groups[1]?.querySelectorAll("[data-testid='session-card']") || [];
+    expect(Array.from(groupedCards).map((card) => card.textContent)).toEqual([
+      expect.stringContaining("Docs polish"),
+      expect.stringContaining("Release notes"),
+    ]);
+  });
+
+  it("renders a fallback group for sessions without a working directory", () => {
+    renderSessionsPane({
+      items: [
+        {
+          session_id: "sess-1",
+          alias: "Inbox",
+          agent_backend: "pi",
+          start_ts: 10,
+        },
+      ],
+      activeSessionId: null,
+      loading: false,
+      newSessionDefaults: null,
+      recentCwds: [],
+      cwdGroups: {},
+      tmuxAvailable: false,
+    });
+
+    const group = root?.querySelector<HTMLElement>(".sessionGroup");
+    expect(group?.querySelector(".sessionGroupTitle")?.textContent).toContain("No working directory");
+    expect(group?.querySelector(".sessionGroupSubtitle")?.textContent).toContain("Sessions without a cwd");
+    expect(group?.textContent).toContain("Inbox");
+  });
+
+  it("uses cwd group metadata for titles and collapse state, then persists toggles", async () => {
+    const { api } = await import("../../lib/api");
+    const refresh = vi.fn().mockResolvedValue(undefined);
+    const sessionsStore = renderSessionsPane({
+      items: [
+        {
+          session_id: "sess-1",
+          alias: "Inbox cleanup",
+          cwd: "/tmp/project",
+          agent_backend: "pi",
+        },
+      ],
+      activeSessionId: "sess-1",
+      loading: false,
+      newSessionDefaults: null,
+      recentCwds: [],
+      cwdGroups: { "/tmp/project": { label: "Project Alpha", collapsed: true } },
+      tmuxAvailable: false,
+    });
+    sessionsStore.refresh = refresh;
+
+    expect(root?.textContent).toContain("Project Alpha");
+    expect(root?.querySelectorAll("[data-testid='session-card']")).toHaveLength(0);
+
+    const toggleButton = root?.querySelector<HTMLButtonElement>(".sessionGroupHeader");
+    toggleButton?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await flush();
+
+    expect(api.editCwdGroup).toHaveBeenCalledWith({
+      cwd: "/tmp/project",
+      label: "Project Alpha",
+      collapsed: false,
     });
     expect(refresh).toHaveBeenCalled();
   });

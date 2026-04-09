@@ -5,13 +5,31 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 
 import { useSessionsStore, useSessionsStoreApi } from "../../app/providers";
 import { api } from "../../lib/api";
+import type { CwdGroupMeta, SessionSummary } from "../../lib/types";
 import { normalizeLaunchBackend, providerChoiceToSettings } from "../../lib/launch";
-import type { SessionSummary } from "../../lib/types";
 import { EditSessionDialog } from "./EditSessionDialog";
 import { SessionCard } from "./SessionCard";
+import { SessionGroup } from "./SessionGroup";
 
 interface SessionsPaneProps {
   onNewSession?: () => void;
+}
+
+const FALLBACK_GROUP_KEY = "__no_working_directory__";
+const FALLBACK_GROUP_TITLE = "No working directory";
+const FALLBACK_GROUP_SUBTITLE = "Sessions without a cwd";
+
+type SessionWithStartTs = SessionSummary & { start_ts?: number };
+
+interface GroupedSessions {
+  key: string;
+  cwd: string | null;
+  title: string;
+  subtitle: string;
+  collapsed: boolean;
+  freshestTs: number;
+  firstIndex: number;
+  sessions: SessionSummary[];
 }
 
 function shortSessionId(sessionId: string) {
@@ -29,16 +47,66 @@ function deleteSessionConfirmText(session: SessionSummary) {
   return `Delete this terminal-owned session${target}? This will also stop the corresponding terminal session.`;
 }
 
+function getSessionActivityTs(session: SessionSummary) {
+  const candidate = session as SessionWithStartTs;
+  return Number(candidate.updated_ts ?? candidate.start_ts ?? 0) || 0;
+}
+
+function getGroupTitle(cwd: string | null) {
+  if (!cwd) {
+    return FALLBACK_GROUP_TITLE;
+  }
+  const parts = cwd.split(/[\\/]+/).filter(Boolean);
+  return parts[parts.length - 1] || cwd;
+}
+
+function groupSessions(items: SessionSummary[], cwdGroups: Record<string, CwdGroupMeta>) {
+  const groups = new Map<string, GroupedSessions>();
+
+  items.forEach((session, index) => {
+    const cwd = session.cwd?.trim() || null;
+    const key = cwd || FALLBACK_GROUP_KEY;
+    const meta = cwd ? cwdGroups[cwd] : undefined;
+    const existing = groups.get(key);
+
+    if (existing) {
+      existing.sessions.push(session);
+      existing.freshestTs = Math.max(existing.freshestTs, getSessionActivityTs(session));
+      return;
+    }
+
+    groups.set(key, {
+      key,
+      cwd,
+      title: meta?.label?.trim() || getGroupTitle(cwd),
+      subtitle: cwd || FALLBACK_GROUP_SUBTITLE,
+      collapsed: Boolean(meta?.collapsed),
+      freshestTs: getSessionActivityTs(session),
+      firstIndex: index,
+      sessions: [session],
+    });
+  });
+
+  return Array.from(groups.values()).sort((left, right) => {
+    if (right.freshestTs !== left.freshestTs) {
+      return right.freshestTs - left.freshestTs;
+    }
+    return left.firstIndex - right.firstIndex;
+  });
+}
+
 export function SessionsPane({ onNewSession }: SessionsPaneProps) {
-  const { items, activeSessionId } = useSessionsStore();
+  const { items, activeSessionId, cwdGroups = {} } = useSessionsStore();
   const sessionsStoreApi = useSessionsStoreApi();
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
+  const [pendingGroupKey, setPendingGroupKey] = useState<string | null>(null);
 
   const editingSession = useMemo(
     () => items.find((session) => session.session_id === editingSessionId) ?? null,
     [editingSessionId, items],
   );
+  const groupedSessions = useMemo(() => groupSessions(items, cwdGroups), [items, cwdGroups]);
 
   const deleteSession = async (session: SessionSummary) => {
     const confirmed = typeof window === "undefined" || typeof window.confirm !== "function"
@@ -96,6 +164,26 @@ export function SessionsPane({ onNewSession }: SessionsPaneProps) {
     }
   };
 
+  const toggleGroup = async (group: GroupedSessions) => {
+    if (!group.cwd || pendingGroupKey === group.key) {
+      return;
+    }
+    try {
+      setActionError("");
+      setPendingGroupKey(group.key);
+      await api.editCwdGroup({
+        cwd: group.cwd,
+        label: group.title,
+        collapsed: !group.collapsed,
+      });
+      await sessionsStoreApi.refresh();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Failed to update session group");
+    } finally {
+      setPendingGroupKey(null);
+    }
+  };
+
   return (
     <>
       <aside className="sessionsPane" data-testid="sessions-surface">
@@ -111,19 +199,29 @@ export function SessionsPane({ onNewSession }: SessionsPaneProps) {
         {actionError ? <p className="px-1 pb-2 text-sm font-medium text-red-600">{actionError}</p> : null}
         <ScrollArea className="sessionsSurfaceBody">
           <div className="sessionsList">
-            {items.map((session) => (
-              <SessionCard
-                key={session.session_id}
-                session={session}
-                active={session.session_id === activeSessionId}
-                onSelect={() => sessionsStoreApi.select(session.session_id)}
-                onEdit={() => {
-                  setActionError("");
-                  setEditingSessionId(session.session_id);
-                }}
-                onDuplicate={() => { void duplicateSession(session); }}
-                onDelete={() => { void deleteSession(session); }}
-              />
+            {groupedSessions.map((group) => (
+              <SessionGroup
+                key={group.key}
+                title={group.title}
+                subtitle={group.subtitle}
+                collapsed={group.collapsed}
+                onToggle={group.cwd ? () => { void toggleGroup(group); } : undefined}
+              >
+                {group.sessions.map((session) => (
+                  <SessionCard
+                    key={session.session_id}
+                    session={session}
+                    active={session.session_id === activeSessionId}
+                    onSelect={() => sessionsStoreApi.select(session.session_id)}
+                    onEdit={() => {
+                      setActionError("");
+                      setEditingSessionId(session.session_id);
+                    }}
+                    onDuplicate={() => { void duplicateSession(session); }}
+                    onDelete={() => { void deleteSession(session); }}
+                  />
+                ))}
+              </SessionGroup>
             ))}
           </div>
         </ScrollArea>
