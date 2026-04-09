@@ -1415,6 +1415,20 @@ class TestPiBackendRouting(unittest.TestCase):
         self.assertEqual(handler.status, 400)
         self.assertEqual(payload, {"error": "collapsed must be a boolean"})
 
+    def test_edit_cwd_group_returns_400_for_unknown_cwd(self) -> None:
+        body = json.dumps({"cwd": "/tmp/unknown", "label": "Unknown"}).encode("utf-8")
+        handler = _HandlerHarness("/api/cwd_groups/edit", body)
+
+        with patch("codoxear.server._require_auth", return_value=True), \
+             patch("codoxear.server.MANAGER") as manager:
+            manager.cwd_group_set.side_effect = ValueError("cwd is not a known session working directory")
+
+            Handler.do_POST(handler)  # type: ignore[arg-type]
+
+        payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
+        self.assertEqual(handler.status, 400)
+        self.assertEqual(payload, {"error": "cwd is not a known session working directory"})
+
     def test_edit_cwd_group_returns_400_on_empty_body(self) -> None:
         handler = _HandlerHarness("/api/cwd_groups/edit")
 

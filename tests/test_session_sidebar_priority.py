@@ -351,10 +351,11 @@ class TestSessionSidebarPriority(unittest.TestCase):
             groups_path = Path(td) / "cwd_groups.json"
             groups_path.write_text("{not valid json\n", encoding="utf-8")
 
-            with patch("codoxear.server.CWD_GROUPS_PATH", groups_path):
+            with patch("codoxear.server.CWD_GROUPS_PATH", groups_path), patch("codoxear.server.LOG.warning") as warning:
                 mgr._load_cwd_groups()
 
         self.assertEqual(mgr.cwd_groups_get(), {})
+        warning.assert_called_once()
 
     def test_cwd_groups_get_returns_entry_copies(self) -> None:
         mgr = _make_manager()
@@ -371,6 +372,7 @@ class TestSessionSidebarPriority(unittest.TestCase):
 
     def test_cwd_group_set_normalizes_path_and_round_trips_metadata(self) -> None:
         mgr = _make_manager()
+        mgr._recent_cwds = {"/tmp/project/bar": time.time()}
         cwd_raw = "/tmp/project/foo/../bar"
         expected_normalized = str(Path(cwd_raw).resolve(strict=False))
         normalized, meta = mgr.cwd_group_set(cwd=cwd_raw, label=" My Project ", collapsed=True)
@@ -382,8 +384,20 @@ class TestSessionSidebarPriority(unittest.TestCase):
         all_groups = mgr.cwd_groups_get()
         self.assertEqual(all_groups[normalized], meta)
 
+    def test_cwd_group_set_canonicalizes_trimmed_path(self) -> None:
+        mgr = _make_manager()
+        cwd_raw = " /tmp/project/foo/../bar "
+        expected_normalized = str(Path(cwd_raw.strip()).resolve(strict=False))
+        mgr._recent_cwds = {expected_normalized: time.time()}
+
+        normalized, meta = mgr.cwd_group_set(cwd=cwd_raw, label="Trimmed", collapsed=True)
+
+        self.assertEqual(normalized, expected_normalized)
+        self.assertEqual(meta, {"label": "Trimmed", "collapsed": True})
+
     def test_cwd_group_set_returns_meta_copy(self) -> None:
         mgr = _make_manager()
+        mgr._recent_cwds = {"/tmp/project": time.time()}
         normalized, meta = mgr.cwd_group_set(cwd="/tmp/project", label="Project", collapsed=True)
 
         meta["label"] = "Mutated"
@@ -397,6 +411,7 @@ class TestSessionSidebarPriority(unittest.TestCase):
     def test_cwd_group_set_drops_empty_default_entries(self) -> None:
         mgr = _make_manager()
         cwd = "/tmp/foo"
+        mgr._recent_cwds = {cwd: time.time()}
         # First set something non-default
         normalized, _ = mgr.cwd_group_set(cwd=cwd, label="Foo", collapsed=True)
         self.assertIn(normalized, mgr.cwd_groups_get())
@@ -407,8 +422,27 @@ class TestSessionSidebarPriority(unittest.TestCase):
 
     def test_cwd_group_set_rejects_non_boolean_collapsed(self) -> None:
         mgr = _make_manager()
+        mgr._recent_cwds = {"/tmp": time.time()}
         with self.assertRaisesRegex(ValueError, "collapsed must be a boolean"):
             mgr.cwd_group_set(cwd="/tmp", collapsed="not-a-bool") # type: ignore
+
+    def test_cwd_group_set_rejects_unknown_cwd(self) -> None:
+        mgr = _make_manager()
+        mgr._recent_cwds = {"/tmp/known": time.time()}
+
+        with self.assertRaisesRegex(ValueError, "cwd is not a known session working directory"):
+            mgr.cwd_group_set(cwd="/tmp/unknown", label="Unknown")
+
+    def test_cwd_group_set_accepts_known_live_session_cwd(self) -> None:
+        mgr = _make_manager()
+        current = _session(sid="current", start_ts=time.time() - 10, last_chat_ts=time.time() - 5)
+        mgr._sessions = {current.session_id: current}
+        expected_normalized = str(Path(current.cwd).resolve(strict=False))
+
+        normalized, meta = mgr.cwd_group_set(cwd=current.cwd, label="Current", collapsed=True)
+
+        self.assertEqual(normalized, expected_normalized)
+        self.assertEqual(meta, {"label": "Current", "collapsed": True})
 
 
 if __name__ == "__main__":

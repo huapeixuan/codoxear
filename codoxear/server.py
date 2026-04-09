@@ -10,6 +10,7 @@ import hmac
 import http.server
 import io
 import json
+import logging
 import math
 import mimetypes
 import os
@@ -54,6 +55,9 @@ from .util import read_jsonl_from_offset as _read_jsonl_from_offset_impl
 from .util import read_session_meta_payload as _read_session_meta_payload_impl
 from .util import subagent_parent_thread_id as _subagent_parent_thread_id
 from .voice_push import VoicePushCoordinator
+
+
+LOG = logging.getLogger(__name__)
 
 
 def _load_env_file(path: Path) -> dict[str, str]:
@@ -1291,7 +1295,8 @@ def _clean_alias(name: str) -> str:
 def _normalize_cwd_group_key(cwd: Any) -> str:
     if not isinstance(cwd, str) or not cwd.strip():
         raise ValueError("cwd must be a non-empty string")
-    return str(Path(cwd).expanduser().resolve(strict=False))
+    trimmed = cwd.strip()
+    return str(Path(trimmed).expanduser().resolve(strict=False))
 
 
 def _clean_recent_cwd(value: Any) -> str | None:
@@ -3198,7 +3203,8 @@ class SessionManager:
                 collapsed = bool(v.get("collapsed"))
                 if label or collapsed:
                     cleaned[normalized_cwd] = {"label": label, "collapsed": collapsed}
-        except (json.JSONDecodeError, TypeError, ValueError):
+        except (json.JSONDecodeError, TypeError, ValueError) as e:
+            LOG.warning("recovering malformed cwd_groups.json as empty state: %s", e)
             cleaned = {}
         with self._lock:
             self._cwd_groups = cleaned
@@ -3215,8 +3221,29 @@ class SessionManager:
         with self._lock:
             return copy.deepcopy(self._cwd_groups)
 
+    def _known_cwd_group_keys(self) -> set[str]:
+        known: set[str] = set()
+        with self._lock:
+            sessions = list(getattr(self, "_sessions", {}).values())
+            recent_items = list(getattr(self, "_recent_cwds", {}).keys())
+        for session in sessions:
+            try:
+                normalized = _normalize_cwd_group_key(getattr(session, "cwd", None))
+            except ValueError:
+                continue
+            known.add(normalized)
+        for cwd in recent_items:
+            try:
+                normalized = _normalize_cwd_group_key(cwd)
+            except ValueError:
+                continue
+            known.add(normalized)
+        return known
+
     def cwd_group_set(self, cwd: str, label: str | None = None, collapsed: bool | None = None) -> tuple[str, dict[str, Any]]:
         normalized_cwd = _normalize_cwd_group_key(cwd)
+        if normalized_cwd not in self._known_cwd_group_keys():
+            raise ValueError("cwd is not a known session working directory")
 
         with self._lock:
             existing = self._cwd_groups.get(normalized_cwd, {"label": "", "collapsed": False})
