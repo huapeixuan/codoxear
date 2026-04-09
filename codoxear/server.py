@@ -6570,14 +6570,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not _require_auth(self):
                     self._unauthorized()
                     return
-                body = _read_body(self)
-                body_text = body.decode("utf-8")
-                if not body_text.strip():
-                    raise ValueError("empty request body")
-                obj = json.loads(body_text)
-                if not isinstance(obj, dict):
-                    raise ValueError("invalid json body (expected object)")
                 try:
+                    body = _read_body(self)
+                    body_text = body.decode("utf-8")
+                    if not body_text.strip():
+                        raise ValueError("empty request body")
+                    obj = json.loads(body_text)
+                    if not isinstance(obj, dict):
+                        raise ValueError("invalid json body (expected object)")
                     cwd, entry = MANAGER.cwd_group_set(
                         cwd=obj.get("cwd"),
                         label=obj.get("label"),

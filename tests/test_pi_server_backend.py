@@ -1415,6 +1415,42 @@ class TestPiBackendRouting(unittest.TestCase):
         self.assertEqual(handler.status, 400)
         self.assertEqual(payload, {"error": "collapsed must be a boolean"})
 
+    def test_edit_cwd_group_returns_400_on_empty_body(self) -> None:
+        handler = _HandlerHarness("/api/cwd_groups/edit")
+
+        with patch("codoxear.server._require_auth", return_value=True), \
+             patch("codoxear.server.MANAGER") as manager:
+            Handler.do_POST(handler)  # type: ignore[arg-type]
+
+        payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
+        self.assertEqual(handler.status, 400)
+        self.assertEqual(payload, {"error": "empty request body"})
+        manager.cwd_group_set.assert_not_called()
+
+    def test_edit_cwd_group_returns_400_on_malformed_json(self) -> None:
+        handler = _HandlerHarness("/api/cwd_groups/edit", b"{")
+
+        with patch("codoxear.server._require_auth", return_value=True), \
+             patch("codoxear.server.MANAGER") as manager:
+            Handler.do_POST(handler)  # type: ignore[arg-type]
+
+        payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
+        self.assertEqual(handler.status, 400)
+        self.assertIn("Expecting property name enclosed in double quotes", payload["error"])
+        manager.cwd_group_set.assert_not_called()
+
+    def test_edit_cwd_group_returns_400_on_non_object_json(self) -> None:
+        handler = _HandlerHarness("/api/cwd_groups/edit", json.dumps(["/tmp"]).encode("utf-8"))
+
+        with patch("codoxear.server._require_auth", return_value=True), \
+             patch("codoxear.server.MANAGER") as manager:
+            Handler.do_POST(handler)  # type: ignore[arg-type]
+
+        payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
+        self.assertEqual(handler.status, 400)
+        self.assertEqual(payload, {"error": "invalid json body (expected object)"})
+        manager.cwd_group_set.assert_not_called()
+
 
 class TestPiMessageNormalization(unittest.TestCase):
     def test_prompt_and_turn_events_emit_user_and_assistant_rows(self) -> None:
