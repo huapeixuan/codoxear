@@ -244,6 +244,8 @@ describe("AppShell", () => {
     expect(getRoot().textContent).toContain("Files");
     expect(getRoot().textContent).toContain("Workspace");
     expect(getRoot().textContent).toContain("Harness");
+    expect(getRoot().querySelector(".mobileSheetTrigger")?.textContent).toContain("Sessions");
+    expect(getRoot().querySelector(".mobileToolsTrigger")?.textContent).toContain("Tools");
     const notificationsButton = getRoot().querySelector<HTMLButtonElement>('[aria-label="Notifications off"]');
     const announcementsButton = getRoot().querySelector<HTMLButtonElement>('[aria-label="Announcements off"]');
     expect(notificationsButton).not.toBeNull();
@@ -252,6 +254,22 @@ describe("AppShell", () => {
     expect(announcementsButton?.title).toBe("Announcements off");
     expect(notificationsButton?.querySelector("svg")).not.toBeNull();
     expect(announcementsButton?.querySelector("svg")).not.toBeNull();
+  });
+
+  it("opens grouped mobile tools actions from the toolbar", async () => {
+    renderAppShell({ diagnostics: { status: "ok" } });
+
+    act(() => {
+      getRoot().querySelector<HTMLButtonElement>(".mobileToolsTrigger")?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await flush();
+
+    const toolsSheet = getRoot().querySelector("[data-testid='mobile-tools-sheet']");
+    expect(toolsSheet).not.toBeNull();
+    expect(toolsSheet?.textContent).toContain("Tools");
+    expect(toolsSheet?.textContent).toContain("Files");
+    expect(toolsSheet?.textContent).toContain("Workspace");
+    expect(toolsSheet?.textContent).toContain("Harness");
   });
 
   it("opens workspace details in a dialog from the toolbar", async () => {

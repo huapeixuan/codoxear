@@ -84,6 +84,41 @@ describe("SessionsPane", () => {
     expect(root.textContent).toContain("web");
   });
 
+  it("renders compact session rows with dense metadata hooks", () => {
+    const sessionsStore = createStaticStore({
+      items: [
+        {
+          session_id: "sess-compact-1",
+          alias: "Ship mobile polish",
+          first_user_message: "Optimize phone UI",
+          cwd: "/Users/huapeixuan/Documents/Code/codoxear/web",
+          agent_backend: "pi",
+          owned: true,
+          queue_len: 3,
+          busy: false,
+        },
+      ],
+      activeSessionId: "sess-compact-1",
+      loading: false,
+      newSessionDefaults: null,
+    });
+
+    root = document.createElement("div");
+    document.body.appendChild(root);
+    render(
+      <AppProviders sessionsStore={sessionsStore as any}>
+        <SessionsPane />
+      </AppProviders>,
+      root,
+    );
+
+    const card = root.querySelector("[data-testid='session-card']");
+    expect(card?.querySelector(".sessionCardButton.compactSessionButton")).not.toBeNull();
+    expect(card?.querySelector(".sessionTitleRow")).not.toBeNull();
+    expect(card?.querySelector(".sessionMetaBadges")).not.toBeNull();
+    expect(card?.querySelector(".sessionPreview")).not.toBeNull();
+  });
+
   it("uses the first user message as the primary title when no alias is present", () => {
     const sessionsStore = createStaticStore({
       items: [

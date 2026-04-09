@@ -31,30 +31,35 @@ export function SessionCard({ session, active, onSelect, onEdit, onDuplicate, on
   const preview = (session.alias ? session.first_user_message : session.cwd) || session.cwd || session.title || session.session_id;
   const desktopActions = useDesktopSessionActions();
   const hasActions = Boolean(onEdit || onDuplicate || onDelete);
-  const showActions = hasActions && (!desktopActions || active);
+  const showActions = hasActions && (active || desktopActions);
 
   return (
     <div
       data-testid="session-card"
-      className="sessionCard"
+      className={cn("sessionCard", active && "active")}
       aria-current={active ? "true" : undefined}
     >
       <Card className={cn("sessionCardSurface h-full border-border/60 bg-card/90 shadow-sm", active && "ring-1 ring-primary/30 shadow-md") }>
-        <CardContent className="p-2.5">
+        <CardContent className="sessionCardContent p-2.5">
           <button
             type="button"
-            className="sessionCardButton w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+            className="sessionCardButton compactSessionButton w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
             aria-current={active ? "true" : undefined}
             onClick={onSelect}
           >
+            <div className="sessionTitleRow">
+              <div className="sessionTitle">{title}</div>
+              <div className="sessionMetaBadges">
+                <span className={cn("stateDot", session.busy && "busy")} />
+                <Badge variant="secondary" className="backendBadge">{session.agent_backend || "codex"}</Badge>
+                {session.owned ? <Badge variant="outline" className="ownerBadge">web</Badge> : null}
+              </div>
+            </div>
+            <div className="sessionPreview">{preview}</div>
             <div className="sessionMetaLine">
-              <span className={cn("stateDot", session.busy && "busy")} />
-              <Badge variant="secondary" className="backendBadge">{session.agent_backend || "codex"}</Badge>
-              {session.owned ? <Badge variant="outline" className="ownerBadge">web</Badge> : null}
+              <span className="sessionMetaText">{shortSessionId(session.session_id)}</span>
               {session.queue_len ? <Badge className="queueBadge">{session.queue_len} queued</Badge> : null}
             </div>
-            <div className="sessionTitle">{title}</div>
-            <div className="sessionPreview">{preview}</div>
           </button>
           {showActions ? (
             <div className="sessionActionRow mt-2 flex items-center justify-end gap-2">

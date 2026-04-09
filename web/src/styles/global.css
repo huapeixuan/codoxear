@@ -104,7 +104,7 @@ select {
 }
 
 .mobileSheetTrigger,
-.conversationMenuButton {
+.mobileToolsTrigger {
   display: none;
 }
 
@@ -168,6 +168,15 @@ select {
   min-width: fit-content;
 }
 
+.desktopToolbarButton {
+  display: inline-flex;
+}
+
+.mobileToolsTrigger {
+  align-items: center;
+  gap: 0.45rem;
+}
+
 .toolbarTextButton {
   min-width: fit-content;
   min-height: 40px;
@@ -198,6 +207,10 @@ select {
   flex-direction: column;
   gap: 8px;
   padding: 8px 12px 12px;
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, white 60%, var(--panel)) 24%, color-mix(in srgb, white 88%, var(--panel)) 100%);
 }
 
 .composerTodoBar {
@@ -349,6 +362,7 @@ select {
   font-weight: 650;
   color: var(--text);
   text-wrap: balance;
+  font-size: 0.98rem;
 }
 
 .sessionsPane {
@@ -393,7 +407,7 @@ select {
 .sessionsList {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.45rem;
   padding: 0.15rem 0.1rem 0.25rem;
 }
 
@@ -414,12 +428,27 @@ select {
   height: 100%;
   border: 1px solid color-mix(in srgb, var(--legacy-border) 50%, white);
   background: color-mix(in srgb, white 88%, var(--panel));
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.04);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.04);
 }
 
 .sessionCard.active .sessionCardSurface {
   border-color: color-mix(in srgb, var(--legacy-accent) 28%, var(--legacy-border));
-  box-shadow: 0 16px 32px rgba(15, 23, 42, 0.06);
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.06);
+}
+
+.sessionCardContent {
+  position: relative;
+}
+
+.sessionCard[aria-current="true"] .sessionCardContent::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--legacy-accent) 88%, white);
 }
 
 .sessionCardButton {
@@ -430,12 +459,35 @@ select {
   background: transparent;
 }
 
+.compactSessionButton {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+}
+
+.sessionTitleRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.sessionMetaBadges {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+}
+
 .sessionMetaLine {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 0.45rem;
   min-width: 0;
+  color: var(--legacy-muted);
 }
 
 .stateDot {
@@ -471,21 +523,19 @@ select {
 }
 
 .sessionTitle {
-  margin-top: 0.5rem;
   font-weight: 600;
   font-size: 0.95rem;
   line-height: 1.25;
   display: -webkit-box;
   overflow: hidden;
-  -webkit-line-clamp: 1;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
 
 .sessionPreview {
-  margin-top: 0.25rem;
   color: var(--legacy-muted);
-  font-size: 0.8rem;
-  line-height: 1.4;
+  font-size: 0.78rem;
+  line-height: 1.32;
   display: -webkit-box;
   overflow: hidden;
   -webkit-line-clamp: 2;
@@ -493,10 +543,16 @@ select {
   overflow-wrap: anywhere;
 }
 
+.sessionMetaText {
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
 .conversationPane {
   flex: 1 1 0;
   overflow-y: auto;
-  padding: 20px 20px 12px;
+  padding: 18px 18px 10px;
   min-height: 0;
 }
 
@@ -516,7 +572,7 @@ select {
 
 .messageRow {
   display: flex;
-  margin-top: 6px;
+  margin-top: 5px;
 }
 
 .messageRow.user {
@@ -545,7 +601,7 @@ select {
 .messageBubble {
   max-width: min(820px, 100%);
   min-width: 0;
-  padding: 10px 12px;
+  padding: 9px 11px;
   border-radius: 16px;
   border: 1px solid var(--legacy-border);
   box-shadow: var(--shadow-sm);
@@ -568,7 +624,7 @@ select {
 .messageCard {
   max-width: min(820px, 100%);
   min-width: 0;
-  padding: 12px 14px;
+  padding: 11px 13px;
   border-radius: 18px;
   border: 1px solid color-mix(in srgb, var(--legacy-border) 82%, #cbd5e1);
   background: color-mix(in srgb, var(--panel) 92%, #f8fafc);
@@ -591,6 +647,7 @@ select {
 
 .messageCard.tool_result {
   background: color-mix(in srgb, #eef8ef 76%, white);
+  border-color: color-mix(in srgb, #a7c9ac 48%, var(--legacy-border));
 }
 
 .messageCard.tool_result.isError {
@@ -604,6 +661,7 @@ select {
 
 .messageCard.todo_snapshot {
   background: color-mix(in srgb, #f2f7ea 78%, white);
+  border-color: color-mix(in srgb, #cad7b4 52%, var(--legacy-border));
 }
 
 .messageCard.system,
@@ -911,6 +969,25 @@ select {
   flex: 1;
 }
 
+.mobileToolsSheet {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  flex: 1;
+}
+
+.mobileToolsActions {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.mobileToolsAction {
+  justify-content: flex-start;
+  min-height: 48px;
+  border-radius: 1rem;
+}
+
 .workspaceSection {
   border: 1px solid var(--legacy-border);
   border-radius: 16px;
@@ -971,6 +1048,7 @@ select {
   border-top: 1px solid color-mix(in srgb, var(--legacy-border) 60%, white);
   background: color-mix(in srgb, white 90%, var(--panel));
   align-items: center;
+  border-radius: 1.25rem;
 }
 
 .composerInputWrap {
@@ -983,6 +1061,7 @@ select {
   min-height: 52px;
   display: flex;
   align-items: center;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
 }
 
 .composerQueueButton {
@@ -1261,8 +1340,8 @@ select {
 @media (max-width: 880px) {
   .appShell.editorialShell {
     grid-template-columns: 1fr;
-    padding: 0.75rem;
-    gap: 0.75rem;
+    padding: 0.45rem;
+    gap: 0.45rem;
   }
 
   .appShell.legacyShell {
@@ -1285,6 +1364,91 @@ select {
     justify-content: flex-start;
   }
 
+  .conversationColumn {
+    border-radius: 24px;
+  }
+
+  .conversationToolbar {
+    align-items: flex-start;
+    gap: 0.65rem;
+    padding: 0.8rem 0.85rem 0.7rem;
+  }
+
+  .conversationToolbarGroupPrimary {
+    width: 100%;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .conversationToolbarGroupActions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .conversationTitle {
+    flex: 1 1 auto;
+    text-align: right;
+    font-size: 0.92rem;
+    line-height: 1.25;
+  }
+
+  .sessionsPane {
+    padding: 0 0.6rem 0.7rem;
+  }
+
+  .sessionsSurfaceHeader {
+    align-items: center;
+    padding: 0.1rem 0 0.7rem;
+  }
+
+  .sessionsEyebrow {
+    display: none;
+  }
+
+  .sessionsSurfaceTitle {
+    font-size: 1.1rem;
+  }
+
+  .sessionsNewButton {
+    min-height: 2.2rem;
+    padding-inline: 0.8rem;
+  }
+
+  .sessionsList {
+    gap: 0.35rem;
+    padding: 0;
+  }
+
+  .sessionCardContent {
+    padding: 0.7rem 0.8rem;
+  }
+
+  .sessionCard[aria-current="true"] .sessionCardContent::before {
+    top: 8px;
+    bottom: 8px;
+  }
+
+  .sessionTitle {
+    font-size: 0.9rem;
+    line-height: 1.2;
+  }
+
+  .sessionPreview {
+    font-size: 0.76rem;
+  }
+
+  .sessionMetaText {
+    font-size: 0.68rem;
+  }
+
+  .backendBadge,
+  .ownerBadge,
+  .queueBadge {
+    font-size: 0.66rem;
+    line-height: 1;
+    padding: 0.2rem 0.42rem;
+  }
+
   .fieldGrid.twoCol,
   .fieldGrid.threeCol {
     grid-template-columns: minmax(0, 1fr);
@@ -1295,6 +1459,7 @@ select {
   }
 
   .composerStack {
+    gap: 6px;
     padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
   }
 
@@ -1307,11 +1472,11 @@ select {
   }
 
   .mobileSheetTrigger,
-  .conversationMenuButton {
+  .mobileToolsTrigger {
     display: inline-flex;
   }
 
-  .conversationMenuButton {
+  .desktopToolbarButton {
     display: none;
   }
 
@@ -1340,8 +1505,91 @@ select {
     order: -1;
   }
 
+  .conversationPane {
+    padding: 12px 10px 6px;
+  }
+
+  .messageRow {
+    margin-top: 4px;
+  }
+
+  .messageBubble {
+    max-width: calc(100% - 8px);
+    padding: 8px 10px;
+    border-radius: 14px;
+  }
+
+  .messageCard {
+    max-width: 100%;
+    padding: 9px 11px;
+    border-radius: 15px;
+  }
+
+  .messageCardHeader {
+    gap: 3px;
+    margin-bottom: 6px;
+  }
+
+  .messageTypeLabel {
+    font-size: 10px;
+  }
+
+  .messageCardTitle,
+  .messageCardSummary,
+  .messageCardContext,
+  .messageCardFooterText,
+  .messageBody {
+    font-size: 0.88rem;
+  }
+
+  .messageRow.tool_result .messageCard,
+  .messageRow.reasoning .messageCard,
+  .messageRow.todo_snapshot .messageCard,
+  .messageRow.event .messageCard,
+  .messageRow.pi_event .messageCard,
+  .messageRow.pi_model_change .messageCard,
+  .messageRow.pi_thinking_level_change .messageCard,
+  .messageRow.pi_session .messageCard {
+    opacity: 0.88;
+  }
+
+  .composerCard {
+    border-radius: 1.2rem;
+  }
+
   .composerShell {
+    gap: 8px;
     padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+    border-radius: 1rem;
+  }
+
+  .composerAttachButton,
+  .composerQueueButton {
+    display: none;
+  }
+
+  .composerInputWrap {
+    min-height: 48px;
+  }
+
+  .composerTextarea {
+    min-height: 40px;
+    padding: 11px 14px;
+    font-size: 16px;
+  }
+
+  .sendButton {
+    min-width: 46px;
+    height: 46px;
+    border-radius: 999px;
+  }
+
+  .mobileSheetContent {
+    padding: 0.85rem 0.7rem calc(0.8rem + env(safe-area-inset-bottom));
+  }
+
+  .mobileToolsAction {
+    min-height: 50px;
   }
 }
 

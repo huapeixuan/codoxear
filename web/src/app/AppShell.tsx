@@ -108,6 +108,16 @@ function VolumeIcon() {
   );
 }
 
+function MoreIcon() {
+  return (
+    <svg className="actionIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+      <circle cx="5" cy="12" r="1.5" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" />
+      <circle cx="19" cy="12" r="1.5" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 const DEFAULT_VOICE_SETTINGS: VoiceSettingsResponse = {
   tts_enabled_for_narration: false,
   tts_enabled_for_final_response: true,
@@ -186,6 +196,7 @@ export function AppShell() {
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
   const [fileViewerOpen, setFileViewerOpen] = useState(false);
   const [harnessOpen, setHarnessOpen] = useState(false);
   const [fileViewerPath, setFileViewerPath] = useState("");
@@ -643,6 +654,21 @@ export function AppShell() {
     setWorkspaceOpen(true);
   };
 
+  const openMobileFiles = () => {
+    setMobileToolsOpen(false);
+    openFileViewer();
+  };
+
+  const openMobileWorkspace = () => {
+    setMobileToolsOpen(false);
+    openWorkspace();
+  };
+
+  const openMobileHarness = () => {
+    setMobileToolsOpen(false);
+    setHarnessOpen(true);
+  };
+
   const playReplyBeep = () => {
     try {
       const AudioContextCtor = (window as any).AudioContext || (window as any).webkitAudioContext;
@@ -911,20 +937,20 @@ export function AppShell() {
         <aside className="sidebarColumn desktopSessionsRail">{renderSessionsRail()}</aside>
         <section className="conversationColumn">
           <div className="conversationToolbar">
-            <div className="conversationToolbarGroup">
+            <div className="conversationToolbarGroup conversationToolbarGroupPrimary">
               <Button type="button" variant="outline" size="sm" className="toolbarButton mobileSheetTrigger" onClick={() => setSidebarOpen(true)}>
                 Sessions
               </Button>
-              <Button type="button" variant="outline" size="icon" className="toolbarButton conversationMenuButton" onClick={() => setSidebarOpen(true)}>
-                <span className="buttonGlyph">☰</span>
-                <span className="visuallyHidden">Toggle sidebar</span>
-              </Button>
               <div className="conversationTitle">{activeSessionId ? activeTitle : "No session selected"}</div>
             </div>
-            <div className="conversationToolbarGroup">
-              <Button type="button" variant="outline" size="sm" className="toolbarButton toolbarTextButton" disabled={!activeSessionId} onClick={() => openFileViewer()}>Files</Button>
-              <Button type="button" variant="outline" size="sm" className="toolbarButton toolbarTextButton" disabled={!activeSessionId} onClick={openWorkspace}>Workspace</Button>
-              <Button type="button" variant="outline" size="sm" className="toolbarButton toolbarTextButton" disabled={!activeSessionId} onClick={() => setHarnessOpen(true)}>Harness</Button>
+            <div className="conversationToolbarGroup conversationToolbarGroupActions">
+              <Button type="button" variant="outline" size="sm" className="toolbarButton toolbarTextButton desktopToolbarButton" disabled={!activeSessionId} onClick={() => openFileViewer()}>Files</Button>
+              <Button type="button" variant="outline" size="sm" className="toolbarButton toolbarTextButton desktopToolbarButton" disabled={!activeSessionId} onClick={openWorkspace}>Workspace</Button>
+              <Button type="button" variant="outline" size="sm" className="toolbarButton toolbarTextButton desktopToolbarButton" disabled={!activeSessionId} onClick={() => setHarnessOpen(true)}>Harness</Button>
+              <Button type="button" variant="outline" size="sm" className="toolbarButton mobileToolsTrigger" disabled={!activeSessionId} onClick={() => setMobileToolsOpen(true)}>
+                <MoreIcon />
+                <span>Tools</span>
+              </Button>
             </div>
           </div>
           <ConversationPane onOpenFilePath={(path, line) => openFileViewer(path, line ?? null, "file")} />
@@ -954,6 +980,24 @@ export function AppShell() {
                   <Button type="button" variant="ghost" size="sm" onClick={() => setDetailsOpen(false)}>Close</Button>
                 </header>
                 {renderWorkspaceDetails()}
+              </div>
+            </SheetContent>
+          </Sheet>
+        </div>
+        <div data-testid="mobile-tools-sheet">
+          <Sheet open={mobileToolsOpen}>
+            <button type="button" className="sheetBackdropButton" aria-label="Close tools panel" onClick={() => setMobileToolsOpen(false)} />
+            <SheetContent side="right" className="mobileSheetContent mobileToolsContent" titleId="mobile-tools-title">
+              <div className="mobileToolsSheet">
+                <header className="mobileSheetHeader">
+                  <h2 id="mobile-tools-title">Tools</h2>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setMobileToolsOpen(false)}>Close</Button>
+                </header>
+                <div className="mobileToolsActions">
+                  <Button type="button" variant="outline" className="mobileToolsAction" disabled={!activeSessionId} onClick={openMobileFiles}>Files</Button>
+                  <Button type="button" variant="outline" className="mobileToolsAction" disabled={!activeSessionId} onClick={openMobileWorkspace}>Workspace</Button>
+                  <Button type="button" variant="outline" className="mobileToolsAction" disabled={!activeSessionId} onClick={openMobileHarness}>Harness</Button>
+                </div>
               </div>
             </SheetContent>
           </Sheet>
