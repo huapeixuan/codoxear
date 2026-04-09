@@ -3200,7 +3200,8 @@ class SessionManager:
                 if not isinstance(v, dict):
                     continue
                 label = _clean_alias(v.get("label", ""))
-                collapsed = bool(v.get("collapsed"))
+                persisted_collapsed = v.get("collapsed", False)
+                collapsed = persisted_collapsed if isinstance(persisted_collapsed, bool) else False
                 if label or collapsed:
                     cleaned[normalized_cwd] = {"label": label, "collapsed": collapsed}
         except (json.JSONDecodeError, TypeError, ValueError) as e:

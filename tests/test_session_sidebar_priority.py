@@ -332,7 +332,7 @@ class TestSessionSidebarPriority(unittest.TestCase):
             cwd_raw = str(Path(td) / "project" / "foo" / ".." / "bar")
             expected_normalized = str(Path(cwd_raw).resolve(strict=False))
             groups_path.write_text(
-                json.dumps({cwd_raw: {"label": " Demo ", "collapsed": 1}}) + "\n",
+                json.dumps({cwd_raw: {"label": " Demo ", "collapsed": True}}) + "\n",
                 encoding="utf-8",
             )
 
@@ -342,6 +342,40 @@ class TestSessionSidebarPriority(unittest.TestCase):
         self.assertEqual(
             mgr.cwd_groups_get(),
             {expected_normalized: {"label": "Demo", "collapsed": True}},
+        )
+
+    def test_load_cwd_groups_defaults_malformed_collapsed_values_to_false(self) -> None:
+        mgr = _make_manager()
+        with tempfile.TemporaryDirectory() as td:
+            groups_path = Path(td) / "cwd_groups.json"
+            base = Path(td)
+            truthy_string_cwd = str(base / "truthy-string")
+            zero_string_cwd = str(base / "zero-string")
+            integer_cwd = str(base / "integer")
+            unlabeled_cwd = str(base / "unlabeled")
+            groups_path.write_text(
+                json.dumps(
+                    {
+                        truthy_string_cwd: {"label": "Truthy String", "collapsed": "false"},
+                        zero_string_cwd: {"label": "Zero String", "collapsed": "0"},
+                        integer_cwd: {"label": "Integer", "collapsed": 1},
+                        unlabeled_cwd: {"collapsed": "true"},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with patch("codoxear.server.CWD_GROUPS_PATH", groups_path):
+                mgr._load_cwd_groups()
+
+        self.assertEqual(
+            mgr.cwd_groups_get(),
+            {
+                str(Path(truthy_string_cwd).resolve(strict=False)): {"label": "Truthy String", "collapsed": False},
+                str(Path(zero_string_cwd).resolve(strict=False)): {"label": "Zero String", "collapsed": False},
+                str(Path(integer_cwd).resolve(strict=False)): {"label": "Integer", "collapsed": False},
+            },
         )
 
     def test_load_cwd_groups_falls_back_to_empty_store_on_malformed_json(self) -> None:
