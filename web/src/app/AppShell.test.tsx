@@ -22,7 +22,26 @@ vi.mock("../lib/api", () => ({
     getNotificationSubscriptionState: vi.fn().mockResolvedValue({ ok: true, vapid_public_key: "", subscriptions: [] }),
     upsertNotificationSubscription: vi.fn().mockResolvedValue({ ok: true, vapid_public_key: "", subscriptions: [] }),
     toggleNotificationSubscription: vi.fn().mockResolvedValue({ ok: true, vapid_public_key: "", subscriptions: [] }),
+    getFiles: vi.fn().mockResolvedValue({ ok: true, files: ["src/main.tsx"] }),
+    getFileRead: vi.fn().mockResolvedValue({ ok: true, kind: "text", text: "console.log('viewer');" }),
+    getGitFileVersions: vi.fn().mockResolvedValue({ ok: true, path: "src/main.tsx", base_text: "before", current_text: "after" }),
+    getHarness: vi.fn().mockResolvedValue({ ok: true, enabled: true, request: "Keep going", cooldown_minutes: 15, remaining_injections: 2 }),
+    saveHarness: vi.fn().mockResolvedValue({ ok: true, enabled: true, request: "Keep going", cooldown_minutes: 15, remaining_injections: 2 }),
+    logout: vi.fn().mockResolvedValue({ ok: true }),
   },
+}));
+
+vi.mock("../components/workspace/MonacoWorkspace", () => ({
+  MonacoWorkspace: (props: any) => (
+    <div
+      data-testid="monaco-workspace"
+      data-line={props.line == null ? "" : String(props.line)}
+      data-mode={props.mode}
+      data-path={props.path}
+    >
+      {props.mode}:{props.path}
+    </div>
+  ),
 }));
 
 let root: HTMLDivElement | null = null;
@@ -209,20 +228,22 @@ describe("AppShell", () => {
     vi.clearAllMocks();
   });
 
-  it("renders the rebuilt app shell with sheet surfaces and workspace rail", () => {
+  it("renders a two-part shell with sessions rail and conversation column", () => {
     renderAppShell({ activeSessionId: null, diagnostics: null });
 
     expect(getRoot().querySelector("[data-testid='app-shell']")).not.toBeNull();
+    expect(getRoot().querySelector(".sidebarColumn.desktopSessionsRail")).not.toBeNull();
+    expect(getRoot().querySelector(".conversationColumn")).not.toBeNull();
     expect(getRoot().querySelector("[data-testid='mobile-sessions-sheet']")).not.toBeNull();
-    expect(getRoot().querySelector("[data-testid='workspace-rail']")).not.toBeNull();
+    expect(getRoot().querySelector("[data-testid='workspace-rail']")).toBeNull();
     expect(getRoot().textContent).toContain("New session");
     expect(getRoot().textContent).toContain("Help");
     expect(getRoot().textContent).toContain("Settings");
     expect(getRoot().textContent).toContain("Log out");
     expect(getRoot().textContent).toContain("No session selected");
-    expect(getRoot().textContent).toContain("View file");
-    expect(getRoot().textContent).toContain("Details");
-    expect(getRoot().textContent).toContain("Harness mode");
+    expect(getRoot().textContent).toContain("Files");
+    expect(getRoot().textContent).toContain("Workspace");
+    expect(getRoot().textContent).toContain("Harness");
     const notificationsButton = getRoot().querySelector<HTMLButtonElement>('[aria-label="Notifications off"]');
     const announcementsButton = getRoot().querySelector<HTMLButtonElement>('[aria-label="Announcements off"]');
     expect(notificationsButton).not.toBeNull();
@@ -231,6 +252,109 @@ describe("AppShell", () => {
     expect(announcementsButton?.title).toBe("Announcements off");
     expect(notificationsButton?.querySelector("svg")).not.toBeNull();
     expect(announcementsButton?.querySelector("svg")).not.toBeNull();
+  });
+
+  it("opens workspace details in a dialog from the toolbar", async () => {
+    renderAppShell({ diagnostics: { status: "ok" } });
+    await flush();
+
+    const button = requireButtonByText("Workspace");
+
+    act(() => {
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await flush();
+
+    const dialog = getRoot().querySelector("[data-testid='workspace-dialog']");
+    expect(dialog).not.toBeNull();
+    expect(dialog?.querySelector("[data-testid='workspace-card']")).not.toBeNull();
+    expect(dialog?.textContent).toContain("Diagnostics");
+  });
+
+  it("opens workspace details in the mobile sheet on narrow viewports", async () => {
+    const originalMatchMedia = window.matchMedia;
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: query === "(max-width: 880px)",
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn().mockReturnValue(false),
+      })),
+    });
+
+    try {
+      renderAppShell({ diagnostics: { status: "ok" } });
+      await flush();
+
+      const button = requireButtonByText("Workspace");
+      act(() => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      });
+      await flush();
+
+      const mobileSheet = getRoot().querySelector('[role="dialog"][aria-labelledby="mobile-workspace-title"]');
+      expect(mobileSheet).not.toBeNull();
+      expect(getRoot().querySelector("[data-testid='workspace-dialog']")).toBeNull();
+      expect(mobileSheet?.textContent).toContain("Workspace");
+      expect(mobileSheet?.textContent).toContain("Diagnostics");
+    } finally {
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        value: originalMatchMedia,
+      });
+    }
+  });
+
+  it("opens the file viewer from the toolbar and loads the first tracked file", async () => {
+    const { api } = await import("../lib/api");
+    renderAppShell({ files: ["src/main.tsx"] });
+    await flush();
+
+    const button = findButtonByText("Files");
+    expect(button).not.toBeNull();
+
+    act(() => {
+      button!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await flush();
+    await flush();
+
+    expect(api.getGitFileVersions).toHaveBeenCalledWith("sess-1", "src/main.tsx", expect.any(AbortSignal));
+    expect(getRoot().textContent).toContain("File viewer");
+    expect(getRoot().textContent).toContain("src/main.tsx");
+    expect(getRoot().textContent).toContain("Diff");
+  });
+
+  it("opens harness mode from the toolbar and saves harness settings", async () => {
+    const { api } = await import("../lib/api");
+    renderAppShell();
+    await flush();
+
+    const button = findButtonByText("Harness");
+    expect(button).not.toBeNull();
+
+    act(() => {
+      button!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await flush();
+
+    expect(api.getHarness).toHaveBeenCalledWith("sess-1");
+    expect(getRoot().textContent).toContain("Harness mode");
+    expect(getRoot().textContent).toContain("Additional request");
+
+    const saveButton = findButtonByText("Save");
+    expect(saveButton).not.toBeNull();
+    act(() => {
+      saveButton!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await flush();
+
+    expect(api.saveHarness).toHaveBeenCalledWith("sess-1", expect.objectContaining({ enabled: true, request: "Keep going" }));
   });
 
   it("opens announcement settings when announcements are enabled without credentials", async () => {
@@ -248,6 +372,35 @@ describe("AppShell", () => {
     expect(getRoot().textContent).toContain("OpenAI-compatible API base URL");
     expect(getRoot().textContent).toContain("OpenAI-compatible API key");
     expect(getRoot().textContent).toContain("Announce narration messages");
+    expect(getRoot().textContent).toContain("Press Enter to send");
+    expect(getRoot().textContent).toContain("Play a short beep when the assistant finishes a reply");
+  });
+
+  it("persists the reply sound toggle from settings", async () => {
+    renderAppShell();
+    await flush();
+
+    const button = getRoot().querySelector<HTMLButtonElement>('[aria-label="Announcements off"]');
+    expect(button).not.toBeNull();
+
+    act(() => {
+      button!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await flush();
+
+    const checkbox = Array.from(getRoot().querySelectorAll<HTMLInputElement>('input[type="checkbox"]')).find(
+      (input) => input.nextElementSibling?.textContent?.includes("assistant finishes a reply"),
+    );
+    expect(checkbox).not.toBeUndefined();
+    expect(checkbox?.checked).toBe(true);
+
+    act(() => {
+      checkbox!.checked = false;
+      checkbox!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+
+    expect(localStorage.getItem("codoxear.replySoundEnabled")).toBe("0");
   });
 
   it("sends announcement listener heartbeats when announcements are enabled", async () => {
@@ -508,7 +661,7 @@ describe("AppShell", () => {
     await flush();
     await flush();
 
-    expect(register).toHaveBeenCalled();
+    expect(register).toHaveBeenCalledWith("/service-worker.js");
     expect(subscribe).toHaveBeenCalled();
     expect(api.upsertNotificationSubscription).toHaveBeenCalledWith(expect.objectContaining({
       subscription: subscriptionJson,
@@ -596,21 +749,31 @@ describe("AppShell", () => {
     expect(HTMLMediaElement.prototype.canPlayType).not.toBe(leakedCanPlayType);
   });
 
-  it("keeps the right rail visible for diagnostics even without pending ui requests", () => {
+  it("opens workspace diagnostics without rendering a persistent workspace rail", async () => {
     renderAppShell({ diagnostics: { status: "ok" } });
 
-    expect(getRoot().querySelector(".workspaceRail.isHidden")).toBeNull();
-    expect(getRoot().querySelector(".appShell.legacyShell.noWorkspace")).toBeNull();
-    expect(getRoot().textContent).toContain("Diagnostics");
+    act(() => {
+      requireButtonByText("Workspace").dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await flush();
+
+    expect(getRoot().querySelector("[data-testid='workspace-rail']")).toBeNull();
+    expect(getRoot().querySelector("[data-testid='workspace-dialog']")?.textContent).toContain("Diagnostics");
   });
 
-  it("keeps Details available while diagnostics stay visible by default", () => {
+  it("keeps Workspace available while diagnostics are shown in the dialog", async () => {
     renderAppShell({ diagnostics: { status: "ok" } });
 
-    const detailsButton = requireButtonByText("Details");
-    expect(detailsButton.disabled).toBe(false);
-    expect(getRoot().textContent).toContain("Details");
-    expect(getRoot().textContent).toContain("Diagnostics");
+    const workspaceButton = requireButtonByText("Workspace");
+    expect(workspaceButton.disabled).toBe(false);
+
+    act(() => {
+      workspaceButton.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await flush();
+
+    expect(getRoot().textContent).toContain("Workspace");
+    expect(getRoot().querySelector("[data-testid='workspace-dialog']")?.textContent).toContain("Diagnostics");
   });
 
   it("does not render a Todo button in the toolbar", () => {
@@ -651,7 +814,12 @@ describe("AppShell", () => {
     });
     await flush();
 
-    expect(getRoot().querySelector(".workspaceRail.isHidden")).toBeNull();
+    act(() => {
+      requireButtonByText("Workspace").dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await flush();
+
+    expect(getRoot().querySelector("[data-testid='workspace-dialog']")).not.toBeNull();
     expect(getToolbarTodoAnchor()).toBeNull();
     expect(getToolbarTodoButton()).toBeNull();
 
@@ -668,19 +836,12 @@ describe("AppShell", () => {
     });
 
     expect(getRoot().querySelector(".conversationTitle")?.textContent).toContain("Follow-up");
-    expect(getRoot().querySelector(".workspaceRail.isHidden")).toBeNull();
-    expect(getRoot().querySelector(".appShell.legacyShell.noWorkspace")).toBeNull();
     expect(getRoot().textContent).not.toContain("Old request");
     expect(getToolbarTodoAnchor()).toBeNull();
     expect(getToolbarTodoButton()).toBeNull();
 
-    act(() => {
-      requireButtonByText("Details").dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    });
-    await flush();
-
-    expect(getRoot().textContent).toContain("No diagnostics available.");
-    expect(getRoot().textContent).toContain("No pending requests");
+    expect(getRoot().querySelector("[data-testid='workspace-dialog']")?.textContent).toContain("No diagnostics available.");
+    expect(getRoot().querySelector("[data-testid='workspace-dialog']")?.textContent).toContain("No pending requests");
     expect(getRoot().textContent).not.toContain("todo_snapshot");
 
     flushSync(() => {
@@ -702,17 +863,22 @@ describe("AppShell", () => {
       });
     });
 
-    expect(getRoot().querySelector(".workspaceRail.isHidden")).toBeNull();
-    expect(getRoot().querySelector(".appShell.legacyShell.noWorkspace")).toBeNull();
-    expect(getRoot().textContent).toContain("Fresh request");
-    expect(getRoot().textContent).toContain("Visible again");
     expect(getRoot().textContent).not.toContain("Old request");
     expect(getRoot().textContent).not.toContain("No diagnostics available.");
     expect(getRoot().textContent).not.toContain("No pending requests");
-    expect(getRoot().textContent).toContain("todo_snapshot");
-    expect(getRoot().textContent).toContain("session_status");
+    expect(getRoot().textContent).toContain("Todo list");
+    expect(getRoot().textContent).toContain("Session Status");
     expect(getRoot().textContent).toContain("Queued follow-up");
     expect(getRoot().textContent).toContain("fresh-notes.md");
+
+    act(() => {
+      requireButtonByText("UI Requests").dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await flush();
+
+    expect(getRoot().querySelector("[data-testid='workspace-dialog']")?.textContent).toContain("Fresh request");
+    expect(getRoot().querySelector("[data-testid='workspace-dialog']")?.textContent).toContain("Visible again");
+    expect(getRoot().textContent).not.toContain("Old request");
     expect(getToolbarTodoAnchor()).toBeNull();
     expect(getToolbarTodoButton()).toBeNull();
   });

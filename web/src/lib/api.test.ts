@@ -94,6 +94,22 @@ describe("api", () => {
     });
   });
 
+  it("includes before and limit when loading older history pages", async () => {
+    const payload: MessagesResponse = { events: [{ id: "m0" }], offset: 9, has_older: true, next_before: 12 };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify(payload),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.listMessages("session-1", true, undefined, undefined, 6, 40)).resolves.toEqual(payload);
+    expect(fetchMock).toHaveBeenCalledWith("api/sessions/session-1/messages?init=1&before=6&limit=40", {
+      headers: { Accept: "application/json" },
+      signal: undefined,
+    });
+  });
+
   it("requests the session ui state", async () => {
     const payload: SessionUiStateResponse = {
       requests: [{ id: "ui-req-1", method: "select" }],
@@ -110,6 +126,104 @@ describe("api", () => {
       headers: { Accept: "application/json" },
       signal: undefined,
     });
+  });
+
+  it("requests file reads for a session path", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => '{"ok":true,"kind":"text","text":"hello"}',
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.getFileRead("pi-session", "src/main.tsx")).resolves.toEqual({ ok: true, kind: "text", text: "hello" });
+    expect(fetchMock).toHaveBeenCalledWith("api/sessions/pi-session/file/read?path=src%2Fmain.tsx", {
+      headers: { Accept: "application/json" },
+      signal: undefined,
+    });
+  });
+
+  it("requests the session file list", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => '{"ok":true,"files":["src/main.tsx"]}',
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.getFiles("pi-session")).resolves.toEqual({ ok: true, files: ["src/main.tsx"] });
+    expect(fetchMock).toHaveBeenCalledWith("api/sessions/pi-session/file/list", {
+      headers: { Accept: "application/json" },
+      signal: undefined,
+    });
+  });
+
+  it("requests git file versions for a session path", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => '{"ok":true,"path":"src/main.tsx","current_text":"x"}',
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.getGitFileVersions("pi-session", "src/main.tsx")).resolves.toEqual({ ok: true, path: "src/main.tsx", current_text: "x" });
+    expect(fetchMock).toHaveBeenCalledWith("api/sessions/pi-session/git/file_versions?path=src%2Fmain.tsx", {
+      headers: { Accept: "application/json" },
+      signal: undefined,
+    });
+  });
+
+  it("requests and saves harness settings", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => '{"ok":true,"enabled":true}',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => '{"ok":true,"enabled":false}',
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.getHarness("sess-1")).resolves.toEqual({ ok: true, enabled: true });
+    await expect(api.saveHarness("sess-1", { enabled: false })).resolves.toEqual({ ok: true, enabled: false });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "api/sessions/sess-1/harness", {
+      headers: { Accept: "application/json" },
+      signal: undefined,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "api/sessions/sess-1/harness", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ enabled: false }),
+    }));
+  });
+
+  it("posts session edit payloads", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => '{"ok":true,"alias":"Updated"}',
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.editSession("sess-1", {
+      name: "Updated",
+      priority_offset: 0.25,
+      snooze_until: null,
+      dependency_session_id: "sess-2",
+    })).resolves.toEqual({ ok: true, alias: "Updated" });
+
+    expect(fetchMock).toHaveBeenCalledWith("api/sessions/sess-1/edit", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({
+        name: "Updated",
+        priority_offset: 0.25,
+        snooze_until: null,
+        dependency_session_id: "sess-2",
+      }),
+    }));
   });
 
   it("requests voice settings", async () => {

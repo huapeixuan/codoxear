@@ -9,4 +9,8 @@ if (typeof globalThis.cancelAnimationFrame !== "function") {
   };
 }
 
+if (typeof document.queryCommandSupported !== "function") {
+  document.queryCommandSupported = () => false;
+}
+
 export {};

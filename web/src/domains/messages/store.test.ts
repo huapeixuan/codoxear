@@ -43,6 +43,15 @@ describe("createMessagesStore", () => {
       offsetsBySessionId: {
         s1: 2,
       },
+      hasOlderBySessionId: {
+        s1: false,
+      },
+      olderBeforeBySessionId: {
+        s1: 0,
+      },
+      loadingOlderBySessionId: {
+        s1: false,
+      },
       loading: false,
     });
   });
@@ -79,6 +88,18 @@ describe("createMessagesStore", () => {
         s1: 2,
         s2: 1,
       },
+      hasOlderBySessionId: {
+        s1: false,
+        s2: false,
+      },
+      olderBeforeBySessionId: {
+        s1: 0,
+        s2: 0,
+      },
+      loadingOlderBySessionId: {
+        s1: false,
+        s2: false,
+      },
       loading: false,
     });
   });
@@ -91,6 +112,9 @@ describe("createMessagesStore", () => {
     expect(store.getState()).toEqual({
       bySessionId: {},
       offsetsBySessionId: {},
+      hasOlderBySessionId: {},
+      olderBeforeBySessionId: {},
+      loadingOlderBySessionId: {},
       loading: false,
     });
   });
@@ -126,5 +150,30 @@ describe("createMessagesStore", () => {
 
     expect(api.listMessages).toHaveBeenNthCalledWith(2, "s1", false, undefined, 4);
     expect(store.getState().bySessionId.s1).toEqual([{ id: "m1" }, { id: "m2" }]);
+  });
+
+  it("prepends older replay pages and tracks the next history cursor", async () => {
+    vi.mocked(api.listMessages)
+      .mockResolvedValueOnce({
+        events: [{ id: "m2" }, { id: "m3" }],
+        offset: 4,
+        has_older: true,
+        next_before: 2,
+      } as never)
+      .mockResolvedValueOnce({
+        events: [{ id: "m0" }, { id: "m1" }],
+        offset: 4,
+        has_older: false,
+        next_before: 0,
+      } as never);
+    const store = createMessagesStore();
+
+    await store.loadInitial("s1");
+    await store.loadOlder("s1");
+
+    expect(api.listMessages).toHaveBeenNthCalledWith(2, "s1", true, undefined, undefined, 2, 80);
+    expect(store.getState().bySessionId.s1).toEqual([{ id: "m0" }, { id: "m1" }, { id: "m2" }, { id: "m3" }]);
+    expect(store.getState().hasOlderBySessionId.s1).toBe(false);
+    expect(store.getState().olderBeforeBySessionId.s1).toBe(0);
   });
 });

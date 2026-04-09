@@ -34,6 +34,13 @@ export interface SessionSummary {
   model?: string | null;
   provider_choice?: string | null;
   reasoning_effort?: string | null;
+  service_tier?: string | null;
+  transport?: string | null;
+  priority_offset?: number | null;
+  snooze_until?: number | null;
+  dependency_session_id?: string | null;
+  blocked?: boolean;
+  snoozed?: boolean;
 }
 
 export interface SessionsResponse {
@@ -51,9 +58,23 @@ export interface CreateSessionResponse {
   broker_pid?: number;
 }
 
+export interface DeleteSessionResponse {
+  ok?: boolean;
+}
+
 export interface RenameSessionResponse {
   ok?: boolean;
   alias?: string;
+}
+
+export interface EditSessionResponse extends RenameSessionResponse {
+  priority_offset?: number;
+  snooze_until?: number | null;
+  dependency_session_id?: string | null;
+}
+
+export interface LogoutResponse {
+  ok?: boolean;
 }
 
 export interface SessionResumeCandidate {
@@ -85,6 +106,7 @@ export interface VoiceSettingsResponse {
     active_listener_count?: number;
     segment_count?: number;
     stream_url?: string;
+    last_error?: string;
   };
   notifications?: {
     enabled_devices?: number;
@@ -168,6 +190,8 @@ export interface MessageEvent {
 export interface MessagesResponse {
   events: MessageEvent[];
   offset?: number;
+  has_older?: boolean;
+  next_before?: number;
   ui_version?: string;
 }
 
@@ -196,6 +220,39 @@ export interface SessionFileListResponse {
   ok?: boolean;
   cwd?: string;
   files: string[];
+}
+
+export interface SessionFileReadResponse {
+  ok?: boolean;
+  kind?: "text" | "image" | string;
+  path?: string;
+  rel?: string;
+  size?: number;
+  text?: string;
+  editable?: boolean;
+  version?: string;
+  image_url?: string;
+  content_type?: string;
+}
+
+export interface GitFileVersionsResponse {
+  ok?: boolean;
+  cwd?: string;
+  path?: string;
+  abs_path?: string;
+  current_exists?: boolean;
+  current_size?: number;
+  current_text?: string;
+  base_exists?: boolean;
+  base_text?: string;
+}
+
+export interface HarnessConfigResponse {
+  ok?: boolean;
+  enabled?: boolean;
+  request?: string;
+  cooldown_minutes?: number;
+  remaining_injections?: number;
 }
 
 export interface TodoSnapshotItem {

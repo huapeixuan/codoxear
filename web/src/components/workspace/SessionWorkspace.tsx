@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 import { useSessionUiStore, useSessionUiStoreApi } from "../../app/providers";
 import { api } from "../../lib/api";
-import type { SessionUiRequest } from "../../lib/types";
+import type { SessionUiRequest, TodoSnapshot, TodoSnapshotItem } from "../../lib/types";
 
 type DraftValue = string | string[];
 type OptionInput = { label?: string; value?: string; title?: string; description?: string } | string;
@@ -80,6 +80,93 @@ function queueItemsFromValue(queue: Record<string, unknown> | null) {
   });
 }
 
+function normalizeTodoItem(value: unknown): TodoSnapshotItem | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const item = value as Record<string, unknown>;
+  return {
+    id: typeof item.id === "number" || typeof item.id === "string" ? item.id : undefined,
+    title: typeof item.title === "string" ? item.title : undefined,
+    status: typeof item.status === "string" ? item.status : undefined,
+    description: typeof item.description === "string" ? item.description : undefined,
+  };
+}
+
+function normalizeTodoSnapshot(snapshot: unknown): TodoSnapshot {
+  if (!snapshot || typeof snapshot !== "object") {
+    return { available: false, error: false, items: [] };
+  }
+  const raw = snapshot as Record<string, unknown>;
+  return {
+    available: raw.available === true,
+    error: raw.error === true,
+    progress_text: typeof raw.progress_text === "string" ? raw.progress_text : undefined,
+    items: Array.isArray(raw.items)
+      ? raw.items.map(normalizeTodoItem).filter((item): item is TodoSnapshotItem => Boolean(item))
+      : [],
+  };
+}
+
+function formatDiagnosticLabel(key: string): string {
+  switch (key) {
+    case "log_path":
+      return "Log";
+    case "session_file_path":
+      return "Session file";
+    case "updated_ts":
+      return "Updated";
+    case "cwd":
+      return "Working directory";
+    case "queue_len":
+      return "Queue";
+    default:
+      return key.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+  }
+}
+
+function formatDiagnosticValue(key: string, value: unknown): string {
+  if (key === "updated_ts" && typeof value === "number" && Number.isFinite(value) && value > 1_000_000_000) {
+    return new Date(value * 1000).toLocaleString();
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return JSON.stringify(value);
+}
+
+function renderTodoSnapshotSection(snapshot: TodoSnapshot) {
+  return (
+    <div className="space-y-3 rounded-2xl border border-border/60 bg-card/60 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold text-foreground">Todo list</p>
+          {snapshot.progress_text ? <p className="text-sm text-muted-foreground">{snapshot.progress_text}</p> : null}
+        </div>
+        <Badge variant="outline">{snapshot.available ? `${snapshot.items.length}` : "0"}</Badge>
+      </div>
+      {!snapshot.available ? (
+        <p className="text-sm text-muted-foreground">{snapshot.error ? "Todo list unavailable" : "No todo list yet"}</p>
+      ) : (
+        <div className="space-y-2">
+          {snapshot.items.map((item, index) => (
+            <article key={`${item.title || "todo"}-${index}`} className="rounded-xl border border-border/60 bg-background/70 px-3 py-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <strong className="text-sm text-foreground">{item.title || "Untitled todo"}</strong>
+                <Badge variant="secondary">{item.status || "unknown"}</Badge>
+              </div>
+              {item.description ? <p className="mt-2 text-sm text-muted-foreground">{item.description}</p> : null}
+            </article>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function mergeFreeformValue(request: SessionUiRequest, normalizedValue: string | string[] | undefined, freeformValue: string) {
   const trimmedFreeform = freeformValue.trim();
 
@@ -141,6 +228,11 @@ export function SessionWorkspace({ mode = "default" }: SessionWorkspaceProps) {
   const [requestErrorById, setRequestErrorById] = useState<Record<string, string>>({});
   const requestSubmittingIdsRef = useRef(new Set<string>());
   const diagnosticsEntries = entriesFromRecord(diagnostics);
+  const todoSnapshot = normalizeTodoSnapshot(diagnostics && typeof diagnostics === "object" ? (diagnostics as { todo_snapshot?: unknown }).todo_snapshot : null);
+  const detailEntries = diagnosticsEntries.filter(([key]) => key !== "todo_snapshot");
+  const prioritizedDetailKeys = new Set(["session_file_path", "log_path", "updated_ts"]);
+  const priorityDetailEntries = detailEntries.filter(([key]) => prioritizedDetailKeys.has(key));
+  const genericDetailEntries = detailEntries.filter(([key]) => !prioritizedDetailKeys.has(key));
   const queueItems = queueItemsFromValue(queue);
   const showDetails = mode === "details";
   const hasWorkspaceData = diagnosticsEntries.length > 0 || queueItems.length > 0 || files.length > 0;
@@ -212,15 +304,30 @@ export function SessionWorkspace({ mode = "default" }: SessionWorkspaceProps) {
                     <ScrollArea className="workspaceScroll h-full pr-1">
                       <div className="workspacePanelGrid grid gap-4 lg:grid-cols-2">
                         <WorkspaceSection title="Diagnostics" badge={diagnosticsEntries.length ? `${diagnosticsEntries.length}` : undefined}>
-                          {diagnosticsEntries.length ? (
-                            <dl className="space-y-3">
-                              {diagnosticsEntries.map(([key, value]) => (
-                                <div key={key} className="grid gap-1 sm:grid-cols-[minmax(7rem,auto)_1fr] sm:gap-3">
-                                  <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">{key}</dt>
-                                  <dd className="m-0 text-sm text-foreground">{String(value)}</dd>
-                                </div>
-                              ))}
-                            </dl>
+                          {detailEntries.length || todoSnapshot.available || todoSnapshot.error ? (
+                            <div className="space-y-4">
+                              {priorityDetailEntries.length ? (
+                                <dl className="space-y-3">
+                                  {priorityDetailEntries.map(([key, value]) => (
+                                    <div key={key} className="grid gap-1 sm:grid-cols-[minmax(7rem,auto)_1fr] sm:gap-3">
+                                      <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">{formatDiagnosticLabel(key)}</dt>
+                                      <dd className="m-0 break-all font-mono text-sm text-foreground">{formatDiagnosticValue(key, value)}</dd>
+                                    </div>
+                                  ))}
+                                </dl>
+                              ) : null}
+                              {todoSnapshot.available || todoSnapshot.error ? renderTodoSnapshotSection(todoSnapshot) : null}
+                              {genericDetailEntries.length ? (
+                                <dl className="space-y-3">
+                                  {genericDetailEntries.map(([key, value]) => (
+                                    <div key={key} className="grid gap-1 sm:grid-cols-[minmax(7rem,auto)_1fr] sm:gap-3">
+                                      <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">{formatDiagnosticLabel(key)}</dt>
+                                      <dd className="m-0 text-sm text-foreground">{formatDiagnosticValue(key, value)}</dd>
+                                    </div>
+                                  ))}
+                                </dl>
+                              ) : null}
+                            </div>
                           ) : (
                             <p className="text-sm text-muted-foreground">No diagnostics available.</p>
                           )}
@@ -406,20 +513,35 @@ export function SessionWorkspace({ mode = "default" }: SessionWorkspaceProps) {
                 </TabsContent>
                 <TabsContent value="diagnostics" className="min-h-0">
                   <ScrollArea className="workspaceScroll h-full pr-1">
-                    <WorkspaceSection title="Diagnostics" badge={diagnosticsEntries.length ? `${diagnosticsEntries.length}` : undefined}>
-                      {diagnosticsEntries.length ? (
-                        <dl className="space-y-3">
-                          {diagnosticsEntries.map(([key, value]) => (
-                            <div key={key} className="grid gap-1 sm:grid-cols-[minmax(7rem,auto)_1fr] sm:gap-3">
-                              <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">{key}</dt>
-                              <dd className="m-0 text-sm text-foreground">{String(value)}</dd>
+                        <WorkspaceSection title="Diagnostics" badge={diagnosticsEntries.length ? `${diagnosticsEntries.length}` : undefined}>
+                          {detailEntries.length || todoSnapshot.available || todoSnapshot.error ? (
+                            <div className="space-y-4">
+                              {priorityDetailEntries.length ? (
+                                <dl className="space-y-3">
+                                  {priorityDetailEntries.map(([key, value]) => (
+                                    <div key={key} className="grid gap-1 sm:grid-cols-[minmax(7rem,auto)_1fr] sm:gap-3">
+                                      <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">{formatDiagnosticLabel(key)}</dt>
+                                      <dd className="m-0 break-all font-mono text-sm text-foreground">{formatDiagnosticValue(key, value)}</dd>
+                                    </div>
+                                  ))}
+                                </dl>
+                              ) : null}
+                              {todoSnapshot.available || todoSnapshot.error ? renderTodoSnapshotSection(todoSnapshot) : null}
+                              {genericDetailEntries.length ? (
+                                <dl className="space-y-3">
+                                  {genericDetailEntries.map(([key, value]) => (
+                                    <div key={key} className="grid gap-1 sm:grid-cols-[minmax(7rem,auto)_1fr] sm:gap-3">
+                                      <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">{formatDiagnosticLabel(key)}</dt>
+                                      <dd className="m-0 text-sm text-foreground">{formatDiagnosticValue(key, value)}</dd>
+                                    </div>
+                                  ))}
+                                </dl>
+                              ) : null}
                             </div>
-                          ))}
-                        </dl>
-                      ) : (
-                        <p className="text-sm text-muted-foreground">No diagnostics available.</p>
-                      )}
-                    </WorkspaceSection>
+                          ) : (
+                            <p className="text-sm text-muted-foreground">No diagnostics available.</p>
+                          )}
+                        </WorkspaceSection>
                   </ScrollArea>
                 </TabsContent>
                 <TabsContent value="queue" className="min-h-0">

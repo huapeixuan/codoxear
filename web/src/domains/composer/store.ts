@@ -1,8 +1,17 @@
 import { api } from "../../lib/api";
 
+export interface PendingComposerMessage {
+  localId: string;
+  role: "user";
+  text: string;
+  pending: true;
+  [key: string]: unknown;
+}
+
 export interface ComposerState {
   draft: string;
   sending: boolean;
+  pendingBySessionId: Record<string, PendingComposerMessage[]>;
 }
 
 export interface ComposerStore {
@@ -13,8 +22,9 @@ export interface ComposerStore {
 }
 
 export function createComposerStore(): ComposerStore {
-  let state: ComposerState = { draft: "", sending: false };
+  let state: ComposerState = { draft: "", sending: false, pendingBySessionId: {} };
   const listeners = new Set<() => void>();
+  let nextPendingId = 0;
 
   const emit = () => {
     for (const listener of listeners) {
@@ -36,16 +46,48 @@ export function createComposerStore(): ComposerStore {
     },
     async submit(sessionId: string) {
       if (!state.draft.trim() || state.sending) return;
-      
-      state = { ...state, sending: true };
+
+      nextPendingId += 1;
+      const text = state.draft;
+      const pendingMessage: PendingComposerMessage = {
+        localId: `local-pending-${nextPendingId}`,
+        role: "user",
+        text,
+        pending: true,
+      };
+
+      state = {
+        ...state,
+        draft: "",
+        sending: true,
+        pendingBySessionId: {
+          ...state.pendingBySessionId,
+          [sessionId]: [...(state.pendingBySessionId[sessionId] ?? []), pendingMessage],
+        },
+      };
       emit();
 
       try {
-        await api.sendMessage(sessionId, state.draft);
-        state = { draft: "", sending: false };
+        await api.sendMessage(sessionId, text);
+        state = {
+          ...state,
+          sending: false,
+          pendingBySessionId: {
+            ...state.pendingBySessionId,
+            [sessionId]: (state.pendingBySessionId[sessionId] ?? []).filter((item) => item.localId !== pendingMessage.localId),
+          },
+        };
         emit();
       } catch (error) {
-        state = { ...state, sending: false };
+        state = {
+          ...state,
+          draft: state.draft ? state.draft : text,
+          sending: false,
+          pendingBySessionId: {
+            ...state.pendingBySessionId,
+            [sessionId]: (state.pendingBySessionId[sessionId] ?? []).filter((item) => item.localId !== pendingMessage.localId),
+          },
+        };
         emit();
         throw error;
       }

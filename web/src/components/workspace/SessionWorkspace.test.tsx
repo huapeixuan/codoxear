@@ -256,9 +256,65 @@ describe("SessionWorkspace", () => {
     );
 
     expect(root.textContent).toContain("Diagnostics");
-    expect(root.textContent).toContain("status");
-    expect(root.textContent).toContain("queue_len");
+    expect(root.textContent).toContain("Status");
+    expect(root.textContent).toContain("Queue");
     expect(root.textContent).toContain("next task");
     expect(root.textContent).toContain("src/main.tsx");
+  });
+
+  it("renders Pi details with session-file rows and a formatted todo snapshot", () => {
+    const sessionUiStore = createStaticStore(
+      {
+        sessionId: "pi-details",
+        diagnostics: {
+          log_path: "/tmp/pi-broker.log",
+          session_file_path: "/tmp/pi-session.jsonl",
+          updated_ts: 1_700_000_100,
+          todo_snapshot: {
+            available: true,
+            error: false,
+            progress_text: "1/2 completed",
+            items: [
+              {
+                id: 1,
+                title: "Explore project context",
+                description: "Inspect the current web app",
+                status: "completed",
+              },
+              {
+                id: 2,
+                title: "Restore history controls",
+                status: "in-progress",
+              },
+            ],
+          },
+        },
+        queue: null,
+        files: [],
+        loading: false,
+        requests: [],
+      },
+      { refresh: vi.fn().mockResolvedValue(undefined) },
+    );
+
+    root = document.createElement("div");
+    document.body.appendChild(root);
+    render(
+      <AppProviders sessionUiStore={sessionUiStore as any}>
+        <SessionWorkspace mode="details" />
+      </AppProviders>,
+      root,
+    );
+
+    expect(root.textContent).toContain("Session file");
+    expect(root.textContent).toContain("/tmp/pi-session.jsonl");
+    expect(root.textContent).toContain("Log");
+    expect(root.textContent).toContain("/tmp/pi-broker.log");
+    expect(root.textContent).toContain("Todo list");
+    expect(root.textContent).toContain("1/2 completed");
+    expect(root.textContent).toContain("Explore project context");
+    expect(root.textContent).toContain("Restore history controls");
+    expect(root.textContent).not.toContain("session_file_path");
+    expect(root.textContent).not.toContain("todo_snapshot");
   });
 });

@@ -132,7 +132,6 @@ describe("Composer", () => {
 
     const textarea = composerRoot.querySelector("textarea") as HTMLTextAreaElement;
     expect(composerRoot.querySelector("[data-testid='composer-card']")).not.toBeNull();
-    expect(composerRoot.querySelector("textarea.rounded-2xl")).not.toBeNull();
     expect(composerRoot.querySelector("button[type='submit']")).not.toBeNull();
     const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
     Object.defineProperty(event, "isComposing", { value: false });

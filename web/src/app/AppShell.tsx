@@ -5,9 +5,14 @@ import { SessionsPane } from "../components/sessions/SessionsPane";
 import { ConversationPane } from "../components/conversation/ConversationPane";
 import { Composer } from "../components/composer/Composer";
 import { SessionWorkspace } from "../components/workspace/SessionWorkspace";
+import { FileViewerDialog } from "../components/workspace/FileViewerDialog";
+import type { FileViewMode } from "../components/workspace/FileViewerDialog";
+import { HarnessDialog } from "../components/workspace/HarnessDialog";
 import { NewSessionDialog } from "../components/new-session/NewSessionDialog";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { toPublicAssetUrl } from "../lib/publicAssetUrl";
 import { useMessagesStore, useMessagesStoreApi, useSessionUiStore, useSessionUiStoreApi, useSessionsStore, useSessionsStoreApi } from "./providers";
 
 function shortSessionId(sessionId: string) {
@@ -27,6 +32,11 @@ function writeLocalToggle(key: string, value: boolean) {
   } else {
     window.localStorage.removeItem(key);
   }
+}
+
+function readLocalToggleDefaultOn(key: string) {
+  if (typeof window === "undefined") return true;
+  return window.localStorage.getItem(key) !== "0";
 }
 
 function getAnnouncementClientId() {
@@ -63,6 +73,20 @@ function isMobileNotificationDevice() {
 
 function notificationDeviceClass() {
   return isMobileNotificationDevice() ? "mobile" : "desktop";
+}
+
+function shouldUseMobileWorkspaceSheet() {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+  return window.matchMedia("(max-width: 880px)").matches;
+}
+
+function shouldPreferNativeHlsPlayback() {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  const vendor = navigator.vendor || "";
+  const isAppleVendor = /Apple/i.test(vendor);
+  const isSafariEngine = /Safari/i.test(ua) && !/Chrom(e|ium)|Edg|OPR|CriOS|FxiOS/i.test(ua);
+  return isAppleVendor || isSafariEngine;
 }
 
 function BellIcon() {
@@ -155,31 +179,43 @@ function EmptyDetailsWorkspace() {
 export function AppShell() {
   const { bySessionId } = useMessagesStore();
   const { activeSessionId, items } = useSessionsStore();
-  const { sessionId: sessionUiSessionId } = useSessionUiStore();
+  const { sessionId: sessionUiSessionId, files } = useSessionUiStore();
   const sessionsStoreApi = useSessionsStoreApi();
   const messagesStoreApi = useMessagesStoreApi();
   const sessionUiStoreApi = useSessionUiStoreApi();
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [fileViewerOpen, setFileViewerOpen] = useState(false);
+  const [harnessOpen, setHarnessOpen] = useState(false);
+  const [fileViewerPath, setFileViewerPath] = useState("");
+  const [fileViewerLine, setFileViewerLine] = useState<number | null>(null);
+  const [fileViewerMode, setFileViewerMode] = useState<FileViewMode | null>(null);
+  const [fileViewerRequestKey, setFileViewerRequestKey] = useState(0);
   const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false);
   const [voiceSettingsStatus, setVoiceSettingsStatus] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [announcementEnabled, setAnnouncementEnabled] = useState(() => readLocalToggle("codoxear.announcementEnabled"));
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => readLocalToggle("codoxear.notificationEnabled"));
+  const [replySoundEnabled, setReplySoundEnabled] = useState(() => readLocalToggleDefaultOn("codoxear.replySoundEnabled"));
   const [voiceSettings, setVoiceSettings] = useState<VoiceSettingsResponse>(DEFAULT_VOICE_SETTINGS);
   const [voiceBaseUrlDraft, setVoiceBaseUrlDraft] = useState("");
   const [voiceApiKeyDraft, setVoiceApiKeyDraft] = useState("");
   const [narrationEnabledDraft, setNarrationEnabledDraft] = useState(false);
+  const [enterToSendDraft, setEnterToSendDraft] = useState(() => readLocalToggle("codoxear.enterToSend"));
   const [notificationPermission, setNotificationPermission] = useState(() => (
     typeof Notification === "undefined" ? "unsupported" : Notification.permission
   ));
   const liveAudioRef = useRef<HTMLAudioElement | null>(null);
   const audioRetryTimerRef = useRef<number | null>(null);
+  const hlsRef = useRef<any>(null);
   const notificationFeedCursorRef = useRef(Date.now() / 1000);
   const deliveredNotificationIdsRef = useRef(new Set<string>());
   const resolvingNotificationIdsRef = useRef(new Set<string>());
   const notificationLookupStateRef = useRef(new Map<string, NotificationMessageLookupState>());
   const notificationEndpointRef = useRef("");
+  const seenFinalResponseKeysRef = useRef(new Set<string>());
+  const finalResponseBeepPrimedRef = useRef(false);
   const announcementClientId = useMemo(() => getAnnouncementClientId(), []);
   const [pushNotificationsEnabled, setPushNotificationsEnabled] = useState(false);
 
@@ -218,6 +254,11 @@ export function AppShell() {
   }, [notificationsEnabled]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("codoxear.replySoundEnabled", replySoundEnabled ? "1" : "0");
+  }, [replySoundEnabled]);
+
+  useEffect(() => {
     let intervalId: number | undefined;
     api.setAudioListener(announcementClientId, announcementEnabled).catch(() => undefined);
     if (announcementEnabled) {
@@ -233,38 +274,95 @@ export function AppShell() {
     };
   }, [announcementClientId, announcementEnabled]);
 
-  const startAnnouncementPlayback = (settings: VoiceSettingsResponse, { resetSource = false } = {}) => {
+  const startAnnouncementPlayback = (settings: VoiceSettingsResponse, { resetSource = false, force = false } = {}) => {
     const audio = liveAudioRef.current;
-    if (!audio || !announcementEnabled) return;
+    if (!audio) return;
+    if (!force && !announcementEnabled) return;
     const streamUrl = String(settings.audio?.stream_url || "").trim();
     const hasSegments = Number(settings.audio?.segment_count || 0) > 0;
-    const supportsHls = typeof audio.canPlayType === "function"
-      && ["application/vnd.apple.mpegurl", "audio/mpegurl"].some((kind) => {
-        const result = audio.canPlayType(kind);
-        return result === "probably" || result === "maybe";
-      });
-    if (!streamUrl || !hasSegments || !supportsHls) {
+
+    const browserPrefersNativeHls = shouldPreferNativeHlsPlayback();
+    const nativeHls = browserPrefersNativeHls && ["application/vnd.apple.mpegurl", "audio/mpegurl"].some((kind) => {
+      const result = audio.canPlayType(kind);
+      return result === "probably" || result === "maybe";
+    });
+
+    const Hls = (window as any).Hls;
+    const canUseHlsJs = Hls && Hls.isSupported();
+
+    if (!streamUrl || !hasSegments || (!nativeHls && !canUseHlsJs)) {
       return;
     }
-    if (resetSource || audio.src !== streamUrl) {
-      audio.src = streamUrl;
-    }
-    audio.play().catch(() => {
-      if (audioRetryTimerRef.current !== null) {
-        window.clearTimeout(audioRetryTimerRef.current);
+
+    if (nativeHls) {
+      if (resetSource || audio.src !== streamUrl) {
+        console.log("[Audio] Using native HLS playback", streamUrl);
+        audio.src = streamUrl;
       }
-      audioRetryTimerRef.current = window.setTimeout(() => {
-        audioRetryTimerRef.current = null;
-        startAnnouncementPlayback(settings, { resetSource: true });
-      }, 1200);
-    });
+    } else if (canUseHlsJs) {
+      if (!hlsRef.current) {
+        console.log("[Audio] Initializing hls.js");
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 30,
+          manifestLoadingMaxRetry: 10,
+          levelLoadingMaxRetry: 10,
+        });
+        hls.on(Hls.Events.ERROR, (_event: any, data: any) => {
+          console.warn("[Audio] hls.js error:", data);
+          if (data.fatal) {
+            switch (data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                hls.startLoad();
+                break;
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                hls.recoverMediaError();
+                break;
+              default:
+                void startAnnouncementPlayback(settings, { resetSource: true });
+                break;
+            }
+          }
+        });
+        hls.attachMedia(audio);
+        hlsRef.current = hls;
+      }
+      const hls = hlsRef.current;
+      if (resetSource || audio.getAttribute("data-hls-url") !== streamUrl) {
+        console.log("[Audio] Loading HLS source via hls.js", streamUrl);
+        audio.setAttribute("data-hls-url", streamUrl);
+        hls.loadSource(streamUrl);
+      }
+    }
+
+    const playPromise = audio.play();
+    if (playPromise !== undefined) {
+      playPromise.then(() => {
+        if (resetSource) console.log("[Audio] Playback started/resumed");
+      }).catch((err) => {
+        console.warn("[Audio] Playback failed, will retry:", err);
+        if (audioRetryTimerRef.current !== null) {
+          window.clearTimeout(audioRetryTimerRef.current);
+        }
+        audioRetryTimerRef.current = window.setTimeout(() => {
+          audioRetryTimerRef.current = null;
+          startAnnouncementPlayback(settings, { resetSource: true });
+        }, 1200);
+      });
+    }
   };
 
   useEffect(() => {
     const audio = liveAudioRef.current;
     if (!audio) return;
     if (!announcementEnabled) {
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
       audio.removeAttribute("src");
+      audio.removeAttribute("data-hls-url");
       if (audio.src) {
         audio.src = "";
       }
@@ -293,7 +391,7 @@ export function AppShell() {
     if (!("serviceWorker" in navigator)) {
       throw new Error("service workers are not available");
     }
-    return navigator.serviceWorker.register("service-worker.js");
+    return navigator.serviceWorker.register(toPublicAssetUrl("service-worker.js"));
   };
 
   const syncNotificationSubscriptionState = async (
@@ -375,8 +473,54 @@ export function AppShell() {
     };
   }, [notificationPermission, notificationsEnabled]);
 
+  useEffect(() => {
+    const nextSeen = new Set<string>();
+    for (const sessionId of Object.keys(bySessionId)) {
+      const events = Array.isArray(bySessionId[sessionId]) ? bySessionId[sessionId] : [];
+      for (const event of events) {
+        if (!event || typeof event !== "object") continue;
+        const row = event as Record<string, unknown>;
+        if (row.role !== "assistant" || row.pending === true || row.message_class !== "final_response") continue;
+        const key = finalResponseEventKey(row);
+        if (!key) continue;
+        nextSeen.add(key);
+        if (finalResponseBeepPrimedRef.current && replySoundEnabled && !seenFinalResponseKeysRef.current.has(key)) {
+          playReplyBeep();
+        }
+      }
+    }
+    seenFinalResponseKeysRef.current = nextSeen;
+    finalResponseBeepPrimedRef.current = true;
+  }, [bySessionId, replySoundEnabled]);
+
   const activeSession = items.find((session) => session.session_id === activeSessionId) ?? null;
   const sessionUiMatchesActiveSession = !!activeSessionId && sessionUiSessionId === activeSessionId;
+
+  const openFileViewer = (path = "", line: number | null = null, mode: FileViewMode | null = null) => {
+    setFileViewerPath(path);
+    setFileViewerLine(line);
+    setFileViewerMode(mode);
+    setFileViewerRequestKey((current) => current + 1);
+    setFileViewerOpen(true);
+  };
+
+  const closeFileViewer = () => {
+    setFileViewerOpen(false);
+    setFileViewerPath("");
+    setFileViewerLine(null);
+    setFileViewerMode(null);
+  };
+
+  const logout = async () => {
+    try {
+      await api.logout();
+      if (typeof window !== "undefined") {
+        window.location.reload();
+      }
+    } catch {
+      // allow retry from the UI
+    }
+  };
 
   useEffect(() => {
     if (!activeSessionId) {
@@ -398,15 +542,15 @@ export function AppShell() {
     }
   }, [activeSessionId]);
 
+  useEffect(() => {
+    setFileViewerOpen(false);
+    setHarnessOpen(false);
+  }, [activeSessionId]);
+
   const activeTitle = activeSession
     ? activeSession.alias || activeSession.first_user_message || activeSession.title || shortSessionId(activeSession.session_id)
     : "No session selected";
-  const workspaceVisible = Boolean(activeSessionId);
-  const shellClassName = useMemo(() => {
-    const classes = ["appShell", "legacyShell"];
-    if (!workspaceVisible) classes.push("noWorkspace");
-    return classes.join(" ");
-  }, [workspaceVisible]);
+  const shellClassName = useMemo(() => ["appShell", "editorialShell"].join(" "), []);
   const hasAnnouncementCredentials = Boolean(String(voiceSettings.tts_base_url || "").trim() && String(voiceSettings.tts_api_key || "").trim());
   const notificationLabel = notificationsEnabled
     ? notificationDeviceClass() === "mobile"
@@ -421,7 +565,17 @@ export function AppShell() {
 
   const renderRailActions = () => (
     <div className="sidebarBannerActions">
-      <Button type="button" variant="ghost" className="brandMark" onClick={() => setSidebarOpen(false)}>
+      <Button
+        type="button"
+        variant="ghost"
+        className="brandMark"
+        onClick={() => {
+          setSidebarOpen(false);
+          if (announcementEnabled) {
+            void startAnnouncementPlayback(voiceSettings, { resetSource: true, force: true });
+          }
+        }}
+      >
         Codoxear
       </Button>
       <div className="sidebarActionButtons">
@@ -448,6 +602,10 @@ export function AppShell() {
           title={announcementLabel}
           onClick={() => {
             void toggleAnnouncements();
+            // Try to start playback from gesture if we are turning it on
+            if (!announcementEnabled) {
+              void startAnnouncementPlayback(voiceSettings, { resetSource: true, force: true });
+            }
           }}
         >
           <VolumeIcon />
@@ -461,7 +619,7 @@ export function AppShell() {
     <footer className="sidebarFooter">
       <Button type="button" variant="outline" className="footerAction"><span className="buttonGlyph">?</span><span>Help</span></Button>
       <Button type="button" variant="outline" className="footerAction" onClick={() => openVoiceSettings()}><span className="buttonGlyph">⚙</span><span>Settings</span></Button>
-      <Button type="button" variant="outline" className="footerAction"><span className="buttonGlyph">→|</span><span>Log out</span></Button>
+      <Button type="button" variant="outline" className="footerAction" onClick={() => { void logout(); }}><span className="buttonGlyph">→|</span><span>Log out</span></Button>
     </footer>
   );
 
@@ -472,6 +630,57 @@ export function AppShell() {
       {renderRailFooter()}
     </>
   );
+
+  const renderWorkspaceDetails = () => (
+    sessionUiMatchesActiveSession ? <SessionWorkspace mode="details" /> : <EmptyDetailsWorkspace />
+  );
+
+  const openWorkspace = () => {
+    if (shouldUseMobileWorkspaceSheet()) {
+      setDetailsOpen(true);
+      return;
+    }
+    setWorkspaceOpen(true);
+  };
+
+  const playReplyBeep = () => {
+    try {
+      const AudioContextCtor = (window as any).AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextCtor) {
+        return;
+      }
+      const ctx = new AudioContextCtor();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(987.77, ctx.currentTime);
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.08, ctx.currentTime + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.18);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.18);
+      osc.onended = () => {
+        void ctx.close().catch(() => undefined);
+      };
+    } catch {
+      // Best-effort local cue only.
+    }
+  };
+
+  const finalResponseEventKey = (row: Record<string, unknown>) => {
+    const messageId = typeof row.message_id === "string" ? row.message_id.trim() : "";
+    if (messageId) return `id:${messageId}`;
+    const ts = typeof row.ts === "number" ? row.ts : 0;
+    const text = typeof row.notification_text === "string"
+      ? row.notification_text
+      : typeof row.text === "string"
+        ? row.text
+        : "";
+    const normalizedText = text.replace(/\s+/g, " ").trim();
+    return normalizedText ? `text:${ts}:${normalizedText}` : "";
+  };
 
   const showDesktopNotification = (title: string, body: string, messageId?: string) => {
     if (notificationDeviceClass() !== "desktop" || notificationPermission !== "granted" || typeof Notification === "undefined") {
@@ -555,6 +764,7 @@ export function AppShell() {
     setVoiceBaseUrlDraft(String(voiceSettings.tts_base_url || ""));
     setVoiceApiKeyDraft(String(voiceSettings.tts_api_key || ""));
     setNarrationEnabledDraft(!!voiceSettings.tts_enabled_for_narration);
+    setEnterToSendDraft(readLocalToggle("codoxear.enterToSend"));
     setVoiceSettingsOpen(true);
   };
 
@@ -635,10 +845,62 @@ export function AppShell() {
       const response = await api.saveVoiceSettings(payload);
       const nextSettings = mergeVoiceSettings(response);
       setVoiceSettings(nextSettings);
+      writeLocalToggle("codoxear.enterToSend", enterToSendDraft);
       setVoiceSettingsStatus("");
       setVoiceSettingsOpen(false);
     } catch (error) {
       setVoiceSettingsStatus(error instanceof Error ? `save error: ${error.message}` : "save error: unknown error");
+    }
+  };
+
+  const playTestSound = () => {
+    try {
+      const AudioContext = (window as any).AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContext) {
+        setVoiceSettingsStatus("Audio Context not supported in this browser.");
+        return;
+      }
+      const ctx = new AudioContext();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(440, ctx.currentTime);
+      gain.gain.setValueAtTime(0, ctx.currentTime);
+      gain.gain.linearRampToValueAtTime(0.1, ctx.currentTime + 0.1);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.8);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.8);
+      setVoiceSettingsStatus("Playing test sound (beep)...");
+      window.setTimeout(() => setVoiceSettingsStatus(""), 1500);
+    } catch (error) {
+      setVoiceSettingsStatus(error instanceof Error ? `test error: ${error.message}` : "test error: unknown error");
+    }
+  };
+
+  const triggerTestAnnouncement = async () => {
+    setVoiceSettingsStatus("Requesting test announcement...");
+    try {
+      await api.triggerTestAnnouncement();
+      window.setTimeout(() => {
+        api.getVoiceSettings()
+          .then((response) => {
+            const nextSettings = mergeVoiceSettings(response);
+            setVoiceSettings(nextSettings);
+            const lastError = String(nextSettings.audio?.last_error || "").trim();
+            if (lastError) {
+              setVoiceSettingsStatus(`Test announcement failed: ${lastError}`);
+              return;
+            }
+            setVoiceSettingsStatus("Test announcement queued. If you still hear nothing, send me the Console [Audio] logs and the audio status below.");
+          })
+          .catch(() => {
+            setVoiceSettingsStatus("Test announcement queued. If you still hear nothing, send me the Console [Audio] logs and the audio status below.");
+          });
+      }, 1600);
+    } catch (error) {
+      setVoiceSettingsStatus(error instanceof Error ? `test announcement error: ${error.message}` : "test announcement error: unknown error");
     }
   };
 
@@ -660,17 +922,14 @@ export function AppShell() {
               <div className="conversationTitle">{activeSessionId ? activeTitle : "No session selected"}</div>
             </div>
             <div className="conversationToolbarGroup">
-              <Button type="button" variant="outline" size="icon" className="toolbarButton" disabled={!activeSessionId}><span className="buttonGlyph">📄</span><span className="visuallyHidden">View file</span></Button>
-              <Button type="button" variant="outline" size="icon" className="toolbarButton" disabled={!activeSessionId} onClick={() => setDetailsOpen(true)}><span className="buttonGlyph">ⓘ</span><span className="visuallyHidden">Details</span></Button>
-              <Button type="button" variant="outline" size="icon" className="toolbarButton" disabled={!activeSessionId}><span className="buttonGlyph">⟳</span><span className="visuallyHidden">Harness mode</span></Button>
+              <Button type="button" variant="outline" size="sm" className="toolbarButton toolbarTextButton" disabled={!activeSessionId} onClick={() => openFileViewer()}>Files</Button>
+              <Button type="button" variant="outline" size="sm" className="toolbarButton toolbarTextButton" disabled={!activeSessionId} onClick={openWorkspace}>Workspace</Button>
+              <Button type="button" variant="outline" size="sm" className="toolbarButton toolbarTextButton" disabled={!activeSessionId} onClick={() => setHarnessOpen(true)}>Harness</Button>
             </div>
           </div>
-          <ConversationPane />
+          <ConversationPane onOpenFilePath={(path, line) => openFileViewer(path, line ?? null, "file")} />
           <Composer />
         </section>
-        <aside className={`workspaceRail${workspaceVisible ? "" : " isHidden"}`} data-testid="workspace-rail">
-          {sessionUiMatchesActiveSession ? <SessionWorkspace /> : null}
-        </aside>
         <div data-testid="mobile-sessions-sheet">
           <Sheet open={sidebarOpen}>
             <button type="button" className="sheetBackdropButton" aria-label="Close sessions panel" onClick={() => setSidebarOpen(false)} />
@@ -694,12 +953,30 @@ export function AppShell() {
                   <h2 id="mobile-workspace-title">Workspace</h2>
                   <Button type="button" variant="ghost" size="sm" onClick={() => setDetailsOpen(false)}>Close</Button>
                 </header>
-                {sessionUiMatchesActiveSession ? <SessionWorkspace mode="details" /> : <EmptyDetailsWorkspace />}
+                {renderWorkspaceDetails()}
               </div>
             </SheetContent>
           </Sheet>
         </div>
       </div>
+      <Dialog open={workspaceOpen} onOpenChange={setWorkspaceOpen}>
+        <DialogContent className="workspaceDialog max-w-none" titleId="workspace-dialog-title">
+          <div data-testid="workspace-dialog" className="workspaceDialogBody">
+            <DialogHeader className="workspaceDialogHeader">
+              <div className="flex items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <DialogTitle id="workspace-dialog-title">Workspace</DialogTitle>
+                  <p className="text-sm text-muted-foreground">Inspect session details, queue state, tracked files, and UI requests.</p>
+                </div>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setWorkspaceOpen(false)}>Close</Button>
+              </div>
+            </DialogHeader>
+            <div className="min-h-0 flex-1 overflow-y-auto p-5">
+              {renderWorkspaceDetails()}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
       {voiceSettingsOpen ? (
         <div className="dialogBackdrop" onClick={closeVoiceSettings}>
           <section className="dialogCard legacyDialog voiceSettingsDialog" onClick={(event) => event.stopPropagation()}>
@@ -739,11 +1016,41 @@ export function AppShell() {
                   <span>Announce narration messages</span>
                 </label>
               </div>
+              <div className="fieldBlock toggleField">
+                <span className="fieldLabel">Composer</span>
+                <label className="checkField">
+                  <input
+                    type="checkbox"
+                    checked={enterToSendDraft}
+                    onChange={(event) => setEnterToSendDraft(event.currentTarget.checked)}
+                  />
+                  <span>Press Enter to send</span>
+                </label>
+              </div>
+              <div className="fieldBlock toggleField">
+                <span className="fieldLabel">Reply sound</span>
+                <label className="checkField">
+                  <input
+                    type="checkbox"
+                    checked={replySoundEnabled}
+                    onChange={(event) => setReplySoundEnabled(event.currentTarget.checked)}
+                  />
+                  <span>Play a short beep when the assistant finishes a reply</span>
+                </label>
+              </div>
               <div className="voiceSettingsMeta fieldHint">
                 <span>Listeners: {voiceSettings.audio?.active_listener_count ?? 0}</span>
+                <span>Queue: {voiceSettings.audio?.queue_depth ?? 0}</span>
+                <span>Segments: {voiceSettings.audio?.segment_count ?? 0}</span>
                 <span>Mobile notifications: {voiceSettings.notifications?.enabled_devices ?? 0}/{voiceSettings.notifications?.total_devices ?? 0}</span>
               </div>
+              {voiceSettings.audio?.last_error ? (
+                <p className="fieldHint voiceSettingsStatus">Audio error: {voiceSettings.audio.last_error}</p>
+              ) : null}
               <div className="formActions dialogFormActions">
+                <button type="button" className="secondaryButton" onClick={playTestSound}>Test Sound</button>
+                <button type="button" className="secondaryButton" onClick={() => { void triggerTestAnnouncement(); }}>Test Announcement</button>
+                <div className="flex-1" />
                 <button type="button" className="secondaryButton" onClick={closeVoiceSettings}>Cancel</button>
                 <button type="button" className="primaryButton" onClick={() => { void saveVoiceSettings(); }}>Save</button>
               </div>
@@ -751,6 +1058,17 @@ export function AppShell() {
           </section>
         </div>
       ) : null}
+      <FileViewerDialog
+        open={fileViewerOpen}
+        sessionId={activeSessionId}
+        files={sessionUiMatchesActiveSession ? files : []}
+        initialPath={fileViewerPath}
+        initialLine={fileViewerLine}
+        initialMode={fileViewerMode}
+        openRequestKey={fileViewerRequestKey}
+        onClose={closeFileViewer}
+      />
+      <HarnessDialog open={harnessOpen} sessionId={activeSessionId} onClose={() => setHarnessOpen(false)} />
       <NewSessionDialog open={newSessionOpen} onClose={() => setNewSessionOpen(false)} />
     </>
   );

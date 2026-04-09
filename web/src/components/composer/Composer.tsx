@@ -72,7 +72,7 @@ export function Composer() {
       >
         <CardContent className="p-3 sm:p-4">
           <form
-            className={cn("composer composerShell flex items-end gap-2", draft.includes("\n") && "multiline")}
+            className={cn("composer composerShell flex items-end gap-2 border-t-0", draft.includes("\n") && "multiline")}
             onSubmit={(event) => {
               event.preventDefault();
               if (activeSessionId) {
@@ -84,7 +84,7 @@ export function Composer() {
               type="button"
               variant="outline"
               size="icon"
-              className="composerAttachButton h-12 w-12 rounded-2xl border-border/70 bg-background/80"
+              className="composerAttachButton"
               aria-label="Attach file"
             >
               <span className="buttonGlyph">📎</span>
@@ -94,7 +94,7 @@ export function Composer() {
               <Textarea
                 value={draft}
                 placeholder="Enter your instructions here"
-                className="composerTextarea min-h-[3.5rem] rounded-2xl border-border/70 bg-background/80 px-4 py-3 text-base shadow-none focus-visible:ring-2"
+                className="composerTextarea"
                 onInput={(event) => composerStoreApi.setDraft(event.currentTarget.value)}
                 onKeyDown={(event) => {
                   if (event.key !== "Enter" || event.isComposing) {
@@ -117,17 +117,16 @@ export function Composer() {
             </div>
             <Button
               type="button"
-              variant="ghost"
-              size="icon"
-              className="composerQueueButton h-12 w-12 rounded-2xl"
+              variant="outline"
+              size="sm"
+              className="composerQueueButton"
               aria-label="Queued messages"
             >
-              <span className="buttonGlyph">≡</span>
-              <span className="visuallyHidden">Queued messages</span>
+              Queue
             </Button>
             <Button
               type="submit"
-              className="sendButton h-12 rounded-2xl px-4"
+              className="sendButton"
               aria-label={sending ? "Sending" : "Send"}
               disabled={sending || !draft.trim()}
             >

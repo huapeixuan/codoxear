@@ -21,7 +21,7 @@ describe("createComposerStore", () => {
     await store.submit("s1");
 
     expect(api.sendMessage).toHaveBeenCalledWith("s1", "hello");
-    expect(store.getState()).toEqual({ draft: "", sending: false });
+    expect(store.getState()).toEqual({ draft: "", sending: false, pendingBySessionId: { s1: [] } });
   });
 
   it("restores sending=false on failure without clearing draft", async () => {
@@ -31,6 +31,46 @@ describe("createComposerStore", () => {
 
     await expect(store.submit("s1")).rejects.toThrow("fail");
 
-    expect(store.getState()).toEqual({ draft: "keep me", sending: false });
+    expect(store.getState()).toEqual({ draft: "keep me", sending: false, pendingBySessionId: { s1: [] } });
+  });
+
+  it("adds an optimistic pending message immediately and removes it after success", async () => {
+    let resolveSend: (value: unknown) => void = () => undefined;
+    vi.mocked(api.sendMessage).mockReturnValueOnce(new Promise((resolve) => {
+      resolveSend = resolve;
+    }) as never);
+    const store = createComposerStore();
+    store.setDraft("hello");
+
+    const submitPromise = store.submit("s1");
+
+    expect(store.getState().draft).toBe("");
+    expect(store.getState().sending).toBe(true);
+    expect(store.getState().pendingBySessionId.s1).toHaveLength(1);
+    expect(store.getState().pendingBySessionId.s1[0]).toMatchObject({ role: "user", text: "hello", pending: true });
+
+    resolveSend({ ok: true });
+    await submitPromise;
+
+    expect(store.getState()).toEqual({ draft: "", sending: false, pendingBySessionId: { s1: [] } });
+  });
+
+  it("removes the optimistic pending message and restores the draft after failure", async () => {
+    let rejectSend: (error?: unknown) => void = () => undefined;
+    vi.mocked(api.sendMessage).mockReturnValueOnce(new Promise((_resolve, reject) => {
+      rejectSend = reject;
+    }) as never);
+    const store = createComposerStore();
+    store.setDraft("keep me");
+
+    const submitPromise = store.submit("s1");
+
+    expect(store.getState().draft).toBe("");
+    expect(store.getState().pendingBySessionId.s1).toHaveLength(1);
+
+    rejectSend(new Error("fail"));
+    await expect(submitPromise).rejects.toThrow("fail");
+
+    expect(store.getState()).toEqual({ draft: "keep me", sending: false, pendingBySessionId: { s1: [] } });
   });
 });

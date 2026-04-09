@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 
 import { useSessionsStore, useSessionsStoreApi } from "../../app/providers";
 import { api } from "../../lib/api";
+import { providerChoiceToSettings } from "../../lib/launch";
 import type { LaunchBackendDefaults, SessionResumeCandidate, SessionResumeCandidatesResponse } from "../../lib/types";
 
 interface NewSessionDialogProps {
@@ -57,23 +58,6 @@ function reasoningChoicesForDefaults(defaults: LaunchBackendDefaults) {
 
 function modelChoicesForDefaults(defaults: LaunchBackendDefaults) {
   return uniqueStrings([...(defaults.models ?? []), defaults.model]);
-}
-
-function providerChoiceToSettings(choice: string, backend: string) {
-  const value = choice.trim();
-  if (!value) {
-    return { model_provider: undefined, preferred_auth_method: undefined };
-  }
-  if (backend === "pi") {
-    return { model_provider: value, preferred_auth_method: undefined };
-  }
-  if (value === "chatgpt") {
-    return { model_provider: "openai", preferred_auth_method: "chatgpt" };
-  }
-  if (value === "openai-api") {
-    return { model_provider: "openai", preferred_auth_method: "apikey" };
-  }
-  return { model_provider: value, preferred_auth_method: "apikey" };
 }
 
 function resumeOptionLabel(item: SessionResumeCandidate) {

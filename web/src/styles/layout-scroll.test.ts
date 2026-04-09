@@ -52,20 +52,23 @@ function mediaBody(source: string, query: string) {
 }
 
 describe("conversation layout scroll guards", () => {
-  it("keeps the conversation column as a shrinkable flex stack so the composer stays visible", () => {
-    expect(css).toMatch(/\.appShell\.legacyShell\s*\{[^}]*grid-template-rows:\s*1fr;/);
-    expect(css).toMatch(/\.appShell\.legacyShell\s*\{[^}]*position:\s*fixed;/);
-    expect(css).toMatch(/\.appShell\.legacyShell\s*\{[^}]*inset:\s*0;/);
-    expect(css).toMatch(/\.conversationColumn\s*\{[^}]*display:\s*flex;/);
-    expect(css).toMatch(/\.conversationColumn\s*\{[^}]*flex-direction:\s*column;/);
-    expect(css).toMatch(/\.conversationColumn\s*\{[^}]*max-height:\s*100dvh;/);
-    expect(css).toMatch(/\.conversationColumn\s*\{[^}]*min-height:\s*0;/);
-    expect(css).toMatch(/\.conversationPane\s*\{[^}]*min-height:\s*0;/);
-    expect(css).toMatch(/\.conversationPane\s*\{[^}]*flex:\s*1 1 0;/);
-  });
+  it("defines the editorial shell as a fixed two-column layout with a quiet conversation stack", () => {
+    const shellRule = ruleBody(css, ".appShell.editorialShell");
+    const sidebarRule = ruleBody(css, ".sidebarColumn");
+    const conversationRule = ruleBody(css, ".conversationColumn");
+    const paneRule = ruleBody(css, ".conversationPane");
 
-  it("collapses the third shell column when the workspace rail is hidden", () => {
-    expect(css).toMatch(/\.appShell\.legacyShell\.noWorkspace\s*\{[^}]*grid-template-columns:\s*var\(--sidebar-w\)\s+minmax\(0,\s*1fr\);/);
+    expect(shellRule).toContain("position: fixed;");
+    expect(shellRule).toContain("inset: 0;");
+    expect(shellRule).toContain("grid-template-columns: minmax(16rem, var(--sidebar-w)) minmax(0, 1fr);");
+    expect(sidebarRule).toContain("min-height: 0;");
+    expect(sidebarRule).toContain("overflow: hidden;");
+    expect(conversationRule).toContain("display: flex;");
+    expect(conversationRule).toContain("flex-direction: column;");
+    expect(conversationRule).toContain("min-height: 0;");
+    expect(conversationRule).toContain("overflow: hidden;");
+    expect(paneRule).toContain("flex: 1 1 0;");
+    expect(paneRule).toContain("min-height: 0;");
   });
 
   it("keeps composer todo selectors in the global shell stylesheet", () => {
@@ -107,12 +110,50 @@ describe("conversation layout scroll guards", () => {
     expect(statusRule).toContain("overflow-wrap: anywhere;");
   });
 
-  it("keeps the mobile composer todo sizing rules scoped to the 880px media block", () => {
+  it("adds bounded workspace dialog hooks and stable toolbar/composer sizing", () => {
+    const dialogRule = ruleBody(css, ".workspaceDialog");
+    const dialogBodyRule = ruleBody(css, ".workspaceDialogBody");
+    const dialogHeaderRule = ruleBody(css, ".workspaceDialogHeader");
+    const toolbarTextButtonRule = ruleBody(css, ".toolbarTextButton");
+    const composerInputRule = ruleBody(css, ".composerInputWrap");
+    const queueButtonRule = ruleBody(css, ".composerQueueButton");
+    const sendButtonRule = ruleBody(css, ".sendButton");
+
+    expect(dialogRule).toContain("width: min(72rem, calc(100vw - 32px));");
+    expect(dialogRule).toContain("max-height: min(86dvh, 56rem);");
+    expect(dialogRule).toContain("overflow: hidden;");
+    expect(dialogBodyRule).toContain("min-height: 0;");
+    expect(dialogBodyRule).toContain("overflow: hidden;");
+    expect(dialogHeaderRule).toContain("flex: 0 0 auto;");
+    expect(toolbarTextButtonRule).toContain("min-width: fit-content;");
+    expect(composerInputRule).toContain("min-width: 0;");
+    expect(queueButtonRule).toContain("min-width: fit-content;");
+    expect(sendButtonRule).toContain("width: 44px;");
+    expect(sendButtonRule).toContain("height: 44px;");
+  });
+
+  it("clamps session title and preview text to two lines so long text does not stretch the rail", () => {
+    const titleRule = ruleBody(css, ".sessionTitle");
+    const previewRule = ruleBody(css, ".sessionPreview");
+
+    expect(titleRule).toContain("display: -webkit-box;");
+    expect(titleRule).toContain("-webkit-line-clamp: 2;");
+    expect(titleRule).toContain("-webkit-box-orient: vertical;");
+    expect(previewRule).toContain("display: -webkit-box;");
+    expect(previewRule).toContain("-webkit-line-clamp: 2;");
+    expect(previewRule).toContain("-webkit-box-orient: vertical;");
+  });
+
+  it("keeps the mobile composer and shell sizing rules scoped to the 880px media block", () => {
     const mobileRules = mediaBody(css, "(max-width: 880px)");
+    const mobileShellRule = ruleBody(mobileRules, ".appShell.editorialShell");
     const mobileStackRule = ruleBody(mobileRules, ".composerStack");
     const mobilePanelRule = ruleBody(mobileRules, ".composerTodoPanel");
+    const mobileShellComposerRule = ruleBody(mobileRules, ".composerShell");
 
+    expect(mobileShellRule).toContain("grid-template-columns: 1fr;");
     expect(mobileStackRule).toContain("padding: 8px 10px calc(8px + env(safe-area-inset-bottom));");
     expect(mobilePanelRule).toContain("max-height: min(28dvh, 220px);");
+    expect(mobileShellComposerRule).toContain("padding: 8px 10px calc(8px + env(safe-area-inset-bottom));");
   });
 });
