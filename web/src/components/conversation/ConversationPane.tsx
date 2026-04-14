@@ -614,6 +614,71 @@ function renderCardHeader(kind: string, title?: string, summary?: string, ts?: n
   );
 }
 
+function CopyMessageIcon() {
+  return (
+    <svg className="messageCopyIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M7 15H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+function ChatMessageCard({
+  event,
+  kind,
+  options,
+}: {
+  event: MessageEvent;
+  kind: "user" | "assistant";
+  options: MarkdownRenderOptions;
+}) {
+  const label = kind === "user" ? "You" : "Assistant";
+  const text = contentTextFromMessage(event);
+  const [copied, setCopied] = useState(false);
+  const resetTimerRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (resetTimerRef.current !== null) {
+      window.clearTimeout(resetTimerRef.current);
+    }
+  }, []);
+
+  const handleCopy = async () => {
+    if (!text.trim() || !navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
+      return;
+    }
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    if (resetTimerRef.current !== null) {
+      window.clearTimeout(resetTimerRef.current);
+    }
+    resetTimerRef.current = window.setTimeout(() => {
+      setCopied(false);
+      resetTimerRef.current = null;
+    }, 1200);
+  };
+
+  return (
+    <MessageSurface kind={kind}>
+      {renderCardHeader(kind, label, undefined, event.ts)}
+      <div className="messageBody prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: renderMessageHtml(text, options) }} />
+      <div className="messageBubbleActions">
+        <button
+          type="button"
+          className={cn("messageCopyButton", copied && "isCopied")}
+          aria-label={`Copy ${kind} message`}
+          onClick={() => {
+            void handleCopy();
+          }}
+        >
+          <CopyMessageIcon />
+          <span>{copied ? "Copied" : "Copy"}</span>
+        </button>
+      </div>
+    </MessageSurface>
+  );
+}
+
 function MessageSurface({
   kind,
   children,
@@ -657,14 +722,7 @@ function MessageSurface({
 }
 
 function renderChatCard(event: MessageEvent, kind: "user" | "assistant", options: MarkdownRenderOptions) {
-  const label = kind === "user" ? "You" : "Assistant";
-
-  return (
-    <MessageSurface kind={kind}>
-      {renderCardHeader(kind, label, undefined, event.ts)}
-      <div className="messageBody prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: renderMessageHtml(contentTextFromMessage(event), options) }} />
-    </MessageSurface>
-  );
+  return <ChatMessageCard event={event} kind={kind} options={options} />;
 }
 
 function shouldAllowFuzzyAskUserMatch(messages: MessageEvent[], index: number) {

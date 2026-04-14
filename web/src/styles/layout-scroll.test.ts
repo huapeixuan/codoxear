@@ -252,4 +252,17 @@ describe("conversation layout scroll guards", () => {
     expect(titleRule).toContain("overflow: hidden;");
     expect(timestampRule).toContain("flex: 0 0 auto;");
   });
+
+  it("clamps the mobile conversation title to two lines", () => {
+    const mobileRules = mediaBody(css, "(max-width: 880px)");
+    const titleRule = ruleBody(mobileRules, ".conversationTitle");
+
+    expect(titleRule).toContain("flex: 1 1 auto;");
+    expect(titleRule).toContain("min-width: 0;");
+    expect(titleRule).toContain("overflow: hidden;");
+    expect(titleRule).toContain("display: -webkit-box;");
+    expect(titleRule).toContain("-webkit-line-clamp: 2;");
+    expect(titleRule).toContain("-webkit-box-orient: vertical;");
+    expect(titleRule).toContain("text-overflow: ellipsis;");
+  });
 });

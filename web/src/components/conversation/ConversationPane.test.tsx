@@ -285,6 +285,51 @@ describe("ConversationPane", () => {
     expect(blockCode?.textContent).toContain("const answer = 42;");
   });
 
+  it("copies plain chat bubble text from the copy button", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    const sessionsStore = createStaticStore(
+      { items: [], activeSessionId: "sess-copy", loading: false, newSessionDefaults: null },
+      { refresh: () => Promise.resolve(), select: () => undefined },
+    );
+    const messagesStore = createStaticStore(
+      {
+        bySessionId: {
+          "sess-copy": [
+            { role: "assistant", text: "Copy me please" },
+          ],
+        },
+        offsetsBySessionId: { "sess-copy": 1 },
+        loading: false,
+      },
+      { loadInitial: () => Promise.resolve(), poll: () => Promise.resolve() },
+    );
+
+    root = document.createElement("div");
+    document.body.appendChild(root);
+    render(
+      <AppProviders sessionsStore={sessionsStore as any} messagesStore={messagesStore as any}>
+        <ConversationPane />
+      </AppProviders>,
+      root,
+    );
+
+    const copyButton = root.querySelector("button[aria-label='Copy assistant message']") as HTMLButtonElement | null;
+    expect(copyButton).not.toBeNull();
+
+    await act(async () => {
+      copyButton?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+    });
+
+    expect(writeText).toHaveBeenCalledWith("Copy me please");
+    expect(copyButton?.textContent).toContain("Copied");
+  });
+
   it("only binds the newest duplicate ask_user card to a matching live request", () => {
     const sessionsStore = createStaticStore(
       { items: [], activeSessionId: "sess-dup", loading: false, newSessionDefaults: null },
