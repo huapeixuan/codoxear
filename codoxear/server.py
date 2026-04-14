@@ -5465,22 +5465,21 @@ class SessionManager:
                 git_branch = _current_git_branch(cwd_path)
                 if s.first_user_message is None:
                     try:
+                        preview = ""
                         if (
                             s.backend == "pi"
                             and s.session_path is not None
                             and s.session_path.exists()
                         ):
-                            s.first_user_message = (
-                                _first_user_message_preview_from_pi_session(
-                                    s.session_path
-                                )
+                            preview = _first_user_message_preview_from_pi_session(
+                                s.session_path
                             )
                         elif log_exists and s.log_path is not None:
-                            s.first_user_message = _first_user_message_preview_from_log(
-                                s.log_path
-                            )
+                            preview = _first_user_message_preview_from_log(s.log_path)
+                        if preview:
+                            s.first_user_message = preview
                     except Exception:
-                        s.first_user_message = ""
+                        pass
                 items.append(
                     {
                         "session_id": s.session_id,

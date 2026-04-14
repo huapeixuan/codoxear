@@ -40,6 +40,17 @@ def _pi_message_entry(
     }
 
 
+def _codex_user_message_entry(text: str) -> dict[str, object]:
+    return {
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": text}],
+        },
+    }
+
+
 def _write_jsonl(path: Path, entries: list[dict[str, object]]) -> None:
     path.write_text(
         "".join(json.dumps(entry) + "\n" for entry in entries), encoding="utf-8"
@@ -2989,6 +3000,100 @@ class TestPiMessageNormalization(unittest.TestCase):
             ["pi-session", "other-session"],
         )
         self.assertEqual(rows_after_refresh[0]["updated_ts"], refreshed_mtime)
+
+    def test_list_sessions_retries_first_user_message_preview_for_new_codex_sessions(
+        self,
+    ) -> None:
+        mgr = _make_manager()
+        with tempfile.TemporaryDirectory() as td:
+            log_path = Path(td) / "codex-session.jsonl"
+            log_path.write_text("", encoding="utf-8")
+            sock = Path(td) / "codex.sock"
+            sock.touch()
+            mgr._sessions["codex-session"] = Session(
+                session_id="codex-session",
+                thread_id="codex-thread-001",
+                agent_backend="codex",
+                backend="codex",
+                broker_pid=1111,
+                codex_pid=2222,
+                owned=True,
+                start_ts=123.0,
+                cwd=td,
+                log_path=log_path,
+                sock_path=sock,
+            )
+            mgr._sock_call = lambda *_args, **_kwargs: {
+                "busy": False,
+                "queue_len": 0,
+                "token": None,
+            }  # type: ignore[method-assign]
+            mgr.idle_from_log = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
+
+            first_rows = mgr.list_sessions()
+            self.assertIsNone(mgr._sessions["codex-session"].first_user_message)
+
+            with log_path.open("a", encoding="utf-8") as f:
+                f.write(
+                    json.dumps(_codex_user_message_entry("draft a migration plan"))
+                    + "\n"
+                )
+
+            second_rows = mgr.list_sessions()
+
+        self.assertEqual(first_rows[0]["first_user_message"], "")
+        self.assertEqual(second_rows[0]["first_user_message"], "draft a migration plan")
+
+    def test_list_sessions_retries_first_user_message_preview_for_new_pi_sessions(
+        self,
+    ) -> None:
+        mgr = _make_manager()
+        with tempfile.TemporaryDirectory() as td:
+            session_path = Path(td) / "pi-session.jsonl"
+            _write_jsonl(
+                session_path,
+                [{"type": "session", "session_id": "pi-session-001"}],
+            )
+            sock = Path(td) / "pi.sock"
+            sock.touch()
+            mgr._sessions["pi-session"] = Session(
+                session_id="pi-session",
+                thread_id="pi-thread-001",
+                agent_backend="pi",
+                backend="pi",
+                broker_pid=3333,
+                codex_pid=4444,
+                owned=True,
+                start_ts=123.0,
+                cwd=td,
+                log_path=None,
+                sock_path=sock,
+                session_path=session_path,
+            )
+            mgr._sock_call = lambda *_args, **_kwargs: {
+                "busy": False,
+                "queue_len": 0,
+                "token": None,
+            }  # type: ignore[method-assign]
+
+            first_rows = mgr.list_sessions()
+            self.assertIsNone(mgr._sessions["pi-session"].first_user_message)
+
+            with session_path.open("a", encoding="utf-8") as f:
+                f.write(
+                    json.dumps(
+                        _pi_message_entry("user", "investigate websocket reconnects")
+                    )
+                    + "\n"
+                )
+
+            second_rows = mgr.list_sessions()
+
+        self.assertEqual(first_rows[0]["first_user_message"], "")
+        self.assertEqual(
+            second_rows[0]["first_user_message"],
+            "investigate websocket reconnects",
+        )
 
     def test_list_sessions_keeps_pi_busy_when_session_file_has_not_advanced(
         self,
