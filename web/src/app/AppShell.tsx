@@ -11,7 +11,7 @@ import { VoiceSettingsDialog } from "./app-shell/VoiceSettingsDialog";
 import { useAppShellAudio } from "./app-shell/useAppShellAudio";
 import { useAppShellNotifications } from "./app-shell/useAppShellNotifications";
 import { useAppShellSessionEffects } from "./app-shell/useAppShellSessionEffects";
-import { useLiveSessionStoreApi, useMessagesStore, useSessionUiStore, useSessionUiStoreApi, useSessionsStore, useSessionsStoreApi } from "./providers";
+import { useLiveSessionStore, useLiveSessionStoreApi, useMessagesStore, useSessionUiStore, useSessionUiStoreApi, useSessionsStore, useSessionsStoreApi } from "./providers";
 import {
   shouldUseMobileWorkspaceSheet,
   shortSessionId,
@@ -47,6 +47,7 @@ function EmptyDetailsWorkspace() {
 export function AppShell() {
   const { bySessionId } = useMessagesStore();
   const { activeSessionId, items } = useSessionsStore();
+  const { busyBySessionId } = useLiveSessionStore();
   const { sessionId: sessionUiSessionId } = useSessionUiStore();
   const sessionsStoreApi = useSessionsStoreApi();
   const liveSessionStoreApi = useLiveSessionStoreApi();
@@ -98,6 +99,10 @@ export function AppShell() {
   }, [sessionsStoreApi]);
 
   const activeSession = items.find((session) => session.session_id === activeSessionId) ?? null;
+  const activeSessionBusy = Boolean(
+    (activeSessionId && busyBySessionId[activeSessionId] === true)
+    || activeSession?.busy === true,
+  );
   const activeTitle = activeSession
     ? activeSession.alias || activeSession.first_user_message || activeSession.title || shortSessionId(activeSession.session_id)
     : "No session selected";
@@ -149,6 +154,7 @@ export function AppShell() {
   useAppShellSessionEffects({
     activeSessionBackend: activeSession?.agent_backend,
     activeSessionId,
+    activeSessionLiveBusy: activeSessionId ? busyBySessionId[activeSessionId] === true : false,
     backgroundReplySoundPrimedSessionIdsRef,
     items,
     liveSessionStoreApi,
@@ -161,7 +167,7 @@ export function AppShell() {
   });
 
   const sessionUiMatchesActiveSession = !!activeSessionId && sessionUiSessionId === activeSessionId;
-  const showInterruptAction = !activeSessionId || Boolean(activeSession?.busy);
+  const showInterruptAction = !activeSessionId || activeSessionBusy;
   const showMobileSessionsTrigger = shouldUseMobileWorkspaceSheet();
   const showMobileToolbarMenu = showMobileSessionsTrigger;
 
@@ -217,12 +223,12 @@ export function AppShell() {
   };
 
   const interruptActiveSession = async () => {
-    if (!activeSessionId || !activeSession?.busy) return;
+    if (!activeSessionId || !activeSessionBusy) return;
     await api.interruptSession(activeSessionId);
     await Promise.allSettled([
       sessionsStoreApi.refresh(),
       liveSessionStoreApi.loadInitial(activeSessionId),
-      sessionUiStoreApi.refresh(activeSessionId, { agentBackend: activeSession.agent_backend }),
+      sessionUiStoreApi.refresh(activeSessionId, { agentBackend: activeSession?.agent_backend }),
     ]);
   };
 
@@ -282,7 +288,7 @@ export function AppShell() {
           <AppShellToolbar
             activeSessionId={activeSessionId}
             activeTitle={activeTitle}
-            canInterrupt={Boolean(activeSessionId && activeSession?.busy)}
+            canInterrupt={Boolean(activeSessionId && activeSessionBusy)}
             showInterruptAction={showInterruptAction}
             showMobileSessionsTrigger={showMobileSessionsTrigger}
             showMobileToolbarMenu={showMobileToolbarMenu}

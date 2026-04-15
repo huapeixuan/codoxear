@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 import { AskUserCard, askUserHistorySignature, isUnresolvedAskUserEvent } from "./AskUserCard";
-import { useComposerStore, useComposerStoreApi, useLiveSessionStoreApi, useMessagesStore, useMessagesStoreApi, useSessionsStore } from "../../app/providers";
+import { useComposerStore, useComposerStoreApi, useLiveSessionStore, useLiveSessionStoreApi, useMessagesStore, useMessagesStoreApi, useSessionsStore } from "../../app/providers";
 import type { MessageEvent } from "../../lib/types";
 
 const MAIN_TIMELINE_KINDS = new Set([
@@ -1132,6 +1132,7 @@ interface ConversationPaneProps {
 
 export function ConversationPane({ onOpenFilePath }: ConversationPaneProps) {
   const { activeSessionId, items } = useSessionsStore();
+  const { busyBySessionId } = useLiveSessionStore();
   const composerState = useComposerStore();
   const composerStoreApi = useComposerStoreApi();
   const pendingBySessionId = composerState.pendingBySessionId ?? {};
@@ -1146,7 +1147,10 @@ export function ConversationPane({ onOpenFilePath }: ConversationPaneProps) {
   const liveSessionStoreApi = useLiveSessionStoreApi();
   const activeSession = items.find((session) => session.session_id === activeSessionId) ?? null;
   const allowLegacyAskUserFallback = Boolean(activeSession?.agent_backend === "pi" && activeSession?.transport !== "pi-rpc");
-  const isBusy = activeSession?.busy === true;
+  const isBusy = Boolean(
+    (activeSessionId && busyBySessionId[activeSessionId] === true)
+    || activeSession?.busy === true,
+  );
   const persistedMessages = activeSessionId ? bySessionId[activeSessionId] ?? [] : [];
   const pendingMessages = activeSessionId ? pendingBySessionId[activeSessionId] ?? [] : [];
   const rawMessages = [...persistedMessages, ...pendingMessages];

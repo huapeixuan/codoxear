@@ -884,6 +884,49 @@ describe("ConversationPane", () => {
     expect(assistantRows).toHaveLength(1);
   });
 
+  it("keeps the working indicator visible when live session state is still busy", () => {
+    const sessionsStore = createStaticStore(
+      { items: [{ session_id: "sess-live-busy", agent_backend: "pi", busy: false }], activeSessionId: "sess-live-busy", loading: false, newSessionDefaults: null },
+      { refresh: () => Promise.resolve(), select: () => undefined },
+    );
+    const messagesStore = createStaticStore(
+      {
+        bySessionId: {
+          "sess-live-busy": [{ role: "assistant", text: "Still thinking" }],
+        },
+        offsetsBySessionId: { "sess-live-busy": 1 },
+        loading: false,
+      },
+      { loadInitial: () => Promise.resolve(), poll: () => Promise.resolve(), loadOlder: () => Promise.resolve() },
+    );
+    const liveSessionStore = createStaticStore(
+      {
+        offsetsBySessionId: { "sess-live-busy": 1 },
+        liveOffsetsBySessionId: { "sess-live-busy": 1 },
+        requestsBySessionId: {},
+        requestVersionsBySessionId: {},
+        busyBySessionId: { "sess-live-busy": true },
+        loadingBySessionId: {},
+      },
+      { loadInitial: () => Promise.resolve(), poll: () => Promise.resolve() },
+    );
+
+    root = document.createElement("div");
+    document.body.appendChild(root);
+    render(
+      <AppProviders
+        sessionsStore={sessionsStore as any}
+        messagesStore={messagesStore as any}
+        liveSessionStore={liveSessionStore as any}
+      >
+        <ConversationPane />
+      </AppProviders>,
+      root,
+    );
+
+    expect(root.textContent).toContain("Working");
+  });
+
   it("shows a floating previous-user button only after scrolling above an earlier user message", async () => {
     const sessionsStore = createStaticStore(
       { items: [{ session_id: "sess-jump", agent_backend: "pi" }], activeSessionId: "sess-jump", loading: false, newSessionDefaults: null },

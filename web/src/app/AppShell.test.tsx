@@ -131,6 +131,7 @@ function renderAppShell({
   activeSessionId = "sess-1",
   agentBackend = "pi",
   items,
+  liveBusyBySessionId,
   messages,
   sessionUiSessionId,
   diagnostics = null,
@@ -141,6 +142,7 @@ function renderAppShell({
   activeSessionId?: string | null;
   agentBackend?: string;
   items?: Array<{ session_id: string; alias?: string; agent_backend: string; busy: boolean }>;
+  liveBusyBySessionId?: Record<string, boolean>;
   messages?: Record<string, unknown[]>;
   sessionUiSessionId?: string | null;
   diagnostics?: Record<string, unknown> | null;
@@ -169,7 +171,7 @@ function renderAppShell({
       offsetsBySessionId: offsetState,
       requestsBySessionId: activeSessionId ? { [activeSessionId]: requests as any[] } : {},
       requestVersionsBySessionId: {},
-      busyBySessionId: Object.fromEntries(sessionItems.map((session) => [session.session_id, session.busy])),
+      busyBySessionId: liveBusyBySessionId ?? Object.fromEntries(sessionItems.map((session) => [session.session_id, session.busy])),
       loadingBySessionId: {},
     },
     { loadInitial: vi.fn().mockResolvedValue(undefined), poll: vi.fn().mockResolvedValue(undefined) },
@@ -556,6 +558,18 @@ describe("AppShell", () => {
     await flush();
 
     expect(api.interruptSession).toHaveBeenCalledWith("sess-1");
+  });
+
+  it("keeps the interrupt toolbar action when live session state is still busy", async () => {
+    renderAppShell({
+      items: [{ session_id: "sess-1", alias: "Legacy shell", agent_backend: "pi", busy: false }],
+      liveBusyBySessionId: { "sess-1": true },
+    });
+    await flush();
+
+    const button = findButtonByAriaLabel("Interrupt (Esc)");
+    expect(button).not.toBeNull();
+    expect(button?.disabled).toBe(false);
   });
 
   it("hides the interrupt toolbar action when the active session is idle", async () => {
