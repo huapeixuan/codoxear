@@ -148,6 +148,7 @@ describe("FileViewerDialog", () => {
       expandButton?.click();
     });
     await settle(8);
+    expect(root?.textContent).toContain("intro.md");
 
     const collapseButton = root?.querySelector('button[aria-label="Collapse docs"]') as HTMLButtonElement | null;
     expect(collapseButton).not.toBeNull();
@@ -164,6 +165,7 @@ describe("FileViewerDialog", () => {
     await settle(8);
 
     expect((api as any).getFiles).toHaveBeenCalledTimes(2);
+    expect(root?.textContent).toContain("intro.md");
   });
 
   it("can switch from diff mode to file and markdown preview modes", async () => {

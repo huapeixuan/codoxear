@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "preact/hooks";
+import { memo } from "preact/compat";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -9,6 +10,15 @@ import { api } from "../../lib/api";
 import type { GitFileVersionsResponse, SessionFileListEntry, SessionFileReadResponse } from "../../lib/types";
 import { MonacoWorkspace } from "./MonacoWorkspace";
 import { normalizeRememberedLine, preferredFileSelectionForSession, rememberFileSelection } from "./fileSelectionState";
+import {
+  createTreeStateFromEntries,
+  mergeDirectoryEntries,
+  setNodeError,
+  setNodeExpanded,
+  setNodeLoading,
+  type FileTreeState,
+  type TreeNodeRecord,
+} from "./fileTreeState";
 
 export interface FileViewerDialogProps {
   open: boolean;
@@ -22,13 +32,19 @@ export interface FileViewerDialogProps {
 
 export type FileViewMode = "diff" | "file" | "preview";
 
-type TreeNode = SessionFileListEntry & {
-  children?: TreeNode[];
-  error?: string;
-  expanded?: boolean;
-  loaded?: boolean;
-  loading?: boolean;
+const EMPTY_TREE_STATE: FileTreeState = {
+  rootPaths: [],
+  nodesByPath: {},
 };
+
+function getChildNodes(node: TreeNodeRecord, nodesByPath: Record<string, TreeNodeRecord>) {
+  if (node.kind !== "dir") {
+    return [];
+  }
+  return node.childPaths
+    .map((childPath) => nodesByPath[childPath])
+    .filter((child): child is TreeNodeRecord => Boolean(child));
+}
 
 function normalizeFileListEntries(value: unknown): SessionFileListEntry[] | null {
   if (!Array.isArray(value)) {
@@ -48,61 +64,6 @@ function normalizeFileListEntries(value: unknown): SessionFileListEntry[] | null
     }
     return [{ name, path, kind }];
   });
-}
-
-function entryToTreeNode(entry: SessionFileListEntry): TreeNode {
-  return {
-    ...entry,
-    children: entry.kind === "dir" ? [] : undefined,
-    error: "",
-    expanded: false,
-    loaded: false,
-    loading: false,
-  };
-}
-
-function sortTreeNodes(nodes: TreeNode[]) {
-  return nodes.slice().sort((left, right) => {
-    if (left.kind !== right.kind) {
-      return left.kind === "dir" ? -1 : 1;
-    }
-    return left.name.localeCompare(right.name);
-  });
-}
-
-function mapTreeNodes(nodes: TreeNode[], targetPath: string, update: (node: TreeNode) => TreeNode): TreeNode[] {
-  return nodes.map((node) => {
-    if (node.path === targetPath) {
-      return update(node);
-    }
-    if (!node.children?.length) {
-      return node;
-    }
-    return { ...node, children: mapTreeNodes(node.children, targetPath, update) };
-  });
-}
-
-function setTreeNodeExpanded(nodes: TreeNode[], targetPath: string, expanded: boolean) {
-  return mapTreeNodes(nodes, targetPath, (node) => ({ ...node, expanded }));
-}
-
-function setTreeNodeLoading(nodes: TreeNode[], targetPath: string, loading: boolean) {
-  return mapTreeNodes(nodes, targetPath, (node) => ({ ...node, loading, error: loading ? "" : node.error }));
-}
-
-function setTreeNodeError(nodes: TreeNode[], targetPath: string, error: string) {
-  return mapTreeNodes(nodes, targetPath, (node) => ({ ...node, error, loading: false }));
-}
-
-function mergeTreeChildren(nodes: TreeNode[], targetPath: string, entries: SessionFileListEntry[]) {
-  return mapTreeNodes(nodes, targetPath, (node) => ({
-    ...node,
-    children: sortTreeNodes(entries.map(entryToTreeNode)),
-    error: "",
-    expanded: true,
-    loaded: true,
-    loading: false,
-  }));
 }
 
 function normalizePath(value: string) {
@@ -160,22 +121,25 @@ function PlainDiffWorkspace({ baseText, currentText }: { baseText: string; curre
   );
 }
 
-function FileTreeNodeRow({
+const FileTreeNodeRow = memo(function FileTreeNodeRow({
   depth,
   node,
+  nodesByPath,
   onRetry,
   onSelect,
   onToggle,
   selectedPath,
 }: {
   depth: number;
-  node: TreeNode;
+  node: TreeNodeRecord;
+  nodesByPath: Record<string, TreeNodeRecord>;
   onRetry: (path: string) => void;
   onSelect: (path: string) => void;
   onToggle: (path: string, expanded: boolean) => void;
   selectedPath: string;
 }) {
   const selected = node.path === selectedPath;
+  const childNodes = getChildNodes(node, nodesByPath);
 
   return (
     <div className="space-y-1">
@@ -215,12 +179,13 @@ function FileTreeNodeRow({
               <Button type="button" size="sm" variant="outline" onClick={() => onRetry(node.path)}>Retry</Button>
             </div>
           ) : null}
-          {!node.loading && !node.error && node.children?.length
-            ? node.children.map((child) => (
+          {!node.loading && !node.error && childNodes.length
+            ? childNodes.map((child) => (
                 <FileTreeNodeRow
                   key={child.path}
                   depth={depth + 1}
                   node={child}
+                  nodesByPath={nodesByPath}
                   onRetry={onRetry}
                   onSelect={onSelect}
                   onToggle={onToggle}
@@ -232,7 +197,25 @@ function FileTreeNodeRow({
       ) : null}
     </div>
   );
-}
+}, (prev, next) => {
+  if (prev.depth !== next.depth || prev.node !== next.node || prev.selectedPath !== next.selectedPath) {
+    return false;
+  }
+  if (prev.onRetry !== next.onRetry || prev.onSelect !== next.onSelect || prev.onToggle !== next.onToggle) {
+    return false;
+  }
+  const prevChildren = getChildNodes(prev.node, prev.nodesByPath);
+  const nextChildren = getChildNodes(next.node, next.nodesByPath);
+  if (prevChildren.length !== nextChildren.length) {
+    return false;
+  }
+  for (let index = 0; index < prevChildren.length; index += 1) {
+    if (prevChildren[index] !== nextChildren[index]) {
+      return false;
+    }
+  }
+  return true;
+});
 
 export function FileViewerDialog({
   open,
@@ -245,7 +228,7 @@ export function FileViewerDialog({
 }: FileViewerDialogProps) {
   const rememberedSelection = preferredFileSelectionForSession(sessionId);
   const rememberedPath = rememberedSelection?.path || "";
-  const [tree, setTree] = useState<TreeNode[]>([]);
+  const [treeState, setTreeState] = useState<FileTreeState>(EMPTY_TREE_STATE);
   const [treeError, setTreeError] = useState("");
   const [treeLoading, setTreeLoading] = useState(false);
   const [path, setPath] = useState("");
@@ -255,10 +238,13 @@ export function FileViewerDialog({
   const [error, setError] = useState("");
   const [payload, setPayload] = useState<SessionFileReadResponse | null>(null);
   const [diffPayload, setDiffPayload] = useState<GitFileVersionsResponse | null>(null);
+  const nodesByPathRef = useRef(treeState.nodesByPath);
   const listRequestIdRef = useRef(0);
   const openRequestIdRef = useRef(0);
   const fileOpenAbortRef = useRef<AbortController | null>(null);
   const treeRequestControllersRef = useRef(new Map<string, AbortController>());
+
+  nodesByPathRef.current = treeState.nodesByPath;
 
   useEffect(() => {
     if (!open || !sessionId) {
@@ -272,7 +258,7 @@ export function FileViewerDialog({
       activeController.abort();
     }
     treeRequestControllersRef.current.clear();
-    setTree([]);
+    setTreeState(EMPTY_TREE_STATE);
     setTreeError("");
     setTreeLoading(true);
 
@@ -284,12 +270,12 @@ export function FileViewerDialog({
         }
         const entries = normalizeFileListEntries(response.entries);
         if (!entries) {
-          setTree([]);
+          setTreeState(EMPTY_TREE_STATE);
           setTreeError("Unable to list files");
           setTreeLoading(false);
           return;
         }
-        setTree(sortTreeNodes(entries.map(entryToTreeNode)));
+        setTreeState(createTreeStateFromEntries(entries));
         setTreeError("");
         setTreeLoading(false);
       } catch (nextError) {
@@ -299,7 +285,7 @@ export function FileViewerDialog({
         if (nextError instanceof Error && nextError.name === "AbortError") {
           return;
         }
-        setTree([]);
+        setTreeState(EMPTY_TREE_STATE);
         setTreeError(nextError instanceof Error ? nextError.message : "Unable to list files");
         setTreeLoading(false);
       }
@@ -402,14 +388,19 @@ export function FileViewerDialog({
   const canPreview = isMarkdownFile(normalizedPath);
   const activeLine = normalizeRememberedLine(line);
 
-  const loadDirectory = (dirPath: string) => {
+  const handleSelect = useCallback((nextPath: string) => {
+    setPath(nextPath);
+    setLine(null);
+  }, []);
+
+  const loadDirectory = useCallback((dirPath: string) => {
     if (!sessionId) {
       return;
     }
     treeRequestControllersRef.current.get(dirPath)?.abort();
     const controller = new AbortController();
     treeRequestControllersRef.current.set(dirPath, controller);
-    setTree((current) => setTreeNodeLoading(current, dirPath, true));
+    setTreeState((current) => setNodeLoading(current, dirPath, true));
 
     void api.getFiles(sessionId, dirPath, controller.signal).then((response) => {
       if (controller.signal.aborted) {
@@ -417,47 +408,31 @@ export function FileViewerDialog({
       }
       const entries = normalizeFileListEntries(response.entries);
       if (!entries) {
-        setTree((current) => setTreeNodeError(current, dirPath, "Unable to list files"));
+        setTreeState((current) => setNodeError(current, dirPath, "Unable to list files"));
         return;
       }
-      setTree((current) => mergeTreeChildren(current, dirPath, entries));
+      setTreeState((current) => mergeDirectoryEntries(current, dirPath, entries));
     }).catch((nextError) => {
       if (controller.signal.aborted || (nextError instanceof Error && nextError.name === "AbortError")) {
         return;
       }
-      setTree((current) => setTreeNodeError(current, dirPath, nextError instanceof Error ? nextError.message : "Unable to list files"));
+      setTreeState((current) => setNodeError(current, dirPath, nextError instanceof Error ? nextError.message : "Unable to list files"));
     }).finally(() => {
       treeRequestControllersRef.current.delete(dirPath);
     });
-  };
+  }, [sessionId]);
 
-  const toggleDirectory = (dirPath: string, expanded: boolean) => {
-    setTree((current) => {
-      const next = setTreeNodeExpanded(current, dirPath, expanded);
-      return expanded ? setTreeNodeLoading(next, dirPath, false) : next;
-    });
+  const toggleDirectory = useCallback((dirPath: string, expanded: boolean) => {
+    const target = nodesByPathRef.current[dirPath];
+    setTreeState((current) => setNodeExpanded(current, dirPath, expanded));
     if (!expanded) {
       return;
     }
-    const target = (function findNode(nodes: TreeNode[]): TreeNode | null {
-      for (const node of nodes) {
-        if (node.path === dirPath) {
-          return node;
-        }
-        if (node.children?.length) {
-          const nested = findNode(node.children);
-          if (nested) {
-            return nested;
-          }
-        }
-      }
-      return null;
-    })(tree);
     if (target?.loaded) {
       return;
     }
     loadDirectory(dirPath);
-  };
+  }, [loadDirectory]);
 
   return (
     <Dialog open={open}>
@@ -491,21 +466,22 @@ export function FileViewerDialog({
                   <p className="px-2 py-3 text-sm text-muted-foreground">Loading files…</p>
                 ) : treeError ? (
                   <p className="px-2 py-3 text-sm text-destructive">{treeError}</p>
-                ) : tree.length ? (
-                  tree.map((entry) => (
-                    <FileTreeNodeRow
-                      key={entry.path}
-                      depth={0}
-                      node={entry}
-                      onRetry={loadDirectory}
-                      onSelect={(nextPath) => {
-                        setPath(nextPath);
-                        setLine(null);
-                      }}
-                      onToggle={toggleDirectory}
-                      selectedPath={normalizedPath}
-                    />
-                  ))
+                ) : treeState.rootPaths.length ? (
+                  treeState.rootPaths.map((entryPath) => {
+                    const entry = treeState.nodesByPath[entryPath];
+                    return entry ? (
+                      <FileTreeNodeRow
+                        key={entry.path}
+                        depth={0}
+                        node={entry}
+                        nodesByPath={treeState.nodesByPath}
+                        onRetry={loadDirectory}
+                        onSelect={handleSelect}
+                        onToggle={toggleDirectory}
+                        selectedPath={normalizedPath}
+                      />
+                    ) : null;
+                  })
                 ) : (
                   <p className="px-2 py-3 text-sm text-muted-foreground">No files available.</p>
                 )}
