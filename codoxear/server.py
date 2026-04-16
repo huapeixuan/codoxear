@@ -1678,6 +1678,19 @@ def _normalize_cwd_group_key(cwd: Any) -> str:
     return str(Path(trimmed).expanduser().resolve(strict=False))
 
 
+def _existing_workspace_dir(cwd: Any) -> str | None:
+    try:
+        normalized = _normalize_cwd_group_key(cwd)
+    except ValueError:
+        return None
+    try:
+        if not Path(normalized).is_dir():
+            return None
+    except OSError:
+        return None
+    return normalized
+
+
 def _canonical_session_cwd(cwd: Any) -> str | None:
     if not isinstance(cwd, str):
         return None
@@ -3782,6 +3795,7 @@ class SessionManager:
         self._pi_commands_cache: dict[str, dict[str, Any]] = {}
         self._recent_cwds: dict[str, float] = {}
         self._cwd_groups: dict[str, dict[str, Any]] = {}
+        self._prune_missing_workspace_dirs = True
         self._harness_last_injected: dict[str, float] = {}
         self._harness_last_injected_scope: dict[str, float] = {}
         self._load_harness()
@@ -4547,14 +4561,59 @@ class SessionManager:
         os.replace(tmp, CWD_GROUPS_PATH)
 
     def cwd_groups_get(self) -> dict[str, dict[str, Any]]:
+        self._prune_stale_workspace_dirs()
         with self._lock:
             return copy.deepcopy(self._cwd_groups)
 
+    def _prune_stale_workspace_dirs(self) -> None:
+        if not bool(getattr(self, "_prune_missing_workspace_dirs", False)):
+            return
+        active_cwds: set[str] = set()
+        with self._lock:
+            sessions = list(getattr(self, "_sessions", {}).values())
+            recent_items = list(getattr(self, "_recent_cwds", {}).keys())
+            grouped_items = list(getattr(self, "_cwd_groups", {}).keys())
+        for session in sessions:
+            try:
+                active_cwds.add(_normalize_cwd_group_key(getattr(session, "cwd", None)))
+            except ValueError:
+                continue
+        stale_recent = {
+            cwd
+            for cwd in recent_items
+            if cwd not in active_cwds and _existing_workspace_dir(cwd) is None
+        }
+        stale_groups = {
+            cwd
+            for cwd in grouped_items
+            if cwd not in active_cwds and _existing_workspace_dir(cwd) is None
+        }
+        save_recent = False
+        save_groups = False
+        if stale_recent or stale_groups:
+            with self._lock:
+                recent_map = getattr(self, "_recent_cwds", None)
+                if isinstance(recent_map, dict):
+                    for cwd in stale_recent:
+                        if recent_map.pop(cwd, None) is not None:
+                            save_recent = True
+                group_map = getattr(self, "_cwd_groups", None)
+                if isinstance(group_map, dict):
+                    for cwd in stale_groups:
+                        if group_map.pop(cwd, None) is not None:
+                            save_groups = True
+        if save_recent:
+            self._save_recent_cwds()
+        if save_groups:
+            self._save_cwd_groups()
+
     def _known_cwd_group_keys(self) -> set[str]:
+        self._prune_stale_workspace_dirs()
         known: set[str] = set()
         with self._lock:
             sessions = list(getattr(self, "_sessions", {}).values())
             recent_items = list(getattr(self, "_recent_cwds", {}).keys())
+            grouped_items = list(getattr(self, "_cwd_groups", {}).keys())
         for session in sessions:
             try:
                 normalized = _normalize_cwd_group_key(getattr(session, "cwd", None))
@@ -4567,30 +4626,57 @@ class SessionManager:
             except ValueError:
                 continue
             known.add(normalized)
+        for cwd in grouped_items:
+            try:
+                normalized = _normalize_cwd_group_key(cwd)
+            except ValueError:
+                continue
+            known.add(normalized)
         return known
 
     def cwd_group_set(
         self, cwd: str, label: str | None = None, collapsed: bool | None = None
     ) -> tuple[str, dict[str, Any]]:
         normalized_cwd = _normalize_cwd_group_key(cwd)
-        if normalized_cwd not in self._known_cwd_group_keys():
-            raise ValueError("cwd is not a known session working directory")
         if label is not None and not isinstance(label, str):
             raise ValueError("label must be a string")
 
+        requested_label = _clean_alias(label) if label is not None else None
+        requested_collapsed = collapsed
+        if requested_collapsed is not None and not isinstance(
+            requested_collapsed, bool
+        ):
+            raise ValueError("collapsed must be a boolean")
+
+        self._prune_stale_workspace_dirs()
         with self._lock:
             existing = self._cwd_groups.get(
                 normalized_cwd, {"label": "", "collapsed": False}
             )
+        known_cwds = self._known_cwd_group_keys()
+        if normalized_cwd not in known_cwds:
+            effective_label = (
+                requested_label if requested_label is not None else existing["label"]
+            )
+            effective_collapsed = (
+                requested_collapsed
+                if requested_collapsed is not None
+                else existing["collapsed"]
+            )
+            if not effective_label and not effective_collapsed:
+                return normalized_cwd, {"label": "", "collapsed": False}
+            raise ValueError("cwd is not a known session working directory")
 
-            new_label = _clean_alias(label) if label is not None else existing["label"]
-
-            if collapsed is not None:
-                if not isinstance(collapsed, bool):
-                    raise ValueError("collapsed must be a boolean")
-                new_collapsed = collapsed
-            else:
-                new_collapsed = existing["collapsed"]
+        with self._lock:
+            existing = self._cwd_groups.get(normalized_cwd, existing)
+            new_label = (
+                requested_label if requested_label is not None else existing["label"]
+            )
+            new_collapsed = (
+                requested_collapsed
+                if requested_collapsed is not None
+                else existing["collapsed"]
+            )
 
             entry = {"label": new_label, "collapsed": new_collapsed}
 
@@ -4656,6 +4742,7 @@ class SessionManager:
             self._save_recent_cwds()
 
     def recent_cwds(self, *, limit: int = RECENT_CWD_MAX) -> list[str]:
+        self._prune_stale_workspace_dirs()
         with self._lock:
             items = sorted(
                 getattr(self, "_recent_cwds", {}).items(),

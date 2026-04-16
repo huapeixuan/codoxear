@@ -714,4 +714,72 @@ describe("NewSessionDialog", () => {
 
     expect(cwdInput.value).toBe("/tmp/project");
   });
+
+  it("lets Pi sessions launch in tmux and explains the pi-rpc host split", async () => {
+    const { api } = await import("../../lib/api");
+    vi.mocked(api.createSession).mockResolvedValue({ session_id: "pi-new", broker_pid: 84, backend: "pi", ok: true } as any);
+    vi.mocked(api.getSessionResumeCandidates).mockResolvedValue({
+      exists: true,
+      will_create: false,
+      git_repo: false,
+      sessions: [],
+    } as any);
+    vi.mocked(api.renameSession).mockResolvedValue({ ok: true } as any);
+
+    const sessionsStore = createSessionsStore({
+      items: [{ session_id: "old" }, { session_id: "pi-new" }],
+      activeSessionId: "old",
+      loading: false,
+      bootstrapLoaded: true,
+      recentCwds: ["/tmp/pi-project"],
+      tmuxAvailable: true,
+      newSessionDefaults: {
+        default_backend: "pi",
+        backends: {
+          pi: {
+            provider_choice: "macaron",
+            provider_choices: ["macaron", "anthropic"],
+            model: "gpt-5.4",
+            reasoning_effort: "high",
+            reasoning_efforts: ["medium", "high"],
+          },
+          codex: { provider_choice: "chatgpt" },
+        },
+      },
+    });
+
+    root = document.createElement("div");
+    document.body.appendChild(root);
+    await act(async () => {
+      render(
+        <AppProviders sessionsStore={sessionsStore as any}>
+          <NewSessionDialog open onClose={() => undefined} />
+        </AppProviders>,
+        root!,
+      );
+    });
+    await flush();
+
+    const tmuxCheckbox = root.querySelector('input[name="createInTmux"]') as HTMLInputElement;
+    expect(tmuxCheckbox.disabled).toBe(false);
+    expect(root.textContent).toContain("Host the new Pi session in tmux while pi-rpc handles web control.");
+
+    await setCheckboxValue(tmuxCheckbox, true);
+    await flush();
+
+    const form = root.querySelector("form") as HTMLFormElement;
+    await submitForm(form);
+    await flush();
+
+    expect(api.createSession).toHaveBeenCalledWith({
+      cwd: "/tmp/pi-project",
+      backend: "pi",
+      create_in_tmux: true,
+      model: "gpt-5.4",
+      reasoning_effort: "high",
+      model_provider: "macaron",
+      resume_session_id: undefined,
+      worktree_branch: undefined,
+    });
+  });
 });

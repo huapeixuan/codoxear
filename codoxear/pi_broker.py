@@ -326,6 +326,10 @@ class PiBroker:
             "session_id": st.session_id,
             "backend": "pi",
             "transport": "pi-rpc",
+            "tmux_session": (os.environ.get("CODEX_WEB_TMUX_SESSION") or "").strip()
+            or None,
+            "tmux_window": (os.environ.get("CODEX_WEB_TMUX_WINDOW") or "").strip()
+            or None,
             "owner": OWNER_TAG if OWNER_TAG else None,
             "supports_web_control": supports_web_control,
             "supports_live_ui": True,

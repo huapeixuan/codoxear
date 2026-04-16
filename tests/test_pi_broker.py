@@ -451,6 +451,40 @@ class TestPiBroker(unittest.TestCase):
         self.assertTrue(meta["supports_live_ui"])
         self.assertEqual(meta["ui_protocol_version"], 1)
 
+    def test_write_meta_preserves_tmux_host_metadata(self) -> None:
+        rpc = _FakeRpc()
+        with (
+            tempfile.TemporaryDirectory() as td,
+            patch.dict(
+                "os.environ",
+                {
+                    "CODEX_WEB_TMUX_SESSION": "codoxear",
+                    "CODEX_WEB_TMUX_WINDOW": "pi-window-1",
+                },
+                clear=False,
+            ),
+        ):
+            sock_path = Path(td) / "pi.sock"
+            broker = PiBroker(cwd="/tmp")
+            broker.state = PiBrokerState(
+                session_id="pi-session-001",
+                codex_pid=123,
+                sock_path=sock_path,
+                session_path=Path(td) / "pi-session.jsonl",
+                start_ts=0.0,
+                rpc=rpc,
+            )
+
+            broker._write_meta()
+
+            meta = json.loads(
+                sock_path.with_suffix(".json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(meta["transport"], "pi-rpc")
+        self.assertEqual(meta["tmux_session"], "codoxear")
+        self.assertEqual(meta["tmux_window"], "pi-window-1")
+
     def test_write_meta_preserves_resume_session_id_for_agent_managed_sessions(
         self,
     ) -> None:

@@ -1158,7 +1158,7 @@ class TestPiBackendRouting(unittest.TestCase):
         self.assertIsNone(payload["preferred_auth_method"])
         self.assertEqual(payload["reasoning_effort"], "high")
         self.assertIsNone(payload["service_tier"])
-        self.assertFalse(payload["create_in_tmux"])
+        self.assertTrue(payload["create_in_tmux"])
         self.assertEqual(payload["resume_session_id"], "resume-me")
 
     def test_create_session_rejects_non_string_resume_session_id_for_pi_backend(
@@ -1196,6 +1196,58 @@ class TestPiBackendRouting(unittest.TestCase):
             mgr._sock_call = lambda *_args, **_kwargs: {"ok": True}  # type: ignore[method-assign]
 
             self.assertTrue(mgr.delete_session("pi-session"))
+
+    def test_spawn_web_session_can_start_pi_in_tmux(self) -> None:
+        manager = SessionManager.__new__(SessionManager)
+
+        with (
+            tempfile.TemporaryDirectory() as td,
+            patch("codoxear.server.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "codoxear.server._wait_for_spawned_broker_meta",
+                return_value={"broker_pid": 7777, "backend": "pi"},
+            ) as wait_mock,
+            patch(
+                "codoxear.server.subprocess.run",
+                side_effect=[
+                    __import__("subprocess").CompletedProcess(
+                        ["/usr/bin/tmux", "has-session", "-t", "codoxear"],
+                        1,
+                        stdout="",
+                        stderr="",
+                    ),
+                    __import__("subprocess").CompletedProcess(
+                        ["/usr/bin/tmux", "new-session"],
+                        0,
+                        stdout="%8\n",
+                        stderr="",
+                    ),
+                ],
+            ) as run_mock,
+        ):
+            result = SessionManager.spawn_web_session(
+                manager,
+                cwd=td,
+                backend="pi",
+                create_in_tmux=True,
+            )
+
+        self.assertEqual(
+            result,
+            {
+                "broker_pid": 7777,
+                "backend": "pi",
+                "tmux_session": "codoxear",
+                "tmux_window": ANY,
+            },
+        )
+        shell_cmd = run_mock.call_args_list[1].args[0][-1]
+        self.assertIn("CODEX_WEB_AGENT_BACKEND=pi", shell_cmd)
+        self.assertIn("CODEX_WEB_TRANSPORT=tmux", shell_cmd)
+        self.assertIn("CODEX_WEB_TMUX_SESSION=codoxear", shell_cmd)
+        self.assertIn("CODEX_WEB_TMUX_WINDOW=", shell_cmd)
+        self.assertIn("codoxear.pi_broker", shell_cmd)
+        wait_mock.assert_called_once()
 
     def test_interrupt_routes_through_keys_for_pi_backend(self) -> None:
         mgr = _make_manager()

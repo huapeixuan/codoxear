@@ -686,6 +686,87 @@ class TestVoicePushCoordinator(unittest.TestCase):
             self.assertEqual(sent["session_display_name"], "Codoxear test")
             self.assertEqual(sent["notification_text"], "回复完成")
 
+    def test_send_test_push_notification_drops_stale_invalid_subscriptions(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as td:
+            stop_event = threading.Event()
+            stop_event.set()
+            coord = VoicePushCoordinator(
+                app_dir=Path(td),
+                stop_event=stop_event,
+                settings_path=Path(td) / "voice_settings.json",
+                subscriptions_path=Path(td) / "push_subscriptions.json",
+                delivery_ledger_path=Path(td) / "voice_delivery_ledger.json",
+                vapid_private_key_path=Path(td) / "vapid.pem",
+            )
+            coord.upsert_subscription(
+                subscription={
+                    "endpoint": "https://permanently-removed.invalid/fcm/send/stale-token",
+                    "keys": {"p256dh": "abc", "auth": "def"},
+                },
+                user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X)",
+                device_label="phone",
+                device_class="mobile",
+            )
+
+            with patch(
+                "codoxear.voice_push.webpush",
+                side_effect=RuntimeError(
+                    "HTTPSConnectionPool(host='permanently-removed.invalid')"
+                ),
+            ):
+                payload = coord.send_test_push_notification(
+                    session_display_name="Codoxear test"
+                )
+
+            self.assertEqual(payload["sent_count"], 0)
+            self.assertEqual(payload["failed_count"], 1)
+            self.assertEqual(coord.subscriptions_snapshot()["subscriptions"], [])
+
+    def test_send_test_push_notification_keeps_non_stale_subscription_on_network_error(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as td:
+            stop_event = threading.Event()
+            stop_event.set()
+            coord = VoicePushCoordinator(
+                app_dir=Path(td),
+                stop_event=stop_event,
+                settings_path=Path(td) / "voice_settings.json",
+                subscriptions_path=Path(td) / "push_subscriptions.json",
+                delivery_ledger_path=Path(td) / "voice_delivery_ledger.json",
+                vapid_private_key_path=Path(td) / "vapid.pem",
+            )
+            coord.upsert_subscription(
+                subscription={
+                    "endpoint": "https://push.example.test/mobile/1",
+                    "keys": {"p256dh": "abc", "auth": "def"},
+                },
+                user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X)",
+                device_label="phone",
+                device_class="mobile",
+            )
+
+            with patch(
+                "codoxear.voice_push.webpush",
+                side_effect=RuntimeError(
+                    "HTTPSConnectionPool(host='push.example.test')"
+                ),
+            ):
+                payload = coord.send_test_push_notification(
+                    session_display_name="Codoxear test"
+                )
+
+            self.assertEqual(payload["sent_count"], 0)
+            self.assertEqual(payload["failed_count"], 1)
+            subscriptions = coord.subscriptions_snapshot()["subscriptions"]
+            self.assertEqual(len(subscriptions), 1)
+            self.assertEqual(
+                subscriptions[0]["endpoint"], "https://push.example.test/mobile/1"
+            )
+            self.assertIn("HTTPSConnectionPool", subscriptions[0]["last_error"])
+
     def test_voice_mapping_is_stable_for_session_id(self) -> None:
         with TemporaryDirectory() as td:
             stop_event = threading.Event()

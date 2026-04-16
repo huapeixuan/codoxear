@@ -819,6 +819,65 @@ class TestSessionSidebarPriority(unittest.TestCase):
         self.assertEqual(normalized, expected_normalized)
         self.assertEqual(meta, {"label": "Current", "collapsed": True})
 
+    def test_load_recent_cwds_skips_stale_directories(self) -> None:
+        mgr = _make_manager()
+        mgr._prune_missing_workspace_dirs = True
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            valid = root / "valid"
+            valid.mkdir()
+            stale = root / "stale"
+            recent_path = root / "recent_cwds.json"
+            recent_path.write_text(
+                json.dumps({str(valid): 20, str(stale): 10}), encoding="utf-8"
+            )
+
+            with patch("codoxear.server.RECENT_CWD_PATH", recent_path):
+                mgr._load_recent_cwds()
+                self.assertEqual(mgr.recent_cwds(), [str(valid)])
+
+    def test_load_cwd_groups_skips_stale_directories(self) -> None:
+        mgr = _make_manager()
+        mgr._prune_missing_workspace_dirs = True
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            valid = root / "valid"
+            valid.mkdir()
+            stale = root / "stale"
+            groups_path = root / "cwd_groups.json"
+            groups_path.write_text(
+                json.dumps(
+                    {
+                        str(valid): {"label": "Valid", "collapsed": False},
+                        str(stale): {"label": "Stale", "collapsed": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("codoxear.server.CWD_GROUPS_PATH", groups_path):
+                mgr._load_cwd_groups()
+                self.assertEqual(
+                    mgr.cwd_groups_get(),
+                    {str(valid.resolve()): {"label": "Valid", "collapsed": False}},
+                )
+
+    def test_cwd_group_set_allows_clearing_stale_group(self) -> None:
+        mgr = _make_manager()
+        mgr._prune_missing_workspace_dirs = True
+        with tempfile.TemporaryDirectory() as td:
+            stale = Path(td) / "deleted-project"
+            normalized = str(stale.resolve())
+            mgr._cwd_groups = {normalized: {"label": "Old", "collapsed": True}}
+
+            returned_cwd, meta = mgr.cwd_group_set(
+                cwd=normalized, label="", collapsed=False
+            )
+
+        self.assertEqual(returned_cwd, normalized)
+        self.assertEqual(meta, {"label": "", "collapsed": False})
+        self.assertNotIn(normalized, mgr.cwd_groups_get())
+
 
 if __name__ == "__main__":
     unittest.main()

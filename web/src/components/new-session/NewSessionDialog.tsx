@@ -176,7 +176,7 @@ export function NewSessionDialog({ open, onClose }: NewSessionDialogProps) {
   const reasoningChoices = useMemo(() => reasoningChoicesForDefaults(backendDefaults), [backendDefaults]);
   const modelChoices = useMemo(() => modelChoicesForDefaults(backendDefaults, backend, providerChoice), [backendDefaults, backend, providerChoice]);
   const supportsFast = !!backendDefaults.supports_fast;
-  const supportsTmux = backend === "codex" && tmuxAvailable;
+  const supportsTmux = tmuxAvailable;
   const supportsWorktree = backend === "codex";
   const activeSession = useMemo(
     () => items.find((session) => session.session_id === activeSessionId) ?? null,
@@ -214,7 +214,7 @@ export function NewSessionDialog({ open, onClose }: NewSessionDialogProps) {
     setModel(initialDefaults.model?.trim() || "");
     setProviderChoice(initialDefaults.provider_choice?.trim() || initialProviders[0] || "");
     setReasoningEffort(initialDefaults.reasoning_effort?.trim() || initialReasoning[0] || "high");
-    setCreateInTmux(initialBackend === "codex" && tmuxAvailable);
+    setCreateInTmux(Boolean(tmuxAvailable));
     setFastMode(String(initialDefaults.service_tier || "").trim().toLowerCase() === "fast");
     setResumeSessionId("");
     setResumeCandidates([]);
@@ -257,7 +257,7 @@ export function NewSessionDialog({ open, onClose }: NewSessionDialogProps) {
       setReasoningEffort(defaultValues.reasoning_effort?.trim() || reasoningDefaults[0] || "high");
     }
     if (!touchedLaunchSettingsRef.current.createInTmux) {
-      setCreateInTmux(selectedBackend === "codex" && tmuxAvailable);
+      setCreateInTmux(Boolean(tmuxAvailable));
     }
     if (!touchedLaunchSettingsRef.current.fastMode) {
       setFastMode(String(defaultValues.service_tier || "").trim().toLowerCase() === "fast");
@@ -384,7 +384,7 @@ export function NewSessionDialog({ open, onClose }: NewSessionDialogProps) {
     setModel(nextDefaults.model?.trim() || "");
     setReasoningEffort(nextDefaults.reasoning_effort?.trim() || nextReasoning[0] || "high");
     setFastMode(String(nextDefaults.service_tier || "").trim().toLowerCase() === "fast");
-    setCreateInTmux(nextBackend === "codex" && tmuxAvailable);
+    setCreateInTmux(Boolean(tmuxAvailable));
     setResumeSessionId("");
     setUseWorktree(false);
     setWorktreeBranch("");
@@ -671,7 +671,7 @@ export function NewSessionDialog({ open, onClose }: NewSessionDialogProps) {
                       name="createInTmux"
                       checked={createInTmux}
                       disabled={!supportsTmux}
-                      description={supportsTmux ? "Keep the new session attached to a tmux pane." : "Only Codex sessions can start inside tmux here."}
+                      description={supportsTmux ? (backend === "pi" ? "Host the new Pi session in tmux while pi-rpc handles web control." : "Keep the new session attached to a tmux pane.") : "tmux is unavailable on this host."}
                       onChange={(checked) => {
                         markLaunchSettingTouched("createInTmux");
                         setCreateInTmux(checked);

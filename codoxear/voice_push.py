@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from urllib.parse import urlparse
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -64,6 +65,17 @@ def _compact_text(raw: str) -> str:
     return " ".join(str(raw or "").split()).strip()
 
 
+def _is_stale_push_subscription_endpoint(endpoint: Any) -> bool:
+    raw = str(endpoint or "").strip()
+    if not raw:
+        return False
+    try:
+        host = (urlparse(raw).hostname or "").strip().lower()
+    except Exception:
+        return False
+    return host.endswith(".invalid")
+
+
 def _normalize_base_url(raw: Any) -> str:
     value = str(raw or "").strip() or DEFAULT_TTS_BASE_URL
     if not value.startswith(("http://", "https://")):
@@ -107,6 +119,15 @@ def _default_vapid_subject() -> str:
     if tailscale_subject:
         return tailscale_subject
     return DEFAULT_VAPID_SUBJECT
+
+
+def _should_drop_push_subscription(endpoint: Any, error: Exception) -> bool:
+    if _is_stale_push_subscription_endpoint(endpoint):
+        return True
+    if isinstance(error, WebPushException):
+        status = getattr(getattr(error, "response", None), "status_code", None)
+        return status in {404, 410}
+    return False
 
 
 def _clean_voice_settings(raw: Any) -> dict[str, Any]:
@@ -919,10 +940,11 @@ class VoicePushCoordinator:
                         self._subscriptions[record["id"]] = current
                 sent_count += 1
                 _ = response
-            except WebPushException as e:
-                status = getattr(getattr(e, "response", None), "status_code", None)
+            except Exception as e:
                 self._mark_subscription_failure(record_id=record["id"], error=str(e))
-                if status in {404, 410}:
+                if _should_drop_push_subscription(
+                    record.get("subscription", {}).get("endpoint"), e
+                ):
                     self._drop_subscription(record["id"])
                 failed_count += 1
         self._save_subscriptions()
@@ -1503,10 +1525,11 @@ class VoicePushCoordinator:
                         self._subscriptions[record["id"]] = current
                 any_success = True
                 _ = response
-            except WebPushException as e:
-                status = getattr(getattr(e, "response", None), "status_code", None)
+            except Exception as e:
                 self._mark_subscription_failure(record_id=record["id"], error=str(e))
-                if status in {404, 410}:
+                if _should_drop_push_subscription(
+                    record.get("subscription", {}).get("endpoint"), e
+                ):
                     self._drop_subscription(record["id"])
         self._save_subscriptions()
         self._set_ledger_field(
