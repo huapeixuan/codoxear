@@ -1,3 +1,4 @@
+import { memo } from "preact/compat";
 import type { JSX } from "preact";
 
 import { Badge } from "@/components/ui/badge";
@@ -185,7 +186,38 @@ export interface WorkspaceRequestCardProps {
   onCancel(payload: Record<string, unknown>): void;
 }
 
-export function WorkspaceRequestCard({
+function sameDraftValue(left: DraftValue | undefined, right: DraftValue | undefined) {
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+      return false;
+    }
+    for (let index = 0; index < left.length; index += 1) {
+      if (left[index] !== right[index]) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return left === right;
+}
+
+function sameAskUserBridgeAnswers(left: AskUserBridgeAnswers | undefined, right: AskUserBridgeAnswers | undefined) {
+  const leftKeys = Object.keys(left ?? {});
+  const rightKeys = Object.keys(right ?? {});
+  if (leftKeys.length !== rightKeys.length) {
+    return false;
+  }
+  for (const key of leftKeys) {
+    const leftValue = left?.[key];
+    const rightValue = right?.[key];
+    if (!sameDraftValue(leftValue, rightValue)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export const WorkspaceRequestCard = memo(function WorkspaceRequestCard({
   request,
   sessionId,
   draftValue,
@@ -379,4 +411,12 @@ export function WorkspaceRequestCard({
       </CardContent>
     </Card>
   );
-}
+}, (prev, next) => {
+  return prev.request === next.request
+    && prev.sessionId === next.sessionId
+    && sameDraftValue(prev.draftValue, next.draftValue)
+    && prev.freeformValue === next.freeformValue
+    && sameAskUserBridgeAnswers(prev.askUserBridgeAnswers, next.askUserBridgeAnswers)
+    && prev.submitting === next.submitting
+    && prev.errorMessage === next.errorMessage;
+});
