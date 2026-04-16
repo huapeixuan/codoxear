@@ -344,6 +344,29 @@ describe("api", () => {
     });
   });
 
+  it("posts a heartbeat for a live session", async () => {
+    const payload = {
+      ok: true,
+      session_id: "session-1",
+      idle_timeout_seconds: 1800,
+      last_web_activity_ts: 123.4,
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify(payload),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.heartbeatSession("session-1")).resolves.toEqual(payload);
+    expect(fetchMock).toHaveBeenCalledWith("api/sessions/session-1/heartbeat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({}),
+      signal: undefined,
+    });
+  });
+
   it("requests the session command list", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

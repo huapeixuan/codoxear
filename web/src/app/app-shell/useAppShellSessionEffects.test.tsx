@@ -2,6 +2,7 @@
 import { render } from "preact";
 import { act } from "preact/test-utils";
 import { afterEach, expect, it, vi } from "vitest";
+import { api } from "../../lib/api";
 import { useAppShellSessionEffects } from "./useAppShellSessionEffects";
 
 function Harness(props: Parameters<typeof useAppShellSessionEffects>[0]) {
@@ -49,6 +50,92 @@ afterEach(() => {
   setDocumentVisibility("visible");
   vi.useRealTimers();
   vi.clearAllMocks();
+});
+
+it("heartbeats the active eligible pi-rpc session every 60 seconds while visible", async () => {
+  vi.useFakeTimers();
+  const heartbeat = vi.spyOn(api, "heartbeatSession").mockResolvedValue({ ok: true } as any);
+
+  const root = document.createElement("div");
+  document.body.appendChild(root);
+
+  await act(async () => {
+    render(
+      <Harness
+        activeSessionBackend="pi"
+        activeSessionId="sess-1"
+        activeSessionLiveBusy={false}
+        items={[{
+          session_id: "sess-1",
+          busy: false,
+          agent_backend: "pi",
+          owned: true,
+          transport: "pi-rpc",
+          idle_auto_stop: true,
+          idle_timeout_seconds: 1800,
+        }] as any}
+        liveSessionStoreApi={{ loadInitial: vi.fn().mockResolvedValue(undefined), poll: vi.fn().mockResolvedValue(undefined) } as any}
+        replySoundEnabled={false}
+        sessionUiStoreApi={{ refresh: vi.fn().mockResolvedValue(undefined) } as any}
+        sessionsStoreApi={{ refresh: vi.fn().mockResolvedValue(undefined) } as any}
+        workspaceOpen={false}
+        activeSessionReplySoundPrimingRef={{ current: null }}
+        backgroundReplySoundPrimedSessionIdsRef={{ current: new Set<string>() }}
+        suppressedReplySoundSessionIdsRef={{ current: new Set<string>() }}
+      />,
+      root,
+    );
+    await flush();
+  });
+
+  expect(heartbeat).toHaveBeenCalledWith("sess-1");
+
+  await act(async () => {
+    vi.advanceTimersByTime(60000);
+    await flush();
+  });
+
+  expect(heartbeat).toHaveBeenCalledTimes(2);
+});
+
+it("refreshes sessions when heartbeat reports the active session is gone", async () => {
+  vi.useFakeTimers();
+  vi.spyOn(api, "heartbeatSession").mockRejectedValue({ status: 404 });
+  const sessionsStoreApi = { refresh: vi.fn().mockResolvedValue(undefined) } as any;
+
+  const root = document.createElement("div");
+  document.body.appendChild(root);
+
+  await act(async () => {
+    render(
+      <Harness
+        activeSessionBackend="pi"
+        activeSessionId="sess-1"
+        activeSessionLiveBusy={false}
+        items={[{
+          session_id: "sess-1",
+          busy: false,
+          agent_backend: "pi",
+          owned: true,
+          transport: "pi-rpc",
+          idle_auto_stop: true,
+          idle_timeout_seconds: 1800,
+        }] as any}
+        liveSessionStoreApi={{ loadInitial: vi.fn().mockResolvedValue(undefined), poll: vi.fn().mockResolvedValue(undefined) } as any}
+        replySoundEnabled={false}
+        sessionUiStoreApi={{ refresh: vi.fn().mockResolvedValue(undefined) } as any}
+        sessionsStoreApi={sessionsStoreApi}
+        workspaceOpen={false}
+        activeSessionReplySoundPrimingRef={{ current: null }}
+        backgroundReplySoundPrimedSessionIdsRef={{ current: new Set<string>() }}
+        suppressedReplySoundSessionIdsRef={{ current: new Set<string>() }}
+      />,
+      root,
+    );
+    await flush();
+  });
+
+  expect(sessionsStoreApi.refresh).toHaveBeenCalled();
 });
 
 it("refreshes sessions immediately and every 5 seconds while any session is busy", async () => {

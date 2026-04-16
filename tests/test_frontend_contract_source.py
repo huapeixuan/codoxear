@@ -14,6 +14,7 @@ class TestFrontendContractSource(unittest.TestCase):
         self.assertIn('"/diagnostics"', source)
         self.assertIn('"/queue"', source)
         self.assertIn('"/live"', source)
+        self.assertIn('"/heartbeat"', source)
         self.assertIn('"/workspace"', source)
         self.assertIn('"/details"', source)
         self.assertIn('"/file/list"', source)

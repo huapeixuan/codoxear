@@ -22,6 +22,7 @@ import type {
   SessionBootstrapResponse,
   SessionCommandsResponse,
   SessionDetailsResponse,
+  SessionHeartbeatResponse,
   SessionUiStateResponse,
   SessionsResponse,
   VoiceSettingsResponse,
@@ -109,6 +110,9 @@ export const api = {
   },
   async enqueueMessage(sessionId: string, text: string) {
     return postJson(`/api/sessions/${sessionId}/enqueue`, { text });
+  },
+  heartbeatSession(sessionId: string) {
+    return postJson<SessionHeartbeatResponse>(`/api/sessions/${sessionId}/heartbeat`, {});
   },
   deleteSession(sessionId: string) {
     return postJson<DeleteSessionResponse>(`/api/sessions/${sessionId}/delete`, {});

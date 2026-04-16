@@ -2,6 +2,7 @@ import { useEffect, useState } from "preact/hooks";
 import type { LiveSessionStore } from "../../domains/live-session/store";
 import type { SessionUiStore } from "../../domains/session-ui/store";
 import type { SessionsStore } from "../../domains/sessions/store";
+import { api } from "../../lib/api";
 import type { SessionSummary } from "../../lib/types";
 
 interface UseAppShellSessionEffectsOptions {
@@ -26,6 +27,7 @@ const ACTIVE_BUSY_LIVE_REFRESH_MS = 2000;
 const ACTIVE_IDLE_LIVE_REFRESH_MS = 12000;
 const BACKGROUND_BUSY_LIVE_REFRESH_MS = 5000;
 const WORKSPACE_REFRESH_MS = 15000;
+const ACTIVE_SESSION_HEARTBEAT_MS = 60000;
 
 function isDocumentVisible() {
   if (typeof document === "undefined") {
@@ -50,6 +52,7 @@ export function useAppShellSessionEffects({
   suppressedReplySoundSessionIdsRef,
 }: UseAppShellSessionEffectsOptions) {
   const [pageVisible, setPageVisible] = useState(isDocumentVisible);
+  const activeSession = items.find((session) => session.session_id === activeSessionId) ?? null;
   const hasBusySession = items.some((session) => Boolean(session.busy));
   const sessionsRefreshIntervalMs = hasBusySession ? BUSY_SESSIONS_REFRESH_MS : IDLE_SESSIONS_REFRESH_MS;
   const activeSessionBusy = activeSessionLiveBusy
@@ -75,6 +78,39 @@ export function useAppShellSessionEffects({
     }, sessionsRefreshIntervalMs);
     return () => window.clearInterval(intervalId);
   }, [pageVisible, sessionsRefreshIntervalMs, sessionsStoreApi]);
+
+  useEffect(() => {
+    if (!pageVisible || !activeSessionId || !activeSession) {
+      return undefined;
+    }
+
+    const idleHeartbeatEligible = activeSession.agent_backend === "pi"
+      && activeSession.historical !== true
+      && activeSession.owned === true
+      && activeSession.transport === "pi-rpc"
+      && activeSession.idle_auto_stop === true
+      && Number(activeSession.idle_timeout_seconds || 0) > 0;
+    if (!idleHeartbeatEligible) {
+      return undefined;
+    }
+
+    const refreshMissingSession = (error: unknown) => {
+      if (!error || typeof error !== "object") {
+        return;
+      }
+      const status = (error as { status?: unknown }).status;
+      if (status !== 404 && status !== 409) {
+        return;
+      }
+      sessionsStoreApi.refresh().catch(() => undefined);
+    };
+
+    api.heartbeatSession(activeSessionId).catch(refreshMissingSession);
+    const intervalId = window.setInterval(() => {
+      api.heartbeatSession(activeSessionId).catch(refreshMissingSession);
+    }, ACTIVE_SESSION_HEARTBEAT_MS);
+    return () => window.clearInterval(intervalId);
+  }, [activeSession, activeSessionId, pageVisible, sessionsStoreApi]);
 
   useEffect(() => {
     if (!pageVisible || !activeSessionId) {

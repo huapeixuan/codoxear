@@ -39,6 +39,8 @@ export interface SessionSummary {
   reasoning_effort?: string | null;
   service_tier?: string | null;
   transport?: string | null;
+  idle_auto_stop?: boolean;
+  idle_timeout_seconds?: number | null;
   priority_offset?: number | null;
   snooze_until?: number | null;
   dependency_session_id?: string | null;
@@ -74,6 +76,13 @@ export interface CreateSessionResponse {
 
 export interface DeleteSessionResponse {
   ok?: boolean;
+}
+
+export interface SessionHeartbeatResponse {
+  ok?: boolean;
+  session_id?: string;
+  idle_timeout_seconds?: number;
+  last_web_activity_ts?: number;
 }
 
 export interface RenameSessionResponse {

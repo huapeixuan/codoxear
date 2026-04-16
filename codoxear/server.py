@@ -198,6 +198,11 @@ SUPPORTED_PI_REASONING_EFFORTS = ("off", "minimal", "low", "medium", "high", "xh
 PI_COMMANDS_CACHE_TTL_SECONDS = float(
     os.environ.get("CODEX_WEB_PI_COMMANDS_CACHE_TTL_SECONDS", "45.0")
 )
+PI_RPC_IDLE_TIMEOUT_SECONDS = int(
+    os.environ.get("CODEX_WEB_PI_RPC_IDLE_TIMEOUT_SECONDS", "1800")
+)
+if PI_RPC_IDLE_TIMEOUT_SECONDS < 0:
+    PI_RPC_IDLE_TIMEOUT_SECONDS = 1800
 
 DEFAULT_HOST = os.environ.get("CODEX_WEB_HOST", "::")
 DEFAULT_PORT = int(os.environ.get("CODEX_WEB_PORT", "8743"))
@@ -3450,6 +3455,10 @@ class Session:
     pi_idle_activity_ts: float | None = None
     pi_busy_activity_floor: float | None = None
     pi_session_path_discovered: bool = False
+    last_web_activity_ts: float | None = None
+    idle_timeout_seconds: int | None = None
+    auto_stop_on_idle: bool = False
+    idle_stop_reason: str | None = None
 
 
 def _session_supports_live_pi_ui(session: Session) -> bool:
@@ -3464,6 +3473,33 @@ def _session_supports_live_pi_ui(session: Session) -> bool:
         not isinstance(session.ui_protocol_version, int)
         or session.ui_protocol_version < 1
     ):
+        return False
+    return True
+
+
+def _default_idle_auto_stop_config(
+    *, owned: bool, backend: str, transport: str | None
+) -> tuple[bool, int | None]:
+    normalized_transport = (transport or "").strip().lower()
+    if (not owned) or backend != "pi" or normalized_transport != "pi-rpc":
+        return False, None
+    timeout = int(PI_RPC_IDLE_TIMEOUT_SECONDS)
+    if timeout <= 0:
+        return False, 0
+    return True, timeout
+
+
+def _session_supports_idle_auto_stop(session: Session) -> bool:
+    timeout = session.idle_timeout_seconds
+    if session.auto_stop_on_idle is not True:
+        return False
+    if session.owned is not True:
+        return False
+    if session.backend != "pi":
+        return False
+    if (session.transport or "").strip().lower() != "pi-rpc":
+        return False
+    if not isinstance(timeout, int) or timeout <= 0:
         return False
     return True
 
@@ -3855,6 +3891,71 @@ class SessionManager:
         s.reasoning_effort = None
         s.service_tier = None
         s.first_user_message = None
+
+    def _apply_idle_auto_stop_defaults(
+        self, s: Session, *, now_ts: float | None = None
+    ) -> None:
+        enabled, timeout = _default_idle_auto_stop_config(
+            owned=bool(s.owned), backend=s.backend, transport=s.transport
+        )
+        s.auto_stop_on_idle = enabled
+        s.idle_timeout_seconds = timeout
+        if enabled and s.last_web_activity_ts is None:
+            s.last_web_activity_ts = float(time.time() if now_ts is None else now_ts)
+        if not enabled:
+            s.last_web_activity_ts = None
+            s.idle_stop_reason = None
+
+    def _refresh_web_activity(
+        self, session_id: str, *, now_ts: float | None = None
+    ) -> dict[str, Any]:
+        self.refresh_session_meta(session_id, strict=False)
+        with self._lock:
+            s = self._sessions.get(session_id)
+            if not s:
+                raise KeyError("unknown session")
+            if not _session_supports_idle_auto_stop(s):
+                raise ValueError(
+                    "idle auto-stop heartbeat is only supported for web-owned pi-rpc sessions"
+                )
+            ts = float(time.time() if now_ts is None else now_ts)
+            s.last_web_activity_ts = ts
+            return {
+                "session_id": s.session_id,
+                "idle_timeout_seconds": int(s.idle_timeout_seconds or 0),
+                "last_web_activity_ts": ts,
+            }
+
+    def heartbeat_session(self, session_id: str) -> dict[str, Any]:
+        return self._refresh_web_activity(session_id)
+
+    def _idle_auto_stop_sweep(self) -> None:
+        self._discover_existing_if_stale()
+        self._prune_dead_sessions()
+        now_ts = time.time()
+        expired: list[str] = []
+        with self._lock:
+            for sid, s in self._sessions.items():
+                if not _session_supports_idle_auto_stop(s):
+                    continue
+                last_activity_ts = s.last_web_activity_ts
+                timeout = s.idle_timeout_seconds
+                if not isinstance(last_activity_ts, (int, float)):
+                    continue
+                if not isinstance(timeout, int) or timeout <= 0:
+                    continue
+                if (now_ts - float(last_activity_ts)) < float(timeout):
+                    continue
+                s.idle_stop_reason = "web_idle_timeout"
+                expired.append(sid)
+        for sid in expired:
+            try:
+                self.delete_session(sid)
+            except Exception as e:
+                sys.stderr.write(
+                    f"error: idle auto-stop failed for session {sid}: {type(e).__name__}: {e}\n"
+                )
+                sys.stderr.flush()
 
     def _session_source_changed(
         self, s: Session, *, log_path: Path | None, session_path: Path | None
@@ -5155,6 +5256,7 @@ class SessionManager:
     def _queue_loop(self) -> None:
         while not self._stop.is_set():
             try:
+                self._idle_auto_stop_sweep()
                 self._queue_sweep()
             except Exception:
                 sys.stderr.write("error: queue sweep crashed; continuing\n")
@@ -5541,6 +5643,7 @@ class SessionManager:
                 resume_session_id=resume_session_id,
                 pi_session_path_discovered=session_path_discovered,
             )
+            self._apply_idle_auto_stop_defaults(s)
             with self._lock:
                 prev = self._sessions.get(session_id)
                 if not prev:
@@ -5581,6 +5684,18 @@ class SessionManager:
                     prev.pi_session_path_discovered = (
                         s.pi_session_path_discovered or prev.pi_session_path_discovered
                     )
+                    enabled, timeout = _default_idle_auto_stop_config(
+                        owned=bool(prev.owned),
+                        backend=prev.backend,
+                        transport=prev.transport,
+                    )
+                    prev.auto_stop_on_idle = enabled
+                    prev.idle_timeout_seconds = timeout
+                    if enabled and prev.last_web_activity_ts is None:
+                        prev.last_web_activity_ts = time.time()
+                    if not enabled:
+                        prev.last_web_activity_ts = None
+                        prev.idle_stop_reason = None
         if recent_cwd_dirty:
             self._save_recent_cwds()
         with self._lock:
@@ -5915,6 +6030,8 @@ class SessionManager:
                         "model": s.model,
                         "reasoning_effort": s.reasoning_effort,
                         "service_tier": s.service_tier,
+                        "idle_auto_stop": bool(s.auto_stop_on_idle),
+                        "idle_timeout_seconds": s.idle_timeout_seconds,
                         "tmux_session": s.tmux_session,
                         "tmux_window": s.tmux_window,
                         "priority_offset": priority_offset,
@@ -7303,7 +7420,9 @@ class SessionManager:
                 self._sessions.pop(session_id, None)
         return ok
 
-    def send(self, session_id: str, text: str) -> dict[str, Any]:
+    def send(
+        self, session_id: str, text: str, *, from_web: bool = False
+    ) -> dict[str, Any]:
         historical_row = _historical_session_row(session_id)
         if historical_row is not None:
             backend = normalize_agent_backend(
@@ -7327,7 +7446,7 @@ class SessionManager:
             live_session_id = _clean_optional_text(spawn_res.get("session_id"))
             if live_session_id is None:
                 raise RuntimeError("spawned session did not return a session id")
-            resp = self.send(live_session_id, text)
+            resp = self.send(live_session_id, text, from_web=from_web)
             out = dict(resp)
             out["session_id"] = live_session_id
             out["backend"] = "pi"
@@ -7338,6 +7457,8 @@ class SessionManager:
             if not s:
                 raise KeyError("unknown session")
             sock = s.sock_path
+        if from_web and _session_supports_idle_auto_stop(s):
+            self._refresh_web_activity(session_id)
         try:
             resp = self._sock_call(sock, {"cmd": "send", "text": text}, timeout_s=3.0)
         except Exception:
@@ -7371,7 +7492,9 @@ class SessionManager:
                     s2.pi_busy_activity_floor = None
         return resp
 
-    def enqueue(self, session_id: str, text: str) -> dict[str, Any]:
+    def enqueue(
+        self, session_id: str, text: str, *, from_web: bool = False
+    ) -> dict[str, Any]:
         historical_row = _historical_session_row(session_id)
         if historical_row is not None:
             backend = normalize_agent_backend(
@@ -7395,13 +7518,18 @@ class SessionManager:
             live_session_id = _clean_optional_text(spawn_res.get("session_id"))
             if live_session_id is None:
                 raise RuntimeError("spawned session did not return a session id")
-            resp = self.enqueue(live_session_id, text)
+            resp = self.enqueue(live_session_id, text, from_web=from_web)
             out = dict(resp)
             out["session_id"] = live_session_id
             out["backend"] = "pi"
             return out
 
         # Persist queued messages on the server so they survive broker restarts.
+        if from_web:
+            with self._lock:
+                s = self._sessions.get(session_id)
+            if s is not None and _session_supports_idle_auto_stop(s):
+                self._refresh_web_activity(session_id)
         return self._queue_enqueue_local(session_id, text)
 
     def queue_list(self, session_id: str) -> list[str]:
@@ -7555,7 +7683,7 @@ class SessionManager:
         return payload
 
     def submit_ui_response(
-        self, session_id: str, payload: dict[str, Any]
+        self, session_id: str, payload: dict[str, Any], *, from_web: bool = False
     ) -> dict[str, Any]:
         self.refresh_session_meta(session_id, strict=False)
         with self._lock:
@@ -7565,6 +7693,8 @@ class SessionManager:
             if s.backend != "pi":
                 raise ValueError("ui interactions are only supported for pi sessions")
             sock = s.sock_path
+        if from_web and _session_supports_idle_auto_stop(s):
+            self._refresh_web_activity(session_id)
         forward: dict[str, Any] = {"cmd": "ui_response"}
         for key in ("id", "value", "confirmed", "cancelled"):
             if key in payload:
@@ -7621,12 +7751,16 @@ class SessionManager:
             raise ValueError("invalid broker tail response")
         return tail
 
-    def inject_keys(self, session_id: str, seq: str) -> dict[str, Any]:
+    def inject_keys(
+        self, session_id: str, seq: str, *, from_web: bool = False
+    ) -> dict[str, Any]:
         with self._lock:
             s = self._sessions.get(session_id)
             if not s:
                 raise KeyError("unknown session")
             sock = s.sock_path
+        if from_web and _session_supports_idle_auto_stop(s):
+            self._refresh_web_activity(session_id)
         try:
             resp = self._sock_call(sock, {"cmd": "keys", "seq": seq}, timeout_s=2.0)
         except Exception:
@@ -8369,6 +8503,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         "model": model,
                         "reasoning_effort": reasoning_effort,
                         "service_tier": service_tier,
+                        "idle_auto_stop": bool(s.auto_stop_on_idle),
+                        "idle_timeout_seconds": s.idle_timeout_seconds,
                         "tmux_session": s.tmux_session,
                         "tmux_window": s.tmux_window,
                         "git_branch": git_branch,
@@ -9774,7 +9910,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     _json_response(self, 400, {"error": "text required"})
                     return
                 try:
-                    res = MANAGER.send(session_id, text)
+                    res = MANAGER.send(session_id, text, from_web=True)
                 except KeyError:
                     _json_response(self, 404, {"error": "unknown session"})
                     return
@@ -9798,7 +9934,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not isinstance(obj, dict):
                     raise ValueError("invalid json body (expected object)")
                 try:
-                    MANAGER.submit_ui_response(session_id, obj)
+                    MANAGER.submit_ui_response(session_id, obj, from_web=True)
                 except KeyError:
                     _json_response(self, 404, {"error": "unknown session"})
                     return
@@ -9826,7 +9962,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     _json_response(self, 400, {"error": "text required"})
                     return
                 try:
-                    res = MANAGER.enqueue(session_id, text)
+                    res = MANAGER.enqueue(session_id, text, from_web=True)
                 except KeyError:
                     _json_response(self, 404, {"error": "unknown session"})
                     return
@@ -9834,6 +9970,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     _json_response(self, 502, {"error": str(e)})
                     return
                 _json_response(self, 200, res)
+                return
+
+            if path.startswith("/api/sessions/") and path.endswith("/heartbeat"):
+                if not _require_auth(self):
+                    self._unauthorized()
+                    return
+                parts = path.split("/")
+                session_id = parts[3] if len(parts) >= 4 else ""
+                _read_body(self)
+                try:
+                    payload = MANAGER.heartbeat_session(session_id)
+                except KeyError:
+                    _json_response(self, 404, {"error": "unknown session"})
+                    return
+                except ValueError as e:
+                    _json_response(self, 409, {"error": str(e)})
+                    return
+                _json_response(self, 200, {"ok": True, **payload})
                 return
 
             if path.startswith("/api/sessions/") and path.endswith("/queue/delete"):
@@ -9975,7 +10129,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 try:
                     # Send a literal ESC byte. Older brokers may not recognize "ESC" but will
                     # decode "\\x1b" via unicode_escape into a single 0x1b byte.
-                    resp = MANAGER.inject_keys(session_id, "\\x1b")
+                    resp = MANAGER.inject_keys(session_id, "\\x1b", from_web=True)
                 except KeyError:
                     _json_response(self, 404, {"error": "unknown session"})
                     return
