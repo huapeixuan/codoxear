@@ -336,6 +336,49 @@ class TestSessionSidebarPriority(unittest.TestCase):
         self.assertTrue(ok)
         kill_via_pids.assert_called_once_with(s)
 
+    def test_kill_session_waits_for_shutdown_to_finish_before_reporting_success(
+        self,
+    ) -> None:
+        mgr = _make_manager()
+        s = _session(
+            sid="target", start_ts=time.time() - 10, last_chat_ts=None, owned=True
+        )
+        mgr._sessions = {s.session_id: s}
+        mgr._sock_call = lambda *_args, **_kwargs: {"ok": True}  # type: ignore[method-assign]
+
+        with (
+            patch("codoxear.server._process_group_alive", side_effect=[True, False]),
+            patch("codoxear.server._pid_alive", side_effect=[True, False]),
+            patch("codoxear.server.time.sleep") as sleep_mock,
+        ):
+            ok = mgr.kill_session("target")
+
+        self.assertTrue(ok)
+        sleep_mock.assert_called()
+
+    def test_kill_session_escalates_to_pid_teardown_when_shutdown_ack_does_not_exit(
+        self,
+    ) -> None:
+        mgr = _make_manager()
+        s = _session(
+            sid="target", start_ts=time.time() - 10, last_chat_ts=None, owned=True
+        )
+        mgr._sessions = {s.session_id: s}
+        mgr._sock_call = lambda *_args, **_kwargs: {"ok": True}  # type: ignore[method-assign]
+
+        with (
+            patch("codoxear.server._process_group_alive", return_value=True),
+            patch("codoxear.server._pid_alive", return_value=True),
+            patch("codoxear.server.time.sleep"),
+            patch.object(
+                mgr, "_kill_session_via_pids", return_value=True
+            ) as kill_via_pids,
+        ):
+            ok = mgr.kill_session("target")
+
+        self.assertTrue(ok)
+        kill_via_pids.assert_called_once_with(s)
+
     def test_kill_session_via_pids_prunes_stale_metadata_without_signals(self) -> None:
         mgr = _make_manager()
         s = _session(

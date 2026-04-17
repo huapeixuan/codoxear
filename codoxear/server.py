@@ -6990,6 +6990,26 @@ class SessionManager:
             return True
         return False
 
+    def _await_session_shutdown(
+        self, s: Session, *, wait_seconds: float = 1.0, poll_seconds: float = 0.05
+    ) -> bool:
+        deadline = time.monotonic() + max(wait_seconds, 0.0)
+        while time.monotonic() < deadline:
+            group_dead = not _process_group_alive(int(s.codex_pid))
+            broker_dead = not _pid_alive(int(s.broker_pid))
+            if group_dead and broker_dead:
+                _unlink_quiet(s.sock_path)
+                _unlink_quiet(s.sock_path.with_suffix(".json"))
+                return True
+            time.sleep(poll_seconds)
+        group_dead = not _process_group_alive(int(s.codex_pid))
+        broker_dead = not _pid_alive(int(s.broker_pid))
+        if group_dead and broker_dead:
+            _unlink_quiet(s.sock_path)
+            _unlink_quiet(s.sock_path.with_suffix(".json"))
+            return True
+        return False
+
     def kill_session(self, session_id: str) -> bool:
         with self._lock:
             s = self._sessions.get(session_id)
@@ -7000,7 +7020,9 @@ class SessionManager:
         except Exception:
             return self._kill_session_via_pids(s)
         if resp.get("ok") is True:
-            return True
+            if self._await_session_shutdown(s, wait_seconds=1.0):
+                return True
+            return self._kill_session_via_pids(s)
         return self._kill_session_via_pids(s)
 
     def spawn_web_session(
