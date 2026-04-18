@@ -25,6 +25,7 @@ interface GroupedSessions {
   title: string;
   subtitle: string;
   collapsed: boolean;
+  latestLiveStartTs: number | null;
   sessions: SessionSummary[];
 }
 
@@ -37,6 +38,9 @@ function deleteSessionConfirmText(session: SessionSummary) {
   const name = session.alias || session.first_user_message || session.title || "";
   const sid = shortSessionId(session.session_id);
   const target = name ? ` \"${name}\" (${sid})` : ` ${sid}`;
+  if (session.historical) {
+    return `Delete this historical session${target}? This will remove it from Codoxear history only.`;
+  }
   if (session.owned) {
     return `Delete this web-owned session${target}? This will stop it and remove it from Codoxear.`;
   }
@@ -51,6 +55,14 @@ function getGroupTitle(cwd: string | null) {
   return parts[parts.length - 1] || cwd;
 }
 
+function sessionRecentSubtitle(session: SessionSummary) {
+  const cwd = String(session.cwd || "").trim();
+  if (!cwd) {
+    return "No working directory";
+  }
+  return cwd;
+}
+
 function groupSessions(items: SessionSummary[], cwdGroups: Record<string, CwdGroupMeta>) {
   const groups = new Map<string, GroupedSessions>();
 
@@ -62,6 +74,11 @@ function groupSessions(items: SessionSummary[], cwdGroups: Record<string, CwdGro
 
     if (existing) {
       existing.sessions.push(session);
+      if (!session.historical && typeof session.start_ts === "number" && Number.isFinite(session.start_ts)) {
+        existing.latestLiveStartTs = existing.latestLiveStartTs == null
+          ? session.start_ts
+          : Math.max(existing.latestLiveStartTs, session.start_ts);
+      }
       return;
     }
 
@@ -71,6 +88,9 @@ function groupSessions(items: SessionSummary[], cwdGroups: Record<string, CwdGro
       title: meta?.label?.trim() || getGroupTitle(cwd),
       subtitle: cwd || FALLBACK_GROUP_SUBTITLE,
       collapsed: Boolean(meta?.collapsed),
+      latestLiveStartTs: !session.historical && typeof session.start_ts === "number" && Number.isFinite(session.start_ts)
+        ? session.start_ts
+        : null,
       sessions: [session],
     });
   });
@@ -79,7 +99,15 @@ function groupSessions(items: SessionSummary[], cwdGroups: Record<string, CwdGro
 }
 
 export function SessionsPane({ onNewSession }: SessionsPaneProps) {
-  const { items, activeSessionId, cwdGroups = {}, remainingByGroup = {}, omittedGroupCount = 0 } = useSessionsStore();
+  const {
+    items,
+    activeSessionId,
+    viewMode,
+    cwdGroups = {},
+    remainingByGroup = {},
+    omittedGroupCount = 0,
+    remainingRecentCount = 0,
+  } = useSessionsStore();
   const sessionsStoreApi = useSessionsStoreApi();
   const [editingSession, setEditingSession] = useState<SessionSummary | null>(null);
   const [actionError, setActionError] = useState("");
@@ -188,7 +216,7 @@ export function SessionsPane({ onNewSession }: SessionsPaneProps) {
     }
   };
 
-  async function saveGroupChange(group: GroupedSessions, payload: { label?: string; collapsed?: boolean }) {
+  async function saveGroupChange(group: GroupedSessions, payload: { label?: string; collapsed?: boolean; hidden?: boolean; hidden_after_live_start_ts?: number | null }) {
     if (!group.cwd) {
       return false;
     }
@@ -199,6 +227,7 @@ export function SessionsPane({ onNewSession }: SessionsPaneProps) {
     try {
       await api.editCwdGroup({ cwd: group.cwd, ...payload });
       await sessionsStoreApi.refreshBootstrap();
+      await sessionsStoreApi.refresh();
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to save group changes.";
@@ -221,10 +250,56 @@ export function SessionsPane({ onNewSession }: SessionsPaneProps) {
             New session
           </Button>
         </div>
+        <div className="flex gap-2 px-1 pb-3">
+          <Button
+            type="button"
+            size="sm"
+            variant={viewMode === "directories" ? "default" : "outline"}
+            onClick={() => {
+              void sessionsStoreApi.setViewMode("directories");
+            }}
+          >
+            Directories
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={viewMode === "recent" ? "default" : "outline"}
+            onClick={() => {
+              void sessionsStoreApi.setViewMode("recent");
+            }}
+          >
+            Recent
+          </Button>
+        </div>
         {actionError ? <p className="px-1 pb-2 text-sm font-medium text-red-600">{actionError}</p> : null}
         <ScrollArea className="sessionsSurfaceBody">
           <div className="sessionsList">
-            {groupedSessions.map((group) => {
+            {viewMode === "recent" ? items.map((session) => (
+              <SessionCard
+                key={session.session_id}
+                session={session}
+                active={session.session_id === activeSessionId}
+                subtitle={sessionRecentSubtitle(session)}
+                onSelect={() => {
+                  if (session.historical && normalizeLaunchBackend(session.agent_backend) !== "pi") {
+                    void resumeHistoricalSession(session);
+                    return;
+                  }
+                  sessionsStoreApi.select(session.session_id);
+                }}
+                onDuplicate={session.historical ? undefined : () => { void duplicateSession(session); }}
+                onDelete={() => { void deleteSession(session); }}
+                onEdit={session.historical ? undefined : () => {
+                  setActionError("");
+                  void api.getSessionDetails(session.session_id)
+                    .then((details) => setEditingSession(details.session))
+                    .catch((error) => {
+                      setActionError(error instanceof Error ? error.message : "Failed to load session details");
+                    });
+                }}
+              />
+            )) : groupedSessions.map((group) => {
               const visibleSessions = group.sessions;
               const hiddenSessionCount = Math.max(0, Number(remainingByGroup[group.key] || 0));
               const hasHiddenSessions = hiddenSessionCount > 0;
@@ -236,11 +311,22 @@ export function SessionsPane({ onNewSession }: SessionsPaneProps) {
                   subtitle={group.subtitle}
                   collapsed={group.collapsed}
                   canRename={Boolean(group.cwd)}
+                  canHide={Boolean(group.cwd)}
                   isSaving={pendingGroupKey === group.key}
                   errorMessage={groupErrors[group.key]}
                   onRename={
                     group.cwd
                       ? async (label) => saveGroupChange(group, { label: label.trim() })
+                      : undefined
+                  }
+                  onHide={
+                    group.cwd
+                      ? () => {
+                          void saveGroupChange(group, {
+                            hidden: true,
+                            hidden_after_live_start_ts: group.latestLiveStartTs,
+                          });
+                        }
                       : undefined
                   }
                   onToggle={
@@ -264,7 +350,7 @@ export function SessionsPane({ onNewSession }: SessionsPaneProps) {
                         sessionsStoreApi.select(session.session_id);
                       }}
                       onDuplicate={session.historical ? undefined : () => { void duplicateSession(session); }}
-                      onDelete={session.historical ? undefined : () => { void deleteSession(session); }}
+                      onDelete={() => { void deleteSession(session); }}
                       onEdit={session.historical ? undefined : () => {
                         setActionError("");
                         void api.getSessionDetails(session.session_id)
@@ -290,7 +376,19 @@ export function SessionsPane({ onNewSession }: SessionsPaneProps) {
                 </SessionGroup>
               );
             })}
-            {omittedGroupCount > 0 ? (
+            {viewMode === "recent" && remainingRecentCount > 0 ? (
+              <button
+                type="button"
+                className="sessionGroupMoreButton"
+                aria-label={`Load ${remainingRecentCount} more sessions`}
+                onClick={() => {
+                  void sessionsStoreApi.loadMoreRecent();
+                }}
+              >
+                Load more sessions
+              </button>
+            ) : null}
+            {viewMode === "directories" && omittedGroupCount > 0 ? (
               <button
                 type="button"
                 className="sessionGroupMoreButton"

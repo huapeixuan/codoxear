@@ -1664,6 +1664,72 @@ def _attachment_inject_text(attachment_index: int, path: Path) -> str:
     return f"Attachment {idx}: {path}\n"
 
 
+def _normalize_pi_image_inputs(value: Any) -> list[dict[str, str]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("images must be a list")
+
+    cleaned: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("images must contain objects")
+        file_name = item.get("file_name")
+        mime_type = item.get("mime_type")
+        data_b64 = item.get("data_b64")
+        if not isinstance(file_name, str) or not file_name.strip():
+            raise ValueError("image file_name required")
+        if not isinstance(mime_type, str) or not mime_type.startswith("image/"):
+            raise ValueError("image mime_type must start with image/")
+        if not isinstance(data_b64, str) or not data_b64:
+            raise ValueError("image data_b64 required")
+        try:
+            raw = base64.b64decode(data_b64.encode("ascii"), validate=True)
+        except Exception as exc:
+            raise ValueError("invalid image base64") from exc
+        if len(raw) > ATTACH_UPLOAD_MAX_BYTES:
+            raise ValueError(f"image too large (max {ATTACH_UPLOAD_MAX_BYTES} bytes)")
+        cleaned.append(
+            {
+                "file_name": file_name.strip(),
+                "mime_type": mime_type,
+                "data_b64": data_b64,
+            }
+        )
+    return cleaned
+
+
+def _queue_item_text(item: Any) -> str | None:
+    if isinstance(item, str):
+        text = item.strip()
+        return text or None
+    if isinstance(item, dict):
+        text = item.get("text")
+        if isinstance(text, str) and text.strip():
+            return text
+    return None
+
+
+def _queue_item_images(item: Any) -> list[dict[str, str]]:
+    if not isinstance(item, dict):
+        return []
+    try:
+        return _normalize_pi_image_inputs(item.get("images"))
+    except ValueError:
+        return []
+
+
+def _queue_item_display_text(item: Any) -> str | None:
+    text = _queue_item_text(item)
+    if text is None:
+        return None
+    image_count = len(_queue_item_images(item))
+    if image_count <= 0:
+        return text
+    suffix = "image" if image_count == 1 else "images"
+    return f"{text} [{image_count} {suffix}]"
+
+
 def _clean_alias(name: str) -> str:
     if not isinstance(name, str):
         return ""
@@ -1727,6 +1793,7 @@ SESSION_LIST_ROW_KEYS = (
 )
 SESSION_LIST_GROUP_PAGE_SIZE = 5
 SESSION_LIST_RECENT_GROUP_LIMIT = 3
+SESSION_LIST_RECENT_PAGE_SIZE = 20
 SESSION_LIST_FALLBACK_GROUP_KEY = "__no_working_directory__"
 
 
@@ -1753,15 +1820,11 @@ def _session_list_group_key(row: dict[str, Any]) -> str:
     return cwd or SESSION_LIST_FALLBACK_GROUP_KEY
 
 
-def _session_list_payload(
+def _session_list_visible_grouped_rows(
     rows: list[dict[str, Any]],
     *,
-    group_key: str | None = None,
-    offset: int = 0,
-    limit: int = SESSION_LIST_GROUP_PAGE_SIZE,
-    group_offset: int = 0,
-    group_limit: int = SESSION_LIST_RECENT_GROUP_LIMIT,
-) -> dict[str, Any]:
+    cwd_groups: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         key = _session_list_group_key(row)
@@ -1769,13 +1832,49 @@ def _session_list_payload(
             grouped[key] = []
         grouped[key].append(row)
 
-    def _group_sort_key(key: str) -> tuple[int, float]:
-        group_rows = grouped[key]
-        busy = any(bool(row.get("busy")) for row in group_rows)
-        latest_updated = max(float(row.get("updated_ts") or 0.0) for row in group_rows)
-        return (0 if busy else 1, -latest_updated)
+    hidden_group_keys = {
+        str(cwd)
+        for cwd, entry in (cwd_groups or {}).items()
+        if isinstance(entry, dict) and bool(entry.get("hidden"))
+    }
+    if hidden_group_keys:
+        grouped = {
+            key: group_rows
+            for key, group_rows in grouped.items()
+            if key not in hidden_group_keys
+        }
 
-    group_order = sorted(grouped.keys(), key=_group_sort_key)
+    return {
+        key: group_rows
+        for key, group_rows in grouped.items()
+        if key == SESSION_LIST_FALLBACK_GROUP_KEY
+        or _existing_workspace_dir(key) is not None
+    }
+
+
+def _session_list_group_sort_key(
+    grouped: dict[str, list[dict[str, Any]]], key: str
+) -> tuple[int, float]:
+    group_rows = grouped[key]
+    busy = any(bool(row.get("busy")) for row in group_rows)
+    latest_updated = max(float(row.get("updated_ts") or 0.0) for row in group_rows)
+    return (0 if busy else 1, -latest_updated)
+
+
+def _session_list_payload(
+    rows: list[dict[str, Any]],
+    *,
+    cwd_groups: dict[str, dict[str, Any]] | None = None,
+    group_key: str | None = None,
+    offset: int = 0,
+    limit: int = SESSION_LIST_GROUP_PAGE_SIZE,
+    group_offset: int = 0,
+    group_limit: int = SESSION_LIST_RECENT_GROUP_LIMIT,
+) -> dict[str, Any]:
+    grouped = _session_list_visible_grouped_rows(rows, cwd_groups=cwd_groups)
+    group_order = sorted(
+        grouped.keys(), key=lambda key: _session_list_group_sort_key(grouped, key)
+    )
 
     if group_key is not None:
         group_rows = grouped.get(group_key, [])
@@ -1821,12 +1920,57 @@ def _session_list_payload(
     return payload
 
 
+def _session_recent_sort_key(
+    row: dict[str, Any], row_index: int
+) -> tuple[int, float, float, int]:
+    updated_raw = row.get("updated_ts")
+    start_raw = row.get("start_ts")
+    updated_ts = float(updated_raw) if isinstance(updated_raw, (int, float)) else 0.0
+    start_ts = float(start_raw) if isinstance(start_raw, (int, float)) else 0.0
+    busy = bool(row.get("busy"))
+    return (0 if busy else 1, -updated_ts, -start_ts, row_index)
+
+
+def _session_recent_payload(
+    rows: list[dict[str, Any]],
+    *,
+    cwd_groups: dict[str, dict[str, Any]] | None = None,
+    offset: int = 0,
+    limit: int = SESSION_LIST_RECENT_PAGE_SIZE,
+) -> dict[str, Any]:
+    grouped = _session_list_visible_grouped_rows(rows, cwd_groups=cwd_groups)
+    ordered_rows = [
+        row
+        for _group_key in sorted(
+            grouped.keys(), key=lambda key: _session_list_group_sort_key(grouped, key)
+        )
+        for row in grouped[_group_key]
+    ]
+    recent_rows = [
+        row
+        for _, row in sorted(
+            enumerate(ordered_rows),
+            key=lambda item: _session_recent_sort_key(item[1], item[0]),
+        )
+    ]
+    start = max(0, int(offset))
+    stop = start + max(1, int(limit))
+    page_rows = [_frontend_session_list_row(row) for row in recent_rows[start:stop]]
+    remaining = max(0, len(recent_rows) - stop)
+    return {
+        "sessions": page_rows,
+        "remaining": remaining,
+    }
+
+
 def _session_details_payload(
     manager: "SessionManager", session_id: str
 ) -> dict[str, Any]:
     for row in manager.list_sessions():
         if str(row.get("session_id") or "") == session_id:
-            return {"ok": True, "session": _normalize_session_cwd_row(dict(row))}
+            session = _normalize_session_cwd_row(dict(row))
+            session.update(_session_takeover_flags(manager.get_session(session_id)))
+            return {"ok": True, "session": session}
     raise KeyError("unknown session")
 
 
@@ -1835,6 +1979,41 @@ def _clean_recent_cwd(value: Any) -> str | None:
         return None
     out = value.strip()
     return out or None
+
+
+def _clean_hidden_after_live_start_ts(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(out) or out <= 0:
+        return None
+    return out
+
+
+def _clean_hidden_session_cutoff_ts(value: Any) -> float | None:
+    return _clean_hidden_after_live_start_ts(value)
+
+
+def _cwd_group_entry(
+    *,
+    label: str,
+    collapsed: bool,
+    hidden: bool = False,
+    hidden_after_live_start_ts: float | None = None,
+) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "label": _clean_alias(label),
+        "collapsed": bool(collapsed),
+    }
+    if hidden:
+        entry["hidden"] = True
+        entry["hidden_after_live_start_ts"] = _clean_hidden_after_live_start_ts(
+            hidden_after_live_start_ts
+        )
+    return entry
 
 
 def _clip01(v: float) -> float:
@@ -2994,7 +3173,7 @@ def _list_resume_candidates_for_cwd(
     return out
 
 
-def _iter_all_resume_candidates(*, limit: int = 200) -> list[dict[str, Any]]:
+def _iter_all_resume_candidates(*, limit: int | None = None) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
 
@@ -3019,7 +3198,7 @@ def _iter_all_resume_candidates(*, limit: int = 200) -> list[dict[str, Any]]:
             continue
         rows.append(row)
         seen.add(key)
-        if len(rows) >= limit:
+        if limit is not None and len(rows) >= limit:
             return rows
 
     for log_path in _iter_session_logs(agent_backend="codex"):
@@ -3037,7 +3216,7 @@ def _iter_all_resume_candidates(*, limit: int = 200) -> list[dict[str, Any]]:
             continue
         rows.append(row)
         seen.add(key)
-        if len(rows) >= limit:
+        if limit is not None and len(rows) >= limit:
             return rows
 
     return rows
@@ -3504,6 +3683,139 @@ def _session_supports_idle_auto_stop(session: Session) -> bool:
     return True
 
 
+def _build_tmux_attach_command(session_name: str, window_name: str) -> str:
+    target = f"{session_name}:{window_name}"
+    return (
+        f"tmux attach -t {shlex.quote(session_name)} "
+        f"\\; select-window -t {shlex.quote(target)}"
+    )
+
+
+def _tmux_window_exists(session_name: str, window_name: str) -> bool:
+    tmux_bin = shutil.which("tmux")
+    if tmux_bin is None:
+        return False
+    proc = subprocess.run(
+        [tmux_bin, "list-windows", "-t", session_name, "-F", "#{window_name}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return False
+    return window_name in {
+        line.strip() for line in proc.stdout.splitlines() if line.strip()
+    }
+
+
+def _session_takeover_descriptor(session: Session | None) -> dict[str, Any]:
+    if session is None:
+        raise KeyError("unknown session")
+    if session.owned is not True or session.backend != "pi":
+        return {
+            "ok": True,
+            "eligible": False,
+            "reason": "takeover is only available for web-owned Pi sessions",
+        }
+    if (session.transport or "").strip().lower() != "pi-rpc":
+        return {
+            "ok": True,
+            "eligible": False,
+            "reason": "takeover requires a live Pi pi-rpc session",
+        }
+    if not session.tmux_session or not session.tmux_window:
+        return {
+            "ok": True,
+            "eligible": False,
+            "reason": "tmux metadata is unavailable",
+        }
+    if session.sock_path is None or (not session.sock_path.exists()):
+        return {
+            "ok": True,
+            "eligible": False,
+            "reason": "broker socket is unavailable",
+        }
+    if not _tmux_window_exists(session.tmux_session, session.tmux_window):
+        return {
+            "ok": True,
+            "eligible": False,
+            "reason": "tmux window is unavailable",
+        }
+    return {
+        "ok": True,
+        "eligible": True,
+        "backend": session.backend,
+        "transport": session.transport,
+        "tmux_session": session.tmux_session,
+        "tmux_window": session.tmux_window,
+        "attach_command": _build_tmux_attach_command(
+            session.tmux_session, session.tmux_window
+        ),
+    }
+
+
+def _detect_terminal_open_argv(attach_command: str) -> list[str] | None:
+    if sys.platform == "darwin":
+        return [
+            "osascript",
+            "-e",
+            (
+                'tell application "Terminal"\n'
+                "  activate\n"
+                f"  do script {json.dumps(attach_command)}\n"
+                "end tell\n"
+            ),
+        ]
+
+    launcher_candidates = [
+        ["x-terminal-emulator", "-e", "sh", "-lc", attach_command],
+        ["gnome-terminal", "--", "sh", "-lc", attach_command],
+        ["kitty", "sh", "-lc", attach_command],
+        ["wezterm", "start", "--", "sh", "-lc", attach_command],
+        ["ghostty", "-e", "sh", "-lc", attach_command],
+        ["konsole", "-e", "sh", "-lc", attach_command],
+    ]
+    for argv in launcher_candidates:
+        if shutil.which(argv[0]) is not None:
+            return argv
+    return None
+
+
+def _open_takeover_terminal(descriptor: dict[str, Any]) -> dict[str, Any]:
+    attach_command = str(descriptor.get("attach_command") or "").strip()
+    if not attach_command:
+        return {
+            "ok": True,
+            "opened": False,
+            "reason": "attach command is unavailable",
+        }
+    argv = _detect_terminal_open_argv(attach_command)
+    if argv is None:
+        return {
+            "ok": True,
+            "opened": False,
+            "reason": "no supported GUI terminal launcher found",
+            "attach_command": attach_command,
+        }
+    subprocess.Popen(
+        argv,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return {"ok": True, "opened": True, "attach_command": attach_command}
+
+
+def _session_takeover_flags(session: Session | None) -> dict[str, Any]:
+    descriptor = _session_takeover_descriptor(session)
+    eligible = bool(descriptor.get("eligible"))
+    return {
+        "can_takeover_in_tmux": eligible,
+        "takeover_reason_unavailable": None if eligible else descriptor.get("reason"),
+    }
+
+
 def _display_updated_ts(s: Session) -> float:
     updated_ts = (
         float(s.last_chat_ts)
@@ -3826,8 +4138,9 @@ class SessionManager:
         self._aliases: dict[str, str] = {}
         self._sidebar_meta: dict[str, dict[str, Any]] = {}
         self._hidden_sessions: set[str] = set()
+        self._hidden_session_cutoffs: dict[str, float] = {}
         self._files: dict[str, list[str]] = {}
-        self._queues: dict[str, list[str]] = {}
+        self._queues: dict[str, list[Any]] = {}
         self._pi_commands_cache: dict[str, dict[str, Any]] = {}
         self._recent_cwds: dict[str, float] = {}
         self._cwd_groups: dict[str, dict[str, Any]] = {}
@@ -4231,13 +4544,42 @@ class SessionManager:
         obj = json.loads(raw)
         if not isinstance(obj, list):
             raise ValueError("invalid hidden_sessions.json (expected list)")
-        cleaned = {sid.strip() for sid in obj if isinstance(sid, str) and sid.strip()}
+        cleaned: set[str] = set()
+        cutoffs: dict[str, float] = {}
+        for entry in obj:
+            if isinstance(entry, str):
+                sid = entry.strip()
+                if sid:
+                    cleaned.add(sid)
+                continue
+            if not isinstance(entry, dict):
+                continue
+            sid_raw = entry.get("id")
+            if not isinstance(sid_raw, str):
+                continue
+            sid = sid_raw.strip()
+            if not sid:
+                continue
+            cutoff_ts = _clean_hidden_session_cutoff_ts(entry.get("cutoff_ts"))
+            if cutoff_ts is None:
+                cleaned.add(sid)
+            else:
+                cutoffs[sid] = cutoff_ts
         with self._lock:
             self._hidden_sessions = cleaned
+            self._hidden_session_cutoffs = cutoffs
 
     def _save_hidden_sessions(self) -> None:
         with self._lock:
-            obj = sorted(getattr(self, "_hidden_sessions", set()))
+            hidden = sorted(getattr(self, "_hidden_sessions", set()))
+            cutoffs = dict(getattr(self, "_hidden_session_cutoffs", {}))
+        obj: list[Any] = list(hidden)
+        for key in sorted(cutoffs):
+            cutoff_ts = _clean_hidden_session_cutoff_ts(cutoffs.get(key))
+            if cutoff_ts is None:
+                obj.append(key)
+                continue
+            obj.append({"id": key, "cutoff_ts": cutoff_ts})
         os.makedirs(APP_DIR, exist_ok=True)
         tmp = HIDDEN_SESSIONS_PATH.with_suffix(".json.tmp")
         tmp.write_text(
@@ -4251,6 +4593,8 @@ class SessionManager:
         thread_id: str | None,
         resume_session_id: str | None,
         backend: str | None,
+        *,
+        include_historical_identity: bool = True,
     ) -> set[str]:
         keys: set[str] = set()
         session_clean = _clean_optional_text(session_id)
@@ -4264,7 +4608,8 @@ class SessionManager:
             keys.add(f"thread:{backend_clean}:{thread_clean}")
         if resume_clean:
             keys.add(f"resume:{backend_clean}:{resume_clean}")
-            keys.add(_historical_session_id(backend_clean, resume_clean))
+            if include_historical_identity:
+                keys.add(_historical_session_id(backend_clean, resume_clean))
         return keys
 
     def _session_is_hidden(
@@ -4273,14 +4618,21 @@ class SessionManager:
         thread_id: str | None,
         resume_session_id: str | None,
         backend: str | None,
+        *,
+        include_historical_identity: bool = True,
     ) -> bool:
         with self._lock:
             hidden = set(getattr(self, "_hidden_sessions", set()))
+            cutoff_keys = set(getattr(self, "_hidden_session_cutoffs", {}).keys())
         return bool(
-            hidden
-            and hidden.intersection(
+            (hidden or cutoff_keys)
+            and (hidden.union(cutoff_keys)).intersection(
                 self._hidden_session_keys(
-                    session_id, thread_id, resume_session_id, backend
+                    session_id,
+                    thread_id,
+                    resume_session_id,
+                    backend,
+                    include_historical_identity=include_historical_identity,
                 )
             )
         )
@@ -4294,6 +4646,30 @@ class SessionManager:
             hidden.add(session_id)
         self._save_hidden_sessions()
 
+    def _hide_session_keys_until_updated(
+        self, keys: set[str], *, cutoff_ts: float | None
+    ) -> None:
+        cleaned_cutoff = _clean_hidden_session_cutoff_ts(cutoff_ts)
+        if not keys:
+            return
+        with self._lock:
+            hidden = getattr(self, "_hidden_sessions", None)
+            if not isinstance(hidden, set):
+                self._hidden_sessions = set()
+                hidden = self._hidden_sessions
+            cutoff_map = getattr(self, "_hidden_session_cutoffs", None)
+            if not isinstance(cutoff_map, dict):
+                self._hidden_session_cutoffs = {}
+                cutoff_map = self._hidden_session_cutoffs
+            for key in keys:
+                hidden.discard(key)
+                if cleaned_cutoff is None:
+                    hidden.add(key)
+                    cutoff_map.pop(key, None)
+                else:
+                    cutoff_map[key] = cleaned_cutoff
+        self._save_hidden_sessions()
+
     def _hide_session_identity(self, s: Session) -> None:
         hidden_keys = self._hidden_session_keys(
             s.session_id,
@@ -4301,13 +4677,43 @@ class SessionManager:
             s.resume_session_id,
             s.agent_backend or s.backend,
         )
+        self._hide_session_keys_until_updated(
+            hidden_keys, cutoff_ts=_display_updated_ts(s)
+        )
+
+    def _maybe_unhide_session_keys_locked(
+        self, keys: set[str], *, seen_updated_ts: float
+    ) -> bool:
+        cleaned_ts = _clean_hidden_session_cutoff_ts(seen_updated_ts)
+        if not keys or cleaned_ts is None:
+            return False
+        hidden = set(getattr(self, "_hidden_sessions", set()))
+        cutoff_map = getattr(self, "_hidden_session_cutoffs", None)
+        if not isinstance(cutoff_map, dict) or not cutoff_map:
+            return False
+        if hidden.intersection(keys):
+            return False
+        stale_keys = [
+            key
+            for key in keys
+            if key in cutoff_map and cleaned_ts > float(cutoff_map[key])
+        ]
+        if not stale_keys:
+            return False
+        for key in stale_keys:
+            cutoff_map.pop(key, None)
+        return True
+
+    def _maybe_unhide_session_keys(
+        self, keys: set[str], *, seen_updated_ts: float
+    ) -> bool:
         with self._lock:
-            hidden = getattr(self, "_hidden_sessions", None)
-            if not isinstance(hidden, set):
-                self._hidden_sessions = set()
-                hidden = self._hidden_sessions
-            hidden.update(hidden_keys)
-        self._save_hidden_sessions()
+            changed = self._maybe_unhide_session_keys_locked(
+                keys, seen_updated_ts=seen_updated_ts
+            )
+        if changed:
+            self._save_hidden_sessions()
+        return changed
 
     def _unhide_session(self, session_id: str) -> None:
         changed = False
@@ -4315,6 +4721,10 @@ class SessionManager:
             hidden = getattr(self, "_hidden_sessions", None)
             if isinstance(hidden, set) and session_id in hidden:
                 hidden.remove(session_id)
+                changed = True
+            cutoff_map = getattr(self, "_hidden_session_cutoffs", None)
+            if isinstance(cutoff_map, dict) and session_id in cutoff_map:
+                cutoff_map.pop(session_id, None)
                 changed = True
         if changed:
             self._save_hidden_sessions()
@@ -4543,20 +4953,22 @@ class SessionManager:
         obj = json.loads(raw)
         if not isinstance(obj, dict):
             raise ValueError("invalid session_queues.json (expected object)")
-        cleaned: dict[str, list[str]] = {}
+        cleaned: dict[str, list[Any]] = {}
         for sid, arr in obj.items():
             if not isinstance(sid, str) or not sid:
                 continue
             if not isinstance(arr, list):
                 continue
-            out: list[str] = []
+            out: list[Any] = []
             for v in arr:
-                if not isinstance(v, str):
+                text = _queue_item_text(v)
+                if text is None:
                     continue
-                t = v.strip()
-                if not t:
-                    continue
-                out.append(v)
+                images = _queue_item_images(v)
+                if images:
+                    out.append({"text": text, "images": images})
+                else:
+                    out.append(text)
             if out:
                 cleaned[sid] = out
         with self._lock:
@@ -4642,8 +5054,20 @@ class SessionManager:
                     if isinstance(persisted_collapsed, bool)
                     else False
                 )
-                if label or collapsed:
-                    cleaned[normalized_cwd] = {"label": label, "collapsed": collapsed}
+                persisted_hidden = v.get("hidden", False)
+                hidden = (
+                    persisted_hidden if isinstance(persisted_hidden, bool) else False
+                )
+                hidden_after_live_start_ts = _clean_hidden_after_live_start_ts(
+                    v.get("hidden_after_live_start_ts")
+                )
+                if label or collapsed or hidden:
+                    cleaned[normalized_cwd] = _cwd_group_entry(
+                        label=label,
+                        collapsed=collapsed,
+                        hidden=hidden,
+                        hidden_after_live_start_ts=hidden_after_live_start_ts,
+                    )
         except (json.JSONDecodeError, TypeError, ValueError) as e:
             LOG.warning("recovering malformed cwd_groups.json as empty state: %s", e)
             cleaned = {}
@@ -4663,8 +5087,58 @@ class SessionManager:
 
     def cwd_groups_get(self) -> dict[str, dict[str, Any]]:
         self._prune_stale_workspace_dirs()
+        self._reconcile_hidden_cwd_groups()
         with self._lock:
             return copy.deepcopy(self._cwd_groups)
+
+    def _reconcile_hidden_cwd_groups(self) -> bool:
+        save_groups = False
+        with self._lock:
+            cwd_groups = getattr(self, "_cwd_groups", None)
+            if not isinstance(cwd_groups, dict) or not cwd_groups:
+                return False
+            sessions = list(getattr(self, "_sessions", {}).values())
+            latest_live_start_by_cwd: dict[str, float] = {}
+            for session in sessions:
+                try:
+                    normalized_cwd = _normalize_cwd_group_key(
+                        getattr(session, "cwd", None)
+                    )
+                except ValueError:
+                    continue
+                start_ts = _clean_hidden_after_live_start_ts(
+                    getattr(session, "start_ts", None)
+                )
+                if start_ts is None:
+                    continue
+                prev_start_ts = latest_live_start_by_cwd.get(normalized_cwd)
+                if prev_start_ts is None or start_ts > prev_start_ts:
+                    latest_live_start_by_cwd[normalized_cwd] = start_ts
+
+            for normalized_cwd, entry in list(cwd_groups.items()):
+                if not isinstance(entry, dict) or not bool(entry.get("hidden")):
+                    continue
+                cutoff = _clean_hidden_after_live_start_ts(
+                    entry.get("hidden_after_live_start_ts")
+                )
+                latest_live_start = latest_live_start_by_cwd.get(normalized_cwd)
+                if latest_live_start is None:
+                    continue
+                if cutoff is not None and latest_live_start <= cutoff:
+                    continue
+                label = _clean_alias(entry.get("label", ""))
+                collapsed = bool(entry.get("collapsed"))
+                if label or collapsed:
+                    cwd_groups[normalized_cwd] = _cwd_group_entry(
+                        label=label,
+                        collapsed=collapsed,
+                    )
+                else:
+                    cwd_groups.pop(normalized_cwd, None)
+                save_groups = True
+        if save_groups:
+            self._save_cwd_groups()
+        return save_groups
 
     def _prune_stale_workspace_dirs(self) -> None:
         if not bool(getattr(self, "_prune_missing_workspace_dirs", False)):
@@ -4715,6 +5189,9 @@ class SessionManager:
             sessions = list(getattr(self, "_sessions", {}).values())
             recent_items = list(getattr(self, "_recent_cwds", {}).keys())
             grouped_items = list(getattr(self, "_cwd_groups", {}).keys())
+            include_historical = bool(
+                getattr(self, "_include_historical_sessions", False)
+            )
         for session in sessions:
             try:
                 normalized = _normalize_cwd_group_key(getattr(session, "cwd", None))
@@ -4733,10 +5210,23 @@ class SessionManager:
             except ValueError:
                 continue
             known.add(normalized)
+        if include_historical:
+            now_ts = time.time()
+            for row in _historical_sidebar_items(live_resume_keys=set(), now_ts=now_ts):
+                try:
+                    normalized = _normalize_cwd_group_key(row.get("cwd"))
+                except ValueError:
+                    continue
+                known.add(normalized)
         return known
 
     def cwd_group_set(
-        self, cwd: str, label: str | None = None, collapsed: bool | None = None
+        self,
+        cwd: str,
+        label: str | None = None,
+        collapsed: bool | None = None,
+        hidden: bool | None = None,
+        hidden_after_live_start_ts: float | None = None,
     ) -> tuple[str, dict[str, Any]]:
         normalized_cwd = _normalize_cwd_group_key(cwd)
         if label is not None and not isinstance(label, str):
@@ -4748,11 +5238,24 @@ class SessionManager:
             requested_collapsed, bool
         ):
             raise ValueError("collapsed must be a boolean")
+        requested_hidden = hidden
+        if requested_hidden is not None and not isinstance(requested_hidden, bool):
+            raise ValueError("hidden must be a boolean")
+        requested_hidden_after_live_start_ts = _clean_hidden_after_live_start_ts(
+            hidden_after_live_start_ts
+        )
 
         self._prune_stale_workspace_dirs()
+        self._reconcile_hidden_cwd_groups()
         with self._lock:
             existing = self._cwd_groups.get(
-                normalized_cwd, {"label": "", "collapsed": False}
+                normalized_cwd,
+                {
+                    "label": "",
+                    "collapsed": False,
+                    "hidden": False,
+                    "hidden_after_live_start_ts": None,
+                },
             )
         known_cwds = self._known_cwd_group_keys()
         if normalized_cwd not in known_cwds:
@@ -4764,8 +5267,13 @@ class SessionManager:
                 if requested_collapsed is not None
                 else existing["collapsed"]
             )
-            if not effective_label and not effective_collapsed:
-                return normalized_cwd, {"label": "", "collapsed": False}
+            effective_hidden = (
+                requested_hidden
+                if requested_hidden is not None
+                else bool(existing.get("hidden", False))
+            )
+            if not effective_label and not effective_collapsed and not effective_hidden:
+                return normalized_cwd, _cwd_group_entry(label="", collapsed=False)
             raise ValueError("cwd is not a known session working directory")
 
         with self._lock:
@@ -4778,10 +5286,32 @@ class SessionManager:
                 if requested_collapsed is not None
                 else existing["collapsed"]
             )
+            new_hidden = (
+                requested_hidden
+                if requested_hidden is not None
+                else bool(existing.get("hidden", False))
+            )
+            new_hidden_after_live_start_ts = (
+                requested_hidden_after_live_start_ts
+                if requested_hidden is not None
+                or hidden_after_live_start_ts is not None
+                else _clean_hidden_after_live_start_ts(
+                    existing.get("hidden_after_live_start_ts")
+                )
+            )
+            if not new_hidden:
+                new_hidden_after_live_start_ts = None
 
-            entry = {"label": new_label, "collapsed": new_collapsed}
+            entry = {
+                **_cwd_group_entry(
+                    label=new_label,
+                    collapsed=new_collapsed,
+                    hidden=new_hidden,
+                    hidden_after_live_start_ts=new_hidden_after_live_start_ts,
+                )
+            }
 
-            if not new_label and not new_collapsed:
+            if not new_label and not new_collapsed and not new_hidden:
                 self._cwd_groups.pop(normalized_cwd, None)
             else:
                 self._cwd_groups[normalized_cwd] = entry
@@ -4867,12 +5397,24 @@ class SessionManager:
             q = qmap.get(session_id)
             if not isinstance(q, list) or not q:
                 return []
-            return list(q)
+            out: list[str] = []
+            for item in q:
+                text = _queue_item_display_text(item)
+                if text is not None:
+                    out.append(text)
+            return out
 
-    def _queue_enqueue_local(self, session_id: str, text: str) -> dict[str, Any]:
+    def _queue_enqueue_local(
+        self,
+        session_id: str,
+        text: str,
+        *,
+        images: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
         t = str(text)
         if not t.strip():
             raise ValueError("text required")
+        clean_images = list(images or [])
         touched_ts: float | None = None
         with self._lock:
             s = self._sessions.get(session_id)
@@ -4882,7 +5424,7 @@ class SessionManager:
             if not isinstance(q, list):
                 q = []
                 self._queues[session_id] = q
-            q.append(t)
+            q.append({"text": t, "images": clean_images} if clean_images else t)
             ql = len(q)
             if s.backend == "pi":
                 touched_ts = _touch_session_file(s.session_path)
@@ -4923,7 +5465,9 @@ class SessionManager:
                 self._queues[session_id] = q
             if index < 0 or index >= len(q):
                 raise ValueError("index out of range")
-            q[int(index)] = t
+            current = q[int(index)]
+            images = _queue_item_images(current)
+            q[int(index)] = {"text": t, "images": images} if images else t
             ql = len(q)
         self._save_queues()
         return {"ok": True, "queue_len": int(ql)}
@@ -5276,7 +5820,16 @@ class SessionManager:
             if not isinstance(q, list) or not q:
                 s0.queue_idle_since = None
                 return False
-            text = q[0]
+            item = q[0]
+            text = _queue_item_text(item)
+            if text is None:
+                q.pop(0)
+                if not q:
+                    self._queues.pop(session_id, None)
+                self._save_queues()
+                s0.queue_idle_since = None
+                return False
+            images = _queue_item_images(item)
             log_path = s0.log_path
         try:
             st = self.get_state(session_id)
@@ -5326,7 +5879,7 @@ class SessionManager:
             if (float(now_ts) - idle_since) < QUEUE_IDLE_GRACE_SECONDS:
                 return False
         try:
-            self.send(session_id, text)
+            self.send(session_id, text, images=images)
         except Exception:
             with self._lock:
                 s0 = self._sessions.get(session_id)
@@ -5338,7 +5891,7 @@ class SessionManager:
             s0 = self._sessions.get(session_id)
             if s0:
                 s0.queue_idle_since = None
-            if isinstance(q, list) and q and q[0] == text:
+            if isinstance(q, list) and q and q[0] == item:
                 q.pop(0)
                 if not q:
                     self._queues.pop(session_id, None)
@@ -5549,11 +6102,34 @@ class SessionManager:
                 _unlink_quiet(meta_path)
                 continue
             resume_session_id = _clean_optional_text(meta.get("resume_session_id"))
+            observed_updated_ts = _clean_hidden_session_cutoff_ts(
+                meta.get("updated_ts", meta.get("start_ts"))
+            )
+            if backend == "pi":
+                observed_activity_ts = _session_file_activity_ts(session_path)
+                if observed_activity_ts is not None:
+                    observed_updated_ts = (
+                        observed_activity_ts
+                        if observed_updated_ts is None
+                        else max(observed_updated_ts, observed_activity_ts)
+                    )
+            hidden_keys = self._hidden_session_keys(
+                session_id,
+                thread_id,
+                resume_session_id,
+                agent_backend,
+                include_historical_identity=False,
+            )
+            if observed_updated_ts is not None:
+                self._maybe_unhide_session_keys(
+                    hidden_keys, seen_updated_ts=observed_updated_ts
+                )
             if self._session_is_hidden(
                 session_id,
                 thread_id,
                 resume_session_id,
                 agent_backend,
+                include_historical_identity=False,
             ):
                 if (not _pid_alive(codex_pid)) and (not _pid_alive(broker_pid)):
                     self._unhide_session(session_id)
@@ -5823,6 +6399,7 @@ class SessionManager:
         self._update_meta_counters()
         files_dirty = False
         sidebar_dirty = False
+        hidden_dirty = False
         now_ts = time.time()
         with self._lock:
             items: list[dict[str, Any]] = []
@@ -6042,6 +6619,7 @@ class SessionManager:
                         "final_priority": final_priority,
                         "blocked": blocked,
                         "snoozed": snoozed,
+                        **_session_takeover_flags(s),
                     }
                 )
 
@@ -6050,14 +6628,27 @@ class SessionManager:
                     live_resume_keys=live_resume_keys,
                     now_ts=now_ts,
                 ):
-                    if hidden_sessions.intersection(
-                        self._hidden_session_keys(
-                            hist.get("session_id"),
-                            hist.get("thread_id"),
-                            hist.get("resume_session_id"),
-                            hist.get("agent_backend"),
+                    hidden_keys = self._hidden_session_keys(
+                        hist.get("session_id"),
+                        hist.get("thread_id"),
+                        hist.get("resume_session_id"),
+                        hist.get("agent_backend"),
+                    )
+                    observed_updated_ts = _clean_hidden_session_cutoff_ts(
+                        hist.get("updated_ts", hist.get("start_ts"))
+                    )
+                    if observed_updated_ts is not None:
+                        hidden_dirty = (
+                            self._maybe_unhide_session_keys_locked(
+                                hidden_keys, seen_updated_ts=observed_updated_ts
+                            )
+                            or hidden_dirty
                         )
-                    ):
+                        hidden_sessions = set(getattr(self, "_hidden_sessions", set()))
+                        hidden_sessions.update(
+                            getattr(self, "_hidden_session_cutoffs", {}).keys()
+                        )
+                    if hidden_sessions.intersection(hidden_keys):
                         continue
                     items.append(hist)
 
@@ -6100,6 +6691,8 @@ class SessionManager:
             self._maybe_drain_session_queue(str(item["session_id"]))
         if files_dirty:
             self._save_files()
+        if hidden_dirty:
+            self._save_hidden_sessions()
         if sidebar_dirty:
             self._save_sidebar_meta()
         out.sort(
@@ -7427,6 +8020,11 @@ class SessionManager:
         return _spawn_result_from_meta(meta)
 
     def delete_session(self, session_id: str) -> bool:
+        historical_row = _historical_session_row(session_id)
+        if historical_row is not None:
+            self._hide_session(session_id)
+            self._clear_deleted_session_state(session_id)
+            return True
         with self._lock:
             s = self._sessions.get(session_id)
         if not s:
@@ -7443,7 +8041,12 @@ class SessionManager:
         return ok
 
     def send(
-        self, session_id: str, text: str, *, from_web: bool = False
+        self,
+        session_id: str,
+        text: str,
+        *,
+        from_web: bool = False,
+        images: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         historical_row = _historical_session_row(session_id)
         if historical_row is not None:
@@ -7468,7 +8071,7 @@ class SessionManager:
             live_session_id = _clean_optional_text(spawn_res.get("session_id"))
             if live_session_id is None:
                 raise RuntimeError("spawned session did not return a session id")
-            resp = self.send(live_session_id, text, from_web=from_web)
+            resp = self.send(live_session_id, text, from_web=from_web, images=images)
             out = dict(resp)
             out["session_id"] = live_session_id
             out["backend"] = "pi"
@@ -7482,7 +8085,10 @@ class SessionManager:
         if from_web and _session_supports_idle_auto_stop(s):
             self._refresh_web_activity(session_id)
         try:
-            resp = self._sock_call(sock, {"cmd": "send", "text": text}, timeout_s=3.0)
+            req: dict[str, Any] = {"cmd": "send", "text": text}
+            if images and s.backend == "pi":
+                req["images"] = list(images)
+            resp = self._sock_call(sock, req, timeout_s=3.0)
         except Exception:
             if not _pid_alive(s.broker_pid) and not _pid_alive(s.codex_pid):
                 with self._lock:
@@ -7494,7 +8100,7 @@ class SessionManager:
             # Broker alive but socket temporarily unavailable (e.g. during
             # session switch).  Auto-enqueue so the message is delivered
             # once the broker becomes reachable again.
-            return self._queue_enqueue_local(session_id, text)
+            return self._queue_enqueue_local(session_id, text, images=images)
         error = resp.get("error")
         if isinstance(error, str) and error:
             raise ValueError(error)
@@ -7515,7 +8121,12 @@ class SessionManager:
         return resp
 
     def enqueue(
-        self, session_id: str, text: str, *, from_web: bool = False
+        self,
+        session_id: str,
+        text: str,
+        *,
+        from_web: bool = False,
+        images: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         historical_row = _historical_session_row(session_id)
         if historical_row is not None:
@@ -7540,7 +8151,7 @@ class SessionManager:
             live_session_id = _clean_optional_text(spawn_res.get("session_id"))
             if live_session_id is None:
                 raise RuntimeError("spawned session did not return a session id")
-            resp = self.enqueue(live_session_id, text, from_web=from_web)
+            resp = self.enqueue(live_session_id, text, from_web=from_web, images=images)
             out = dict(resp)
             out["session_id"] = live_session_id
             out["backend"] = "pi"
@@ -7552,7 +8163,7 @@ class SessionManager:
                 s = self._sessions.get(session_id)
             if s is not None and _session_supports_idle_auto_stop(s):
                 self._refresh_web_activity(session_id)
-        return self._queue_enqueue_local(session_id, text)
+        return self._queue_enqueue_local(session_id, text, images=images)
 
     def queue_list(self, session_id: str) -> list[str]:
         with self._lock:
@@ -8234,6 +8845,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return
                 t0 = time.perf_counter()
                 qs = urllib.parse.parse_qs(u.query)
+                view = (
+                    str(qs.get("view", ["directories"])[0] or "directories")
+                    .strip()
+                    .lower()
+                )
+                if view not in {"directories", "recent"}:
+                    _json_response(
+                        self, 400, {"error": "unsupported sessions view", "view": view}
+                    )
+                    return
                 group_key_q = qs.get("group_key")
                 group_key = group_key_q[0] if group_key_q else None
                 offset = max(0, int(qs.get("offset", ["0"])[0] or "0"))
@@ -8242,8 +8863,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     min(
                         50,
                         int(
-                            qs.get("limit", [str(SESSION_LIST_GROUP_PAGE_SIZE)])[0]
-                            or str(SESSION_LIST_GROUP_PAGE_SIZE)
+                            qs.get("limit", [str(SESSION_LIST_RECENT_PAGE_SIZE)])[0]
+                            or str(SESSION_LIST_RECENT_PAGE_SIZE)
                         ),
                     ),
                 )
@@ -8260,14 +8881,34 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         ),
                     ),
                 )
-                payload = _session_list_payload(
-                    MANAGER.list_sessions(),
-                    group_key=group_key,
-                    offset=offset,
-                    limit=limit,
-                    group_offset=group_offset,
-                    group_limit=group_limit,
-                )
+                rows = MANAGER.list_sessions()
+                cwd_groups = MANAGER.cwd_groups_get()
+                if view == "recent":
+                    if group_key is not None or group_offset > 0 or "group_limit" in qs:
+                        _json_response(
+                            self,
+                            400,
+                            {
+                                "error": "group pagination is not supported for recent view"
+                            },
+                        )
+                        return
+                    payload = _session_recent_payload(
+                        rows,
+                        cwd_groups=cwd_groups,
+                        offset=offset,
+                        limit=limit,
+                    )
+                else:
+                    payload = _session_list_payload(
+                        rows,
+                        cwd_groups=cwd_groups,
+                        group_key=group_key,
+                        offset=offset,
+                        limit=max(1, min(50, limit or SESSION_LIST_GROUP_PAGE_SIZE)),
+                        group_offset=group_offset,
+                        group_limit=group_limit,
+                    )
                 dt_ms = (time.perf_counter() - t0) * 1000.0
                 _record_metric("api_sessions_ms", dt_ms)
                 _json_response(self, 200, payload)
@@ -9196,8 +9837,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 t0_meta = time.perf_counter()
                 MANAGER.refresh_session_meta(session_id, strict=False)
                 dt_meta_ms = (time.perf_counter() - t0_meta) * 1000.0
+                historical_row = _historical_session_row(session_id)
                 s = MANAGER.get_session(session_id)
-                if not s:
+                if not s and historical_row is None:
                     _json_response(self, 404, {"error": "unknown session"})
                     return
                 qs = urllib.parse.parse_qs(u.query)
@@ -9235,7 +9877,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     limit=limit,
                     before=before,
                 )
-                if isinstance(payload.get("diag"), dict) and s.backend != "pi":
+                if (
+                    isinstance(payload.get("diag"), dict)
+                    and s is not None
+                    and s.backend != "pi"
+                ):
                     payload["diag"]["meta_refresh_ms"] = round(dt_meta_ms, 3)
                 _json_response(self, 200, payload)
                 dt_total_ms = (time.perf_counter() - t0_total) * 1000.0
@@ -9257,6 +9903,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     _json_response(self, 404, {"error": "unknown session"})
                     return
                 _json_response(self, 200, {"tail": tail})
+                return
+
+            if path.startswith("/api/sessions/") and path.endswith("/takeover"):
+                if not _require_auth(self):
+                    self._unauthorized()
+                    return
+                parts = path.split("/")
+                session_id = parts[3] if len(parts) >= 4 else ""
+                if not session_id:
+                    _json_response(self, 404, {"error": "unknown session"})
+                    return
+                descriptor = _session_takeover_descriptor(
+                    MANAGER.get_session(session_id)
+                )
+                _json_response(self, 200, descriptor)
                 return
 
             if path.startswith("/api/sessions/") and path.endswith("/harness"):
@@ -9318,6 +9979,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         cwd=obj.get("cwd"),
                         label=obj.get("label"),
                         collapsed=obj.get("collapsed"),
+                        hidden=obj.get("hidden"),
+                        hidden_after_live_start_ts=obj.get(
+                            "hidden_after_live_start_ts"
+                        ),
                     )
                 except ValueError as e:
                     _json_response(self, 400, {"error": str(e)})
@@ -9375,6 +10040,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     _json_response(self, 400, {"error": str(e)})
                     return
                 _json_response(self, 200, {"ok": True, **payload})
+                return
+
+            if path.startswith("/api/sessions/") and path.endswith("/takeover/open"):
+                if not _require_auth(self):
+                    self._unauthorized()
+                    return
+                parts = path.split("/")
+                session_id = parts[3] if len(parts) >= 4 else ""
+                if not session_id:
+                    _json_response(self, 404, {"error": "unknown session"})
+                    return
+                descriptor = _session_takeover_descriptor(
+                    MANAGER.get_session(session_id)
+                )
+                if not bool(descriptor.get("eligible")):
+                    _json_response(self, 200, descriptor)
+                    return
+                _json_response(self, 200, _open_takeover_terminal(descriptor))
                 return
 
             if path == "/api/notifications/subscription":
@@ -9932,7 +10615,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     _json_response(self, 400, {"error": "text required"})
                     return
                 try:
-                    res = MANAGER.send(session_id, text, from_web=True)
+                    images = _normalize_pi_image_inputs(obj.get("images"))
+                except ValueError as e:
+                    _json_response(self, 400, {"error": str(e)})
+                    return
+                try:
+                    res = MANAGER.send(
+                        session_id,
+                        text,
+                        from_web=True,
+                        images=images or None,
+                    )
                 except KeyError:
                     _json_response(self, 404, {"error": "unknown session"})
                     return
@@ -9984,7 +10677,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     _json_response(self, 400, {"error": "text required"})
                     return
                 try:
-                    res = MANAGER.enqueue(session_id, text, from_web=True)
+                    images = _normalize_pi_image_inputs(obj.get("images"))
+                except ValueError as e:
+                    _json_response(self, 400, {"error": str(e)})
+                    return
+                try:
+                    res = MANAGER.enqueue(
+                        session_id,
+                        text,
+                        from_web=True,
+                        images=images or None,
+                    )
                 except KeyError:
                     _json_response(self, 404, {"error": "unknown session"})
                     return

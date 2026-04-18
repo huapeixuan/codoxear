@@ -1,13 +1,17 @@
 import { api } from "../../lib/api";
 import type { CwdGroupMeta, NewSessionDefaults, SessionSummary } from "../../lib/types";
 
+export type SessionsViewMode = "directories" | "recent";
+
 export interface SessionsState {
   items: SessionSummary[];
   activeSessionId: string | null;
   loading: boolean;
   bootstrapLoaded: boolean;
+  viewMode: SessionsViewMode;
   remainingByGroup: Record<string, number>;
   omittedGroupCount: number;
+  remainingRecentCount: number;
   newSessionDefaults: NewSessionDefaults | null;
   recentCwds: string[];
   cwdGroups: Record<string, CwdGroupMeta>;
@@ -25,12 +29,31 @@ export interface SessionsStore {
   refreshBootstrap(): Promise<void>;
   loadMoreGroup(groupKey: string, limit?: number): Promise<void>;
   loadMoreGroups(limit?: number): Promise<void>;
+  loadMoreRecent(limit?: number): Promise<void>;
   select(sessionId: string): void;
+  setViewMode(viewMode: SessionsViewMode): Promise<void>;
 }
 
 const FALLBACK_GROUP_KEY = "__no_working_directory__";
 const GROUP_PAGE_SIZE = 5;
 const GROUPS_PAGE_SIZE = 3;
+const RECENT_PAGE_SIZE = 20;
+const STORAGE_KEY = "sessionsViewMode";
+
+function readPersistedViewMode(): SessionsViewMode {
+  if (typeof window === "undefined" || typeof window.localStorage === "undefined") {
+    return "directories";
+  }
+  const raw = window.localStorage.getItem(STORAGE_KEY);
+  return raw === "recent" ? "recent" : "directories";
+}
+
+function persistViewMode(viewMode: SessionsViewMode) {
+  if (typeof window === "undefined" || typeof window.localStorage === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(STORAGE_KEY, viewMode);
+}
 
 function sessionGroupKey(session: SessionSummary) {
   const cwd = String(session.cwd || "").trim();
@@ -101,14 +124,35 @@ function replaceGroupRows(items: SessionSummary[], groupKey: string, groupRows: 
   return next;
 }
 
+function resolveNextActiveSessionId(
+  currentActiveSessionId: string | null,
+  representativeBySessionId: Map<string, string>,
+  sessions: SessionSummary[],
+  hasResolvedInitialSelection: boolean,
+  options?: RefreshSessionsOptions,
+) {
+  const sessionIds = new Set(sessions.map((session) => session.session_id));
+  const activeRepresentativeSessionId = currentActiveSessionId
+    ? representativeBySessionId.get(currentActiveSessionId) ?? currentActiveSessionId
+    : null;
+  const preservedActiveSessionId = activeRepresentativeSessionId && sessionIds.has(activeRepresentativeSessionId)
+    ? activeRepresentativeSessionId
+    : null;
+  return options?.preferNewest
+    ? sessions[0]?.session_id ?? null
+    : preservedActiveSessionId ?? (!hasResolvedInitialSelection ? sessions[0]?.session_id ?? null : null);
+}
+
 export function createSessionsStore(): SessionsStore {
   let state: SessionsState = {
     items: [],
     activeSessionId: null,
     loading: false,
     bootstrapLoaded: false,
+    viewMode: readPersistedViewMode(),
     remainingByGroup: {},
     omittedGroupCount: 0,
+    remainingRecentCount: 0,
     newSessionDefaults: null,
     recentCwds: [],
     cwdGroups: {},
@@ -120,6 +164,7 @@ export function createSessionsStore(): SessionsStore {
   let hasResolvedInitialSelection = false;
   let revealedGroupKeys: string[] = [];
   let loadedGroupLimits: Record<string, number> = {};
+  let recentLoadedCount = 0;
 
   const emit = () => {
     for (const listener of listeners) {
@@ -127,7 +172,107 @@ export function createSessionsStore(): SessionsStore {
     }
   };
 
-  return {
+  async function refreshDirectories(options?: RefreshSessionsOptions) {
+    const data = await api.listSessions({ view: "directories" });
+    const baseDeduped = dedupeSessions(Array.isArray(data.sessions) ? data.sessions : []);
+    let sessions = baseDeduped.sessions;
+    const representativeBySessionId = new Map(baseDeduped.representativeBySessionId);
+    const remainingByGroup: Record<string, number> = { ...(data.remaining_by_group ?? {}) };
+    const baseGroupKeys = new Set(orderedGroupKeys(sessions));
+    const extraGroupKeys = revealedGroupKeys.filter((groupKey) => !baseGroupKeys.has(groupKey));
+    const groupKeysToRefresh = Array.from(new Set([
+      ...Object.keys(loadedGroupLimits),
+      ...extraGroupKeys,
+    ]));
+
+    if (groupKeysToRefresh.length > 0) {
+      const groupResponses = await Promise.all(groupKeysToRefresh.map(async (groupKey) => {
+        const desiredLimit = Math.max(GROUP_PAGE_SIZE, Number(loadedGroupLimits[groupKey] || 0) || GROUP_PAGE_SIZE);
+        const response = await api.listSessions({ view: "directories", groupKey, offset: 0, limit: desiredLimit });
+        const deduped = dedupeSessions(Array.isArray(response.sessions) ? response.sessions : []);
+        for (const [sessionId, representativeId] of deduped.representativeBySessionId.entries()) {
+          representativeBySessionId.set(sessionId, representativeId);
+        }
+        return {
+          groupKey,
+          sessions: deduped.sessions,
+          remaining: Number(response.remaining_by_group?.[groupKey] || 0),
+        };
+      }));
+
+      const aliveRevealedGroupKeys: string[] = [];
+      for (const response of groupResponses) {
+        if (response.sessions.length > 0) {
+          sessions = replaceGroupRows(sessions, response.groupKey, response.sessions);
+          if (revealedGroupKeys.includes(response.groupKey) && !baseGroupKeys.has(response.groupKey)) {
+            aliveRevealedGroupKeys.push(response.groupKey);
+          }
+        }
+        if (response.remaining > 0) {
+          remainingByGroup[response.groupKey] = response.remaining;
+        } else {
+          delete remainingByGroup[response.groupKey];
+        }
+        if (response.sessions.length <= 0) {
+          delete loadedGroupLimits[response.groupKey];
+        }
+      }
+
+      revealedGroupKeys = revealedGroupKeys.filter((groupKey) => {
+        if (baseGroupKeys.has(groupKey)) {
+          return true;
+        }
+        return aliveRevealedGroupKeys.includes(groupKey);
+      });
+    }
+
+    const combinedSessions = dedupeSessions(sessions).sessions;
+    const revealedHiddenGroupCount = extraGroupKeys.filter((groupKey) => revealedGroupKeys.includes(groupKey)).length;
+    const nextActiveSessionId = resolveNextActiveSessionId(
+      state.activeSessionId,
+      representativeBySessionId,
+      combinedSessions,
+      hasResolvedInitialSelection,
+      options,
+    );
+    if (nextActiveSessionId) {
+      hasResolvedInitialSelection = true;
+    }
+
+    return {
+      items: combinedSessions,
+      activeSessionId: nextActiveSessionId,
+      remainingByGroup,
+      omittedGroupCount: Math.max(0, Number(data.omitted_group_count || 0) - revealedHiddenGroupCount),
+      remainingRecentCount: 0,
+    };
+  }
+
+  async function refreshRecent(options?: RefreshSessionsOptions) {
+    const data = await api.listSessions({ view: "recent", limit: Math.max(RECENT_PAGE_SIZE, recentLoadedCount || 0) || RECENT_PAGE_SIZE });
+    const deduped = dedupeSessions(Array.isArray(data.sessions) ? data.sessions : []);
+    const sessions = deduped.sessions;
+    const nextActiveSessionId = resolveNextActiveSessionId(
+      state.activeSessionId,
+      deduped.representativeBySessionId,
+      sessions,
+      hasResolvedInitialSelection,
+      options,
+    );
+    if (nextActiveSessionId) {
+      hasResolvedInitialSelection = true;
+    }
+    recentLoadedCount = sessions.length;
+    return {
+      items: sessions,
+      activeSessionId: nextActiveSessionId,
+      remainingByGroup: {},
+      omittedGroupCount: 0,
+      remainingRecentCount: Math.max(0, Number(data.remaining || 0)),
+    };
+  }
+
+  const store: SessionsStore = {
     getState: () => state,
     subscribe(listener: () => void) {
       listeners.add(listener);
@@ -141,85 +286,22 @@ export function createSessionsStore(): SessionsStore {
       emit();
 
       try {
-        const data = await api.listSessions();
+        const nextViewMode = state.viewMode;
+        const refreshResult = nextViewMode === "recent"
+          ? await refreshRecent(options)
+          : await refreshDirectories(options);
+        if (nextViewMode === "recent") {
+          recentLoadedCount = refreshResult.items.length;
+        } else {
+          recentLoadedCount = 0;
+        }
         if (refreshId !== currentRefreshId) {
           return;
         }
-        const baseDeduped = dedupeSessions(Array.isArray(data.sessions) ? data.sessions : []);
-        let sessions = baseDeduped.sessions;
-        const representativeBySessionId = new Map(baseDeduped.representativeBySessionId);
-        const remainingByGroup: Record<string, number> = { ...(data.remaining_by_group ?? {}) };
-        const baseGroupKeys = new Set(orderedGroupKeys(sessions));
-        const extraGroupKeys = revealedGroupKeys.filter((groupKey) => !baseGroupKeys.has(groupKey));
-        const groupKeysToRefresh = Array.from(new Set([
-          ...Object.keys(loadedGroupLimits),
-          ...extraGroupKeys,
-        ]));
-
-        if (groupKeysToRefresh.length > 0) {
-          const groupResponses = await Promise.all(groupKeysToRefresh.map(async (groupKey) => {
-            const desiredLimit = Math.max(GROUP_PAGE_SIZE, Number(loadedGroupLimits[groupKey] || 0) || GROUP_PAGE_SIZE);
-            const response = await api.listSessions({ groupKey, offset: 0, limit: desiredLimit });
-            const deduped = dedupeSessions(Array.isArray(response.sessions) ? response.sessions : []);
-            for (const [sessionId, representativeId] of deduped.representativeBySessionId.entries()) {
-              representativeBySessionId.set(sessionId, representativeId);
-            }
-            return {
-              groupKey,
-              sessions: deduped.sessions,
-              remaining: Number(response.remaining_by_group?.[groupKey] || 0),
-            };
-          }));
-
-          const aliveRevealedGroupKeys: string[] = [];
-          for (const response of groupResponses) {
-            if (response.sessions.length > 0) {
-              sessions = replaceGroupRows(sessions, response.groupKey, response.sessions);
-              if (revealedGroupKeys.includes(response.groupKey) && !baseGroupKeys.has(response.groupKey)) {
-                aliveRevealedGroupKeys.push(response.groupKey);
-              }
-            }
-            if (response.remaining > 0) {
-              remainingByGroup[response.groupKey] = response.remaining;
-            } else {
-              delete remainingByGroup[response.groupKey];
-            }
-            if (response.sessions.length <= 0) {
-              delete loadedGroupLimits[response.groupKey];
-            }
-          }
-
-          revealedGroupKeys = revealedGroupKeys.filter((groupKey) => {
-            if (baseGroupKeys.has(groupKey)) {
-              return true;
-            }
-            return aliveRevealedGroupKeys.includes(groupKey);
-          });
-        }
-
-        const combinedSessions = dedupeSessions(sessions).sessions;
-        const revealedHiddenGroupCount = extraGroupKeys.filter((groupKey) => revealedGroupKeys.includes(groupKey)).length;
-        const sessionIds = new Set(combinedSessions.map((session) => session.session_id));
-        const activeRepresentativeSessionId = state.activeSessionId
-          ? representativeBySessionId.get(state.activeSessionId) ?? state.activeSessionId
-          : null;
-        const preservedActiveSessionId = activeRepresentativeSessionId && sessionIds.has(activeRepresentativeSessionId)
-          ? activeRepresentativeSessionId
-          : null;
-        const nextActiveSessionId = options?.preferNewest
-          ? sessions[0]?.session_id ?? null
-          : preservedActiveSessionId
-            ?? (!hasResolvedInitialSelection ? sessions[0]?.session_id ?? null : null);
-        if (nextActiveSessionId) {
-          hasResolvedInitialSelection = true;
-        }
         state = {
           ...state,
-          items: combinedSessions,
-          activeSessionId: nextActiveSessionId,
+          ...refreshResult,
           loading: false,
-          remainingByGroup,
-          omittedGroupCount: Math.max(0, Number(data.omitted_group_count || 0) - revealedHiddenGroupCount),
         };
         emit();
       } catch (error) {
@@ -249,8 +331,11 @@ export function createSessionsStore(): SessionsStore {
       emit();
     },
     async loadMoreGroup(groupKey: string, limit = GROUP_PAGE_SIZE) {
+      if (state.viewMode !== "directories") {
+        return;
+      }
       const offset = state.items.filter((session) => sessionGroupKey(session) === groupKey).length;
-      const data = await api.listSessions({ groupKey, offset, limit });
+      const data = await api.listSessions({ view: "directories", groupKey, offset, limit });
       const appended = Array.isArray(data.sessions) ? data.sessions : [];
       const existingIds = new Set(state.items.map((session) => session.session_id));
       const uniqueAppended = appended.filter((session) => !existingIds.has(session.session_id));
@@ -270,15 +355,19 @@ export function createSessionsStore(): SessionsStore {
       emit();
     },
     async loadMoreGroups(limit = GROUPS_PAGE_SIZE) {
+      if (state.viewMode !== "directories") {
+        return;
+      }
       const loadedGroups = new Set(state.items.map((session) => sessionGroupKey(session)));
       const data = await api.listSessions({
+        view: "directories",
         groupOffset: loadedGroups.size,
         groupLimit: limit,
       });
       const appended = Array.isArray(data.sessions) ? data.sessions : [];
       const existingIds = new Set(state.items.map((session) => session.session_id));
       const uniqueAppended = appended.filter((session) => !existingIds.has(session.session_id));
-      for (const groupKey of orderedGroupKeys(uniqueAppended)) {
+      for (const groupKey of orderedGroupKeys([...state.items, ...uniqueAppended])) {
         if (!revealedGroupKeys.includes(groupKey)) {
           revealedGroupKeys.push(groupKey);
         }
@@ -291,10 +380,37 @@ export function createSessionsStore(): SessionsStore {
       };
       emit();
     },
+    async loadMoreRecent(limit = RECENT_PAGE_SIZE) {
+      if (state.viewMode !== "recent") {
+        return;
+      }
+      const offset = state.items.length;
+      const data = await api.listSessions({ view: "recent", offset, limit });
+      const appended = Array.isArray(data.sessions) ? data.sessions : [];
+      const deduped = dedupeSessions([...state.items, ...appended]).sessions;
+      recentLoadedCount = deduped.length;
+      state = {
+        ...state,
+        items: deduped,
+        remainingRecentCount: Math.max(0, Number(data.remaining || 0)),
+      };
+      emit();
+    },
     select(sessionId: string) {
       hasResolvedInitialSelection = true;
       state = { ...state, activeSessionId: sessionId };
       emit();
     },
+    async setViewMode(viewMode: SessionsViewMode) {
+      if (state.viewMode === viewMode) {
+        return;
+      }
+      persistViewMode(viewMode);
+      state = { ...state, viewMode };
+      emit();
+      await store.refresh();
+    },
   };
+
+  return store;
 }

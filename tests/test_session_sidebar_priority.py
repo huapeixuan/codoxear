@@ -3,6 +3,7 @@ import time
 import unittest
 import tempfile
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -150,6 +151,47 @@ class TestSessionSidebarPriority(unittest.TestCase):
             all(str(row["session_id"]).startswith("history:") for row in rows)
         )
         self.assertEqual({row["cwd"] for row in rows}, {"/repo"})
+
+    def test_list_sessions_keeps_older_historical_workspaces_beyond_global_200_cutoff(
+        self,
+    ) -> None:
+        mgr = _make_manager()
+        mgr._include_historical_sessions = True
+        with tempfile.TemporaryDirectory() as td:
+            pi_root = Path(td) / "pi-native"
+            base_ts = 1_700_000_000
+            for idx in range(205):
+                session_path = (
+                    pi_root
+                    / f"--repo-{idx:03d}--"
+                    / f"2026-04-10T01-00-{idx:03d}Z_session-{idx:03d}.jsonl"
+                )
+                _write_jsonl(
+                    session_path,
+                    [
+                        {
+                            "type": "session",
+                            "id": f"resume-{idx:03d}",
+                            "cwd": f"/repo-{idx:03d}",
+                            "timestamp": "2026-04-10T01:00:00Z",
+                        }
+                    ],
+                )
+                ts = float(base_ts - idx)
+                session_path.touch()
+                session_path.chmod(0o644)
+                os.utime(session_path, (ts, ts))
+
+            with (
+                patch("codoxear.server._iter_session_logs", return_value=[]),
+                patch("codoxear.server.PI_NATIVE_SESSIONS_DIR", pi_root),
+            ):
+                rows = mgr.list_sessions()
+
+        historical_rows = [row for row in rows if row.get("historical")]
+        self.assertEqual(len(historical_rows), 205)
+        self.assertEqual(historical_rows[-1]["session_id"], "history:pi:resume-204")
+        self.assertEqual(historical_rows[-1]["cwd"], "/repo-204")
 
     def test_list_sessions_skips_historical_entry_when_matching_live_session_exists(
         self,
@@ -314,7 +356,7 @@ class TestSessionSidebarPriority(unittest.TestCase):
         self.assertNotIn("target", mgr._harness)
         self.assertNotIn("sid:target", mgr._files)
         self.assertIsNone(mgr._sidebar_meta["blocked"].get("dependency_session_id"))
-        self.assertIn("target", mgr._hidden_sessions)
+        self.assertIn("target", mgr._hidden_session_cutoffs)
 
     def test_kill_session_falls_back_to_pid_teardown_when_socket_is_dead(self) -> None:
         mgr = _make_manager()
@@ -590,6 +632,29 @@ class TestSessionSidebarPriority(unittest.TestCase):
         self.assertEqual(rows[0]["tmux_session"], "codoxear")
         self.assertEqual(rows[0]["tmux_window"], "current-abcd12")
 
+    def test_list_sessions_exposes_tmux_takeover_capability(self) -> None:
+        mgr = _make_manager()
+        now = time.time()
+        current = _session(sid="current", start_ts=now - 100, last_chat_ts=now - 5)
+        current.agent_backend = "pi"
+        current.backend = "pi"
+        current.owned = True
+        current.transport = "pi-rpc"
+        current.tmux_session = "codoxear"
+        current.tmux_window = "current-abcd12"
+        current.sock_path = Path("/tmp/current.sock")
+        mgr._sessions = {current.session_id: current}
+        mgr.idle_from_log = lambda _sid: True  # type: ignore[method-assign]
+
+        with (
+            patch("codoxear.server._tmux_window_exists", return_value=True),
+            patch("pathlib.Path.exists", return_value=True),
+        ):
+            rows = mgr.list_sessions()
+
+        self.assertEqual(rows[0]["can_takeover_in_tmux"], True)
+        self.assertIsNone(rows[0]["takeover_reason_unavailable"])
+
     def test_list_sessions_falls_back_to_log_run_settings(self) -> None:
         mgr = _make_manager()
         now = time.time()
@@ -680,6 +745,42 @@ class TestSessionSidebarPriority(unittest.TestCase):
                     "label": "Integer",
                     "collapsed": False,
                 },
+            },
+        )
+
+    def test_load_cwd_groups_round_trips_hidden_fields(self) -> None:
+        mgr = _make_manager()
+        with tempfile.TemporaryDirectory() as td:
+            groups_path = Path(td) / "cwd_groups.json"
+            cwd_raw = str(Path(td) / "project")
+            expected_normalized = str(Path(cwd_raw).resolve(strict=False))
+            groups_path.write_text(
+                json.dumps(
+                    {
+                        cwd_raw: {
+                            "label": "Project",
+                            "collapsed": False,
+                            "hidden": True,
+                            "hidden_after_live_start_ts": 123.5,
+                        }
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with patch("codoxear.server.CWD_GROUPS_PATH", groups_path):
+                mgr._load_cwd_groups()
+
+        self.assertEqual(
+            mgr.cwd_groups_get(),
+            {
+                expected_normalized: {
+                    "label": "Project",
+                    "collapsed": False,
+                    "hidden": True,
+                    "hidden_after_live_start_ts": 123.5,
+                }
             },
         )
 
@@ -795,6 +896,29 @@ class TestSessionSidebarPriority(unittest.TestCase):
         self.assertEqual(meta, {"label": "Foo", "collapsed": True})
         self.assertEqual(mgr.cwd_groups_get()[normalized], meta)
 
+    def test_cwd_group_set_round_trips_hidden_metadata(self) -> None:
+        mgr = _make_manager()
+        cwd = "/tmp/foo"
+        mgr._recent_cwds = {cwd: time.time()}
+
+        normalized, meta = mgr.cwd_group_set(
+            cwd=cwd,
+            label="Foo",
+            hidden=True,
+            hidden_after_live_start_ts=456.25,
+        )
+
+        self.assertEqual(
+            meta,
+            {
+                "label": "Foo",
+                "collapsed": False,
+                "hidden": True,
+                "hidden_after_live_start_ts": 456.25,
+            },
+        )
+        self.assertEqual(mgr.cwd_groups_get()[normalized], meta)
+
     def test_cwd_group_set_drops_empty_default_entries_from_serialized_store(
         self,
     ) -> None:
@@ -831,6 +955,37 @@ class TestSessionSidebarPriority(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "collapsed must be a boolean"):
             mgr.cwd_group_set(cwd="/tmp", collapsed="not-a-bool")  # type: ignore
 
+    def test_cwd_group_set_rejects_non_boolean_hidden(self) -> None:
+        mgr = _make_manager()
+        mgr._recent_cwds = {"/tmp": time.time()}
+        with self.assertRaisesRegex(ValueError, "hidden must be a boolean"):
+            mgr.cwd_group_set(cwd="/tmp", hidden="not-a-bool")  # type: ignore[arg-type]
+
+    def test_cwd_groups_get_auto_unhides_when_new_live_session_appears(self) -> None:
+        mgr = _make_manager()
+        now = time.time()
+        session = _session(sid="docs", start_ts=now, last_chat_ts=now)
+        mgr._sessions = {session.session_id: session}
+        normalized = str(Path(session.cwd).resolve(strict=False))
+        mgr._cwd_groups = {
+            normalized: {
+                "label": "Docs",
+                "collapsed": False,
+                "hidden": True,
+                "hidden_after_live_start_ts": now - 10,
+            }
+        }
+
+        groups = mgr.cwd_groups_get()
+
+        self.assertEqual(
+            groups[normalized],
+            {
+                "label": "Docs",
+                "collapsed": False,
+            },
+        )
+
     def test_cwd_group_set_rejects_non_string_label(self) -> None:
         mgr = _make_manager()
         mgr._recent_cwds = {"/tmp": time.time()}
@@ -861,6 +1016,41 @@ class TestSessionSidebarPriority(unittest.TestCase):
 
         self.assertEqual(normalized, expected_normalized)
         self.assertEqual(meta, {"label": "Current", "collapsed": True})
+
+    def test_cwd_group_set_accepts_known_historical_session_cwd(self) -> None:
+        mgr = _make_manager()
+        mgr._include_historical_sessions = True
+
+        historical_rows = [
+            {
+                "session_id": "history:pi:resume-docs",
+                "resume_session_id": "resume-docs",
+                "agent_backend": "pi",
+                "backend": "pi",
+                "cwd": "/tmp/missing-docs",
+                "updated_ts": time.time() - 30,
+            }
+        ]
+
+        with patch(
+            "codoxear.server._historical_sidebar_items", return_value=historical_rows
+        ):
+            normalized, meta = mgr.cwd_group_set(
+                cwd="/tmp/missing-docs", hidden=True, hidden_after_live_start_ts=None
+            )
+
+        self.assertEqual(
+            normalized, str(Path("/tmp/missing-docs").resolve(strict=False))
+        )
+        self.assertEqual(
+            meta,
+            {
+                "label": "",
+                "collapsed": False,
+                "hidden": True,
+                "hidden_after_live_start_ts": None,
+            },
+        )
 
     def test_load_recent_cwds_skips_stale_directories(self) -> None:
         mgr = _make_manager()

@@ -32,6 +32,7 @@ export interface SessionSummary {
   owned?: boolean;
   busy?: boolean;
   queue_len?: number;
+  start_ts?: number;
   updated_ts?: number;
   git_branch?: string | null;
   model?: string | null;
@@ -53,6 +54,7 @@ export interface SessionsResponse {
   sessions: SessionSummary[];
   remaining_by_group?: Record<string, number>;
   omitted_group_count?: number;
+  remaining?: number;
 }
 
 export interface SessionBootstrapResponse {
@@ -99,6 +101,8 @@ export interface EditSessionResponse extends RenameSessionResponse {
 export interface CwdGroupMeta {
   label?: string;
   collapsed?: boolean;
+  hidden?: boolean;
+  hidden_after_live_start_ts?: number | null;
 }
 
 export interface LoginResponse {
@@ -110,6 +114,8 @@ export interface EditCwdGroupResponse {
   cwd?: string;
   label?: string;
   collapsed?: boolean;
+  hidden?: boolean;
+  hidden_after_live_start_ts?: number | null;
 }
 
 export interface LogoutResponse {
@@ -299,6 +305,16 @@ export interface SessionCommand {
 
 export interface SessionCommandsResponse {
   commands: SessionCommand[];
+}
+
+export interface SessionImageInput {
+  file_name: string;
+  mime_type: string;
+  data_b64: string;
+}
+
+export interface SessionMessagePayload {
+  images?: SessionImageInput[];
 }
 
 export interface AttachmentInjectResponse {

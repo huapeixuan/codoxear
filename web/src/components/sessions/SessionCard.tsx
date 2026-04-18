@@ -8,6 +8,7 @@ import type { SessionSummary } from "../../lib/types";
 interface SessionCardProps {
   session: SessionSummary;
   active: boolean;
+  subtitle?: string;
   onSelect: () => void;
   onEdit?: () => void;
   onDuplicate?: () => void;
@@ -54,7 +55,7 @@ export function useDesktopSessionActions() {
   return Boolean(window.matchMedia("(hover: hover) and (pointer: fine) and (min-width: 881px)").matches);
 }
 
-export function SessionCard({ session, active, onSelect, onEdit, onDuplicate, onDelete }: SessionCardProps) {
+export function SessionCard({ session, active, subtitle, onSelect, onEdit, onDuplicate, onDelete }: SessionCardProps) {
   const title = session.alias || session.first_user_message || session.title || shortSessionId(session.session_id);
   const isHistorical = session.historical === true;
   const desktopActions = useDesktopSessionActions();
@@ -94,6 +95,7 @@ export function SessionCard({ session, active, onSelect, onEdit, onDuplicate, on
             <div className="sessionCardMainRow">
               <div className="sessionTitleWrap">
                 <div id={titleId} className="sessionTitle">{title}</div>
+                {subtitle ? <div className="sessionCwdText">{subtitle}</div> : null}
               </div>
             </div>
             <div className="sessionCardFooterRow">

@@ -15,6 +15,7 @@ from typing import cast
 from unittest.mock import ANY
 from unittest.mock import patch
 
+import codoxear.server as server
 from codoxear import pi_messages
 from codoxear.server import Handler
 from codoxear.server import Session
@@ -1249,6 +1250,93 @@ class TestPiBackendRouting(unittest.TestCase):
         self.assertIn("codoxear.pi_broker", shell_cmd)
         wait_mock.assert_called_once()
 
+    def test_tmux_takeover_descriptor_for_live_pi_tmux_session(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            sock = Path(td) / "pi.sock"
+            sock.touch()
+            session = Session(
+                session_id="pi-session",
+                thread_id="pi-thread-001",
+                agent_backend="pi",
+                backend="pi",
+                broker_pid=3333,
+                codex_pid=4444,
+                owned=True,
+                start_ts=123.0,
+                cwd="/tmp/pi-cwd",
+                log_path=None,
+                sock_path=sock,
+                transport="pi-rpc",
+                tmux_session="codoxear",
+                tmux_window="codoxear-047445",
+            )
+
+            with patch("codoxear.server._tmux_window_exists", return_value=True):
+                payload = server._session_takeover_descriptor(session)
+
+        self.assertEqual(payload["eligible"], True)
+        self.assertEqual(
+            payload["attach_command"],
+            "tmux attach -t codoxear \\; select-window -t codoxear:codoxear-047445",
+        )
+
+    def test_tmux_takeover_descriptor_rejects_non_pi_rpc_session(self) -> None:
+        session = Session(
+            session_id="bad",
+            thread_id="thread-1",
+            agent_backend="codex",
+            backend="codex",
+            broker_pid=1,
+            codex_pid=2,
+            owned=True,
+            start_ts=1.0,
+            cwd="/tmp/project",
+            log_path=None,
+            sock_path=Path("/tmp/bad.sock"),
+            transport="tmux",
+            tmux_session="codoxear",
+            tmux_window="codoxear-123456",
+        )
+
+        payload = server._session_takeover_descriptor(session)
+
+        self.assertEqual(payload["eligible"], False)
+        self.assertIn("Pi", payload["reason"])
+
+    def test_open_takeover_uses_macos_osascript_launcher(self) -> None:
+        descriptor = {
+            "ok": True,
+            "eligible": True,
+            "attach_command": "tmux attach -t codoxear \\; select-window -t codoxear:win-1",
+        }
+
+        with (
+            patch("codoxear.server.sys.platform", "darwin"),
+            patch("codoxear.server.subprocess.Popen") as popen_mock,
+        ):
+            result = server._open_takeover_terminal(descriptor)
+
+        self.assertEqual(result["opened"], True)
+        popen_mock.assert_called_once()
+
+    def test_open_takeover_returns_copyable_fallback_when_no_launcher_exists(
+        self,
+    ) -> None:
+        descriptor = {
+            "ok": True,
+            "eligible": True,
+            "attach_command": "tmux attach -t codoxear \\; select-window -t codoxear:win-1",
+        }
+
+        with (
+            patch("codoxear.server.sys.platform", "linux"),
+            patch("codoxear.server.shutil.which", return_value=None),
+        ):
+            result = server._open_takeover_terminal(descriptor)
+
+        self.assertEqual(result["opened"], False)
+        self.assertIn("attach_command", result)
+
     def test_interrupt_routes_through_keys_for_pi_backend(self) -> None:
         mgr = _make_manager()
         with tempfile.TemporaryDirectory() as td:
@@ -1347,6 +1435,135 @@ class TestPiBackendRouting(unittest.TestCase):
         body = json.loads(handler.wfile.getvalue().decode("utf-8"))
         self.assertEqual(handler.status, 502)
         self.assertEqual(body, {"error": "prompt rejected"})
+
+    def test_send_endpoint_passes_pi_images_through_manager(self) -> None:
+        body = json.dumps(
+            {
+                "text": "hello pi",
+                "images": [
+                    {
+                        "file_name": "shot.png",
+                        "mime_type": "image/png",
+                        "data_b64": base64.b64encode(b"png-bytes").decode("ascii"),
+                    }
+                ],
+            }
+        ).encode("utf-8")
+        handler = _HandlerHarness("/api/sessions/pi-session/send", body=body)
+
+        with (
+            patch("codoxear.server._require_auth", return_value=True),
+            patch("codoxear.server.MANAGER") as manager,
+        ):
+            manager.send.return_value = {"ok": True}
+            Handler.do_POST(handler)  # type: ignore[arg-type]
+
+        self.assertEqual(handler.status, 200)
+        manager.send.assert_called_once_with(
+            "pi-session",
+            "hello pi",
+            from_web=True,
+            images=[
+                {
+                    "file_name": "shot.png",
+                    "mime_type": "image/png",
+                    "data_b64": base64.b64encode(b"png-bytes").decode("ascii"),
+                }
+            ],
+        )
+
+    def test_enqueue_endpoint_passes_pi_images_through_manager(self) -> None:
+        body = json.dumps(
+            {
+                "text": "after this",
+                "images": [
+                    {
+                        "file_name": "shot.png",
+                        "mime_type": "image/png",
+                        "data_b64": base64.b64encode(b"png-bytes").decode("ascii"),
+                    }
+                ],
+            }
+        ).encode("utf-8")
+        handler = _HandlerHarness("/api/sessions/pi-session/enqueue", body=body)
+
+        with (
+            patch("codoxear.server._require_auth", return_value=True),
+            patch("codoxear.server.MANAGER") as manager,
+        ):
+            manager.enqueue.return_value = {"queued": True, "queue_len": 1}
+            Handler.do_POST(handler)  # type: ignore[arg-type]
+
+        self.assertEqual(handler.status, 200)
+        manager.enqueue.assert_called_once_with(
+            "pi-session",
+            "after this",
+            from_web=True,
+            images=[
+                {
+                    "file_name": "shot.png",
+                    "mime_type": "image/png",
+                    "data_b64": base64.b64encode(b"png-bytes").decode("ascii"),
+                }
+            ],
+        )
+
+    def test_manager_send_forwards_pi_images_to_broker(self) -> None:
+        mgr = _make_manager()
+        with tempfile.TemporaryDirectory() as td:
+            session_path = Path(td) / "pi-session.jsonl"
+            sock = Path(td) / "pi.sock"
+            sock.touch()
+            mgr._sessions["pi-session"] = Session(
+                session_id="pi-session",
+                thread_id="pi-thread-001",
+                agent_backend="pi",
+                backend="pi",
+                broker_pid=os.getpid(),
+                codex_pid=os.getpid(),
+                owned=True,
+                start_ts=123.0,
+                cwd=td,
+                log_path=None,
+                sock_path=sock,
+                session_path=session_path,
+                busy=False,
+            )
+
+            captured: dict[str, object] = {}
+
+            def _sock_call(
+                _sock: Path, req: dict[str, object], timeout_s: float = 0.0
+            ) -> dict[str, object]:
+                captured.update(req)
+                return {"busy": True, "queue_len": 0, "token": None}
+
+            mgr._sock_call = _sock_call  # type: ignore[method-assign]
+
+            mgr.send(
+                "pi-session",
+                "hello pi",
+                images=[
+                    {
+                        "file_name": "shot.png",
+                        "mime_type": "image/png",
+                        "data_b64": base64.b64encode(b"png-bytes").decode("ascii"),
+                    }
+                ],
+            )
+
+        self.assertEqual(captured.get("cmd"), "send")
+        self.assertEqual(captured.get("text"), "hello pi")
+        self.assertEqual(
+            captured.get("images"),
+            [
+                {
+                    "file_name": "shot.png",
+                    "mime_type": "image/png",
+                    "data_b64": base64.b64encode(b"png-bytes").decode("ascii"),
+                }
+            ],
+        )
 
     def test_send_touches_pi_session_file_even_before_agent_writes(self) -> None:
         mgr = _make_manager()
@@ -2163,6 +2380,58 @@ class TestPiBackendRouting(unittest.TestCase):
             },
         )
 
+    def test_historical_pi_messages_route_bypasses_live_session_lookup(self) -> None:
+        handler = _HandlerHarness(
+            "/api/sessions/history:pi:resume-hist/messages?init=1"
+        )
+
+        with (
+            patch("codoxear.server._require_auth", return_value=True),
+            patch(
+                "codoxear.server._historical_session_row",
+                return_value={
+                    "session_id": "history:pi:resume-hist",
+                    "resume_session_id": "resume-hist",
+                    "agent_backend": "pi",
+                    "backend": "pi",
+                    "session_path": "/tmp/history.jsonl",
+                },
+            ),
+            patch("codoxear.server.MANAGER") as manager,
+        ):
+            manager.get_session.return_value = None
+            manager.get_messages_page.return_value = {
+                "thread_id": "resume-hist",
+                "log_path": "/tmp/history.jsonl",
+                "offset": 2,
+                "events": [{"role": "assistant", "text": "Recovered reply"}],
+                "meta_delta": {"thinking": 0, "tool": 0, "system": 0},
+                "turn_start": False,
+                "turn_end": False,
+                "turn_aborted": False,
+                "diag": {},
+                "busy": False,
+                "queue_len": 0,
+                "token": None,
+                "has_older": False,
+                "next_before": 0,
+            }
+
+            Handler.do_GET(handler)  # type: ignore[arg-type]
+
+        payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
+        self.assertEqual(handler.status, 200)
+        self.assertEqual(
+            payload["events"], [{"role": "assistant", "text": "Recovered reply"}]
+        )
+        manager.get_messages_page.assert_called_once_with(
+            "history:pi:resume-hist",
+            offset=0,
+            init=True,
+            limit=80,
+            before=0,
+        )
+
     def test_ui_response_route_does_not_fallback_to_send_for_live_pi_rpc_session(
         self,
     ) -> None:
@@ -2565,7 +2834,14 @@ class TestPiBackendRouting(unittest.TestCase):
 
     def test_sessions_bootstrap_returns_cwd_groups(self) -> None:
         handler = _HandlerHarness("/api/sessions/bootstrap")
-        cwd_groups = {"/tmp": {"label": "Temp", "collapsed": True}}
+        cwd_groups = {
+            "/tmp": {
+                "label": "Temp",
+                "collapsed": True,
+                "hidden": True,
+                "hidden_after_live_start_ts": 123.0,
+            }
+        }
         with (
             patch("codoxear.server._require_auth", return_value=True),
             patch("codoxear.server.MANAGER") as manager,
@@ -2595,6 +2871,7 @@ class TestPiBackendRouting(unittest.TestCase):
         with (
             patch("codoxear.server._require_auth", return_value=True),
             patch("codoxear.server.MANAGER") as manager,
+            patch("codoxear.server._existing_workspace_dir", return_value=expected_cwd),
         ):
             manager.list_sessions.return_value = [
                 {
@@ -2657,7 +2934,88 @@ class TestPiBackendRouting(unittest.TestCase):
         self.assertNotIn("resume_session_id", payload["sessions"][0])
         self.assertNotIn("broker_pid", payload["sessions"][0])
         manager.recent_cwds.assert_not_called()
-        manager.cwd_groups_get.assert_not_called()
+        manager.cwd_groups_get.assert_called_once()
+
+    def test_list_sessions_omits_hidden_cwd_groups(self) -> None:
+        handler = _HandlerHarness("/api/sessions")
+        visible_cwd = str(Path("/work/visible").resolve(strict=False))
+        hidden_cwd = str(Path("/work/hidden").resolve(strict=False))
+
+        def _workspace_dir(cwd: object) -> str | None:
+            return str(cwd) if str(cwd) == visible_cwd else None
+
+        with (
+            patch("codoxear.server._require_auth", return_value=True),
+            patch("codoxear.server.MANAGER") as manager,
+            patch(
+                "codoxear.server._existing_workspace_dir", side_effect=_workspace_dir
+            ),
+        ):
+            manager.list_sessions.return_value = [
+                {"session_id": "visible-1", "cwd": visible_cwd, "agent_backend": "pi"},
+                {"session_id": "hidden-1", "cwd": hidden_cwd, "agent_backend": "pi"},
+            ]
+            manager.cwd_groups_get.return_value = {
+                hidden_cwd: {
+                    "label": "Hidden",
+                    "collapsed": False,
+                    "hidden": True,
+                    "hidden_after_live_start_ts": 100.0,
+                }
+            }
+
+            Handler.do_GET(handler)  # type: ignore[arg-type]
+
+        payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
+        self.assertEqual(handler.status, 200)
+        self.assertEqual(
+            payload["sessions"],
+            [{"session_id": "visible-1", "cwd": visible_cwd, "agent_backend": "pi"}],
+        )
+        self.assertEqual(payload["remaining_by_group"], {})
+        self.assertEqual(payload["omitted_group_count"], 0)
+
+    def test_list_sessions_omits_groups_whose_cwd_no_longer_exists(self) -> None:
+        handler = _HandlerHarness("/api/sessions")
+        with tempfile.TemporaryDirectory() as td:
+            existing_cwd = str((Path(td) / "existing").resolve(strict=False))
+            Path(existing_cwd).mkdir(parents=True, exist_ok=True)
+            missing_cwd = str((Path(td) / "missing").resolve(strict=False))
+            with (
+                patch("codoxear.server._require_auth", return_value=True),
+                patch("codoxear.server.MANAGER") as manager,
+            ):
+                manager.list_sessions.return_value = [
+                    {
+                        "session_id": "existing-1",
+                        "cwd": existing_cwd,
+                        "agent_backend": "pi",
+                        "busy": False,
+                    },
+                    {
+                        "session_id": "missing-1",
+                        "cwd": missing_cwd,
+                        "agent_backend": "pi",
+                        "busy": True,
+                    },
+                ]
+                manager.cwd_groups_get.return_value = {}
+
+                Handler.do_GET(handler)  # type: ignore[arg-type]
+
+        payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
+        self.assertEqual(handler.status, 200)
+        self.assertEqual(
+            payload["sessions"],
+            [
+                {
+                    "session_id": "existing-1",
+                    "cwd": existing_cwd,
+                    "agent_backend": "pi",
+                    "busy": False,
+                }
+            ],
+        )
 
     def test_session_details_returns_launch_and_edit_fields_removed_from_list(
         self,
@@ -2691,6 +3049,130 @@ class TestPiBackendRouting(unittest.TestCase):
         self.assertEqual(payload["session"]["provider_choice"], "openai-api")
         self.assertEqual(payload["session"]["priority_offset"], 0.25)
 
+    def test_session_details_exposes_takeover_capability_for_live_pi_tmux_session(
+        self,
+    ) -> None:
+        handler = _HandlerHarness("/api/sessions/pi-session/details")
+        session = Session(
+            session_id="pi-session",
+            thread_id="pi-thread-001",
+            agent_backend="pi",
+            backend="pi",
+            broker_pid=3333,
+            codex_pid=4444,
+            owned=True,
+            start_ts=123.0,
+            cwd="/tmp/pi-cwd",
+            log_path=None,
+            sock_path=Path("/tmp/pi.sock"),
+            transport="pi-rpc",
+            tmux_session="codoxear",
+            tmux_window="codoxear-047445",
+        )
+
+        with (
+            patch("codoxear.server._require_auth", return_value=True),
+            patch("codoxear.server.MANAGER") as manager,
+            patch("codoxear.server._tmux_window_exists", return_value=True),
+            patch("pathlib.Path.exists", return_value=True),
+        ):
+            manager.list_sessions.return_value = [
+                {
+                    "session_id": "pi-session",
+                    "cwd": "/tmp/pi-cwd",
+                    "agent_backend": "pi",
+                    "transport": "pi-rpc",
+                    "tmux_session": "codoxear",
+                    "tmux_window": "codoxear-047445",
+                }
+            ]
+            manager.get_session.return_value = session
+
+            Handler.do_GET(handler)  # type: ignore[arg-type]
+
+        payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
+        self.assertEqual(handler.status, 200)
+        self.assertEqual(payload["session"]["can_takeover_in_tmux"], True)
+        self.assertIsNone(payload["session"]["takeover_reason_unavailable"])
+
+    def test_takeover_get_route_returns_descriptor(self) -> None:
+        mgr = _make_manager()
+        with tempfile.TemporaryDirectory() as td:
+            sock = Path(td) / "pi.sock"
+            sock.touch()
+            mgr._sessions["pi-session"] = Session(
+                session_id="pi-session",
+                thread_id="pi-thread-001",
+                agent_backend="pi",
+                backend="pi",
+                broker_pid=3333,
+                codex_pid=4444,
+                owned=True,
+                start_ts=123.0,
+                cwd="/tmp/pi-cwd",
+                log_path=None,
+                sock_path=sock,
+                transport="pi-rpc",
+                tmux_session="codoxear",
+                tmux_window="codoxear-047445",
+            )
+            handler = _HandlerHarness("/api/sessions/pi-session/takeover")
+
+            with (
+                patch("codoxear.server._require_auth", return_value=True),
+                patch("codoxear.server.MANAGER", mgr),
+                patch("codoxear.server._tmux_window_exists", return_value=True),
+            ):
+                Handler.do_GET(handler)  # type: ignore[arg-type]
+
+        payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
+        self.assertEqual(handler.status, 200)
+        self.assertEqual(payload["eligible"], True)
+        self.assertEqual(
+            payload["attach_command"],
+            "tmux attach -t codoxear \\; select-window -t codoxear:codoxear-047445",
+        )
+
+    def test_takeover_open_route_returns_fallback_payload_when_launcher_unavailable(
+        self,
+    ) -> None:
+        mgr = _make_manager()
+        with tempfile.TemporaryDirectory() as td:
+            sock = Path(td) / "pi.sock"
+            sock.touch()
+            mgr._sessions["pi-session"] = Session(
+                session_id="pi-session",
+                thread_id="pi-thread-001",
+                agent_backend="pi",
+                backend="pi",
+                broker_pid=3333,
+                codex_pid=4444,
+                owned=True,
+                start_ts=123.0,
+                cwd="/tmp/pi-cwd",
+                log_path=None,
+                sock_path=sock,
+                transport="pi-rpc",
+                tmux_session="codoxear",
+                tmux_window="codoxear-047445",
+            )
+            handler = _HandlerHarness(
+                "/api/sessions/pi-session/takeover/open", body=b"{}"
+            )
+
+            with (
+                patch("codoxear.server._require_auth", return_value=True),
+                patch("codoxear.server.MANAGER", mgr),
+                patch("codoxear.server._tmux_window_exists", return_value=True),
+                patch("codoxear.server._detect_terminal_open_argv", return_value=None),
+            ):
+                Handler.do_POST(handler)  # type: ignore[arg-type]
+
+        payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
+        self.assertEqual(handler.status, 200)
+        self.assertEqual(payload["opened"], False)
+        self.assertIn("attach_command", payload)
+
     def test_list_sessions_caps_each_group_to_five_rows_and_reports_remaining(
         self,
     ) -> None:
@@ -2699,6 +3181,10 @@ class TestPiBackendRouting(unittest.TestCase):
         with (
             patch("codoxear.server._require_auth", return_value=True),
             patch("codoxear.server.MANAGER") as manager,
+            patch(
+                "codoxear.server._existing_workspace_dir",
+                side_effect=lambda cwd: str(cwd),
+            ),
         ):
             manager.list_sessions.return_value = [
                 {
@@ -2735,6 +3221,7 @@ class TestPiBackendRouting(unittest.TestCase):
         with (
             patch("codoxear.server._require_auth", return_value=True),
             patch("codoxear.server.MANAGER") as manager,
+            patch("codoxear.server._existing_workspace_dir", return_value=docs_cwd),
         ):
             manager.list_sessions.return_value = [
                 {
@@ -2764,6 +3251,10 @@ class TestPiBackendRouting(unittest.TestCase):
         with (
             patch("codoxear.server._require_auth", return_value=True),
             patch("codoxear.server.MANAGER") as manager,
+            patch(
+                "codoxear.server._existing_workspace_dir",
+                side_effect=lambda cwd: str(cwd),
+            ),
         ):
             manager.list_sessions.return_value = [
                 {
@@ -2816,6 +3307,10 @@ class TestPiBackendRouting(unittest.TestCase):
         with (
             patch("codoxear.server._require_auth", return_value=True),
             patch("codoxear.server.MANAGER") as manager,
+            patch(
+                "codoxear.server._existing_workspace_dir",
+                side_effect=lambda cwd: str(cwd),
+            ),
         ):
             manager.list_sessions.return_value = [
                 {
@@ -2859,6 +3354,10 @@ class TestPiBackendRouting(unittest.TestCase):
         with (
             patch("codoxear.server._require_auth", return_value=True),
             patch("codoxear.server.MANAGER") as manager,
+            patch(
+                "codoxear.server._existing_workspace_dir",
+                side_effect=lambda cwd: str(cwd),
+            ),
         ):
             manager.list_sessions.return_value = [
                 {
@@ -2879,6 +3378,73 @@ class TestPiBackendRouting(unittest.TestCase):
         )
         self.assertEqual(payload["omitted_group_count"], 0)
 
+    def test_list_sessions_recent_view_returns_flat_recent_payload(self) -> None:
+        handler = _HandlerHarness("/api/sessions?view=recent&limit=2")
+        docs_cwd = str(Path("/work/docs").resolve(strict=False))
+        api_cwd = str(Path("/work/api").resolve(strict=False))
+        with (
+            patch("codoxear.server._require_auth", return_value=True),
+            patch("codoxear.server.MANAGER") as manager,
+            patch(
+                "codoxear.server._existing_workspace_dir",
+                side_effect=lambda cwd: str(cwd),
+            ),
+        ):
+            manager.list_sessions.return_value = [
+                {
+                    "session_id": "docs-older",
+                    "cwd": docs_cwd,
+                    "agent_backend": "pi",
+                    "updated_ts": 20,
+                },
+                {
+                    "session_id": "api-newest",
+                    "cwd": api_cwd,
+                    "agent_backend": "codex",
+                    "updated_ts": 100,
+                },
+                {
+                    "session_id": "docs-newer",
+                    "cwd": docs_cwd,
+                    "agent_backend": "pi",
+                    "updated_ts": 50,
+                },
+            ]
+
+            Handler.do_GET(handler)  # type: ignore[arg-type]
+
+        payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
+        self.assertEqual(handler.status, 200)
+        self.assertEqual(
+            [row["session_id"] for row in payload["sessions"]],
+            ["api-newest", "docs-newer"],
+        )
+        self.assertEqual(payload["remaining"], 1)
+        self.assertNotIn("remaining_by_group", payload)
+        self.assertNotIn("omitted_group_count", payload)
+
+    def test_list_sessions_recent_view_rejects_group_pagination_params(self) -> None:
+        handler = _HandlerHarness("/api/sessions?view=recent&group_key=%2Fwork%2Fdocs")
+        with (
+            patch("codoxear.server._require_auth", return_value=True),
+            patch("codoxear.server.MANAGER") as manager,
+        ):
+            Handler.do_GET(handler)  # type: ignore[arg-type]
+
+        payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
+        self.assertEqual(handler.status, 400)
+        self.assertIn("group pagination", payload["error"])
+        manager.list_sessions.assert_called_once()
+
+    def test_list_sessions_rejects_unknown_view(self) -> None:
+        handler = _HandlerHarness("/api/sessions?view=timeline")
+        with patch("codoxear.server._require_auth", return_value=True):
+            Handler.do_GET(handler)  # type: ignore[arg-type]
+
+        payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
+        self.assertEqual(handler.status, 400)
+        self.assertEqual(payload["view"], "timeline")
+
     def test_json_response_ignores_connection_reset_during_write(self) -> None:
         handler = _HandlerHarness("/api/sessions")
         handler.wfile = cast(io.BytesIO, _ResettingWriter())
@@ -2894,6 +3460,7 @@ class TestPiBackendRouting(unittest.TestCase):
         with (
             patch("codoxear.server._require_auth", return_value=True),
             patch("codoxear.server.MANAGER") as manager,
+            patch("codoxear.server._existing_workspace_dir", return_value=expected_cwd),
         ):
             manager.list_sessions.return_value = [
                 {"session_id": "sess-1", "cwd": raw_cwd}
@@ -2908,7 +3475,13 @@ class TestPiBackendRouting(unittest.TestCase):
 
     def test_edit_cwd_group_updates_metadata(self) -> None:
         body = json.dumps(
-            {"cwd": "/tmp", "label": "New Label", "collapsed": True}
+            {
+                "cwd": "/tmp",
+                "label": "New Label",
+                "collapsed": True,
+                "hidden": True,
+                "hidden_after_live_start_ts": 123.5,
+            }
         ).encode("utf-8")
         handler = _HandlerHarness("/api/cwd_groups/edit", body)
 
@@ -2918,7 +3491,12 @@ class TestPiBackendRouting(unittest.TestCase):
         ):
             manager.cwd_group_set.return_value = (
                 "/tmp",
-                {"label": "New Label", "collapsed": True},
+                {
+                    "label": "New Label",
+                    "collapsed": True,
+                    "hidden": True,
+                    "hidden_after_live_start_ts": 123.5,
+                },
             )
 
             Handler.do_POST(handler)  # type: ignore[arg-type]
@@ -2927,10 +3505,21 @@ class TestPiBackendRouting(unittest.TestCase):
         self.assertEqual(handler.status, 200)
         self.assertEqual(
             payload,
-            {"ok": True, "cwd": "/tmp", "label": "New Label", "collapsed": True},
+            {
+                "ok": True,
+                "cwd": "/tmp",
+                "label": "New Label",
+                "collapsed": True,
+                "hidden": True,
+                "hidden_after_live_start_ts": 123.5,
+            },
         )
         manager.cwd_group_set.assert_called_once_with(
-            cwd="/tmp", label="New Label", collapsed=True
+            cwd="/tmp",
+            label="New Label",
+            collapsed=True,
+            hidden=True,
+            hidden_after_live_start_ts=123.5,
         )
 
     def test_edit_cwd_group_returns_400_on_value_error(self) -> None:
@@ -4816,6 +5405,80 @@ class TestPiMessageNormalization(unittest.TestCase):
         )
 
         self.assertEqual(events, [])
+
+    def test_normalize_pi_entries_emits_user_event_for_image_only_message(self) -> None:
+        entries = [
+            {
+                "type": "message",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "mimeType": "image/png",
+                            "data": base64.b64encode(b"png-bytes").decode("ascii"),
+                        }
+                    ],
+                },
+            }
+        ]
+
+        events, _meta, _flags, _diag = pi_messages.normalize_pi_entries(entries)
+
+        self.assertEqual(
+            events, [{"role": "user", "text": "[Attached 1 image]", "ts": 0.0}]
+        )
+
+    def test_pi_queue_preserves_images_until_delivery(self) -> None:
+        mgr = _make_manager()
+        with tempfile.TemporaryDirectory() as td:
+            session_path = Path(td) / "pi-session.jsonl"
+            sock = Path(td) / "pi.sock"
+            sock.touch()
+            mgr._sessions["pi-session"] = Session(
+                session_id="pi-session",
+                thread_id="pi-thread-001",
+                agent_backend="pi",
+                backend="pi",
+                broker_pid=os.getpid(),
+                codex_pid=os.getpid(),
+                owned=True,
+                start_ts=123.0,
+                cwd=td,
+                log_path=None,
+                sock_path=sock,
+                session_path=session_path,
+                busy=False,
+            )
+
+            mgr.enqueue(
+                "pi-session",
+                "after this",
+                images=[
+                    {
+                        "file_name": "shot.png",
+                        "mime_type": "image/png",
+                        "data_b64": base64.b64encode(b"png-bytes").decode("ascii"),
+                    }
+                ],
+            )
+
+            queued_item = mgr._queues["pi-session"][0]
+
+        self.assertEqual(
+            queued_item,
+            {
+                "text": "after this",
+                "images": [
+                    {
+                        "file_name": "shot.png",
+                        "mime_type": "image/png",
+                        "data_b64": base64.b64encode(b"png-bytes").decode("ascii"),
+                    }
+                ],
+            },
+        )
 
     def test_last_tool_clears_after_new_user_turn_without_tool_activity(self) -> None:
         entries = [

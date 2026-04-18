@@ -43,8 +43,28 @@ async function pressKey(element: Element, key: string) {
   });
 }
 
+async function contextMenu(element: Element, clientX = 24, clientY = 32) {
+  await act(async () => {
+    element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX, clientY }));
+  });
+}
+
 function createSessionsStore(initialState: any, options?: { onRefresh?: () => void | Promise<void> }) {
-  let state = initialState;
+  let state = {
+    items: [],
+    activeSessionId: null,
+    loading: false,
+    bootstrapLoaded: false,
+    viewMode: "directories",
+    remainingByGroup: {},
+    omittedGroupCount: 0,
+    remainingRecentCount: 0,
+    newSessionDefaults: null,
+    recentCwds: [],
+    cwdGroups: {},
+    tmuxAvailable: false,
+    ...initialState,
+  };
   const listeners = new Set<() => void>();
 
   const emit = () => listeners.forEach((listener) => listener());
@@ -71,8 +91,17 @@ function createSessionsStore(initialState: any, options?: { onRefresh?: () => vo
       await options?.onRefresh?.();
       emit();
     }),
+    loadMoreRecent: vi.fn(async () => {
+      await options?.onRefresh?.();
+      emit();
+    }),
     select: vi.fn((sessionId: string) => {
       state = { ...state, activeSessionId: sessionId };
+      emit();
+    }),
+    setViewMode: vi.fn(async (viewMode: "directories" | "recent") => {
+      state = { ...state, viewMode };
+      await options?.onRefresh?.();
       emit();
     }),
     setState(next: any) {
@@ -234,6 +263,29 @@ describe("SessionsPane", () => {
     expect(sessionsStore.select).toHaveBeenCalledWith("history:pi:resume-hist");
   });
 
+  it("deletes a historical session after confirmation", async () => {
+    const confirm = vi.fn().mockReturnValue(true);
+    vi.stubGlobal("confirm", confirm);
+    const sessionsStore = renderSessionsPane({
+      items: [{ session_id: "history:pi:resume-hist", alias: "Recovered planning thread", cwd: "/tmp/project", agent_backend: "pi", historical: true }],
+      activeSessionId: "history:pi:resume-hist",
+      loading: false,
+      newSessionDefaults: null,
+      recentCwds: ["/tmp/project"],
+      cwdGroups: {},
+      tmuxAvailable: false,
+    });
+
+    const deleteButton = root?.querySelector<HTMLButtonElement>('button[aria-label="Delete session"]');
+    expect(deleteButton).not.toBeNull();
+    await click(deleteButton!);
+    await flush();
+
+    expect(api.deleteSession).toHaveBeenCalledWith("history:pi:resume-hist");
+    expect(sessionsStore.refresh).toHaveBeenCalled();
+    expect(confirm).toHaveBeenCalled();
+  });
+
   it("opens edit dialog from icon action and saves fields", async () => {
     vi.mocked(api.getSessionDetails).mockResolvedValue({
       ok: true,
@@ -378,6 +430,38 @@ describe("SessionsPane", () => {
     expect(root?.querySelectorAll("[data-testid='session-card']")).toHaveLength(0);
   });
 
+  it("hides a cwd group from the context menu", async () => {
+    const sessionsStore = renderSessionsPane(
+      {
+        items: [{ session_id: "sess-1", alias: "Docs polish", cwd: "/work/projects/docs", agent_backend: "pi", start_ts: 150 }],
+        activeSessionId: null,
+        loading: false,
+        newSessionDefaults: null,
+        recentCwds: [],
+        cwdGroups: {},
+        tmuxAvailable: false,
+      },
+      {
+        onRefresh: () => {
+          sessionsStore.setState({ ...sessionsStore.getState(), items: [], cwdGroups: { "/work/projects/docs": { hidden: true, hidden_after_live_start_ts: 150 } } });
+        },
+      },
+    );
+
+    const titleButton = root?.querySelector<HTMLButtonElement>(".sessionGroupTitleButton");
+    expect(titleButton).not.toBeNull();
+    await contextMenu(titleButton!);
+
+    const hideButton = Array.from(root?.querySelectorAll<HTMLButtonElement>("button") || []).find((button) => button.textContent?.includes("Hide working directory"));
+    expect(hideButton).toBeDefined();
+    await click(hideButton!);
+    await flush();
+
+    expect(api.editCwdGroup).toHaveBeenCalledWith({ cwd: "/work/projects/docs", hidden: true, hidden_after_live_start_ts: 150 });
+    expect(sessionsStore.refreshBootstrap).toHaveBeenCalledTimes(1);
+    expect(root?.querySelector(".sessionGroup")).toBeNull();
+  });
+
   it("loads more sessions and directories when pagination controls are clicked", async () => {
     const sessionsStore = renderSessionsPane({
       items: [{ session_id: "sess-1", alias: "Session 1", cwd: "/work/docs", agent_backend: "pi" }],
@@ -419,5 +503,50 @@ describe("SessionsPane", () => {
     const group = root?.querySelector<HTMLElement>(".sessionGroup");
     expect(group?.querySelector(".sessionGroupTitle")?.textContent).toContain("No working directory");
     expect(group?.querySelector(".sessionGroupRenameButton")).toBeNull();
+  });
+
+  it("renders a flat recent list and loads more sessions", async () => {
+    const sessionsStore = renderSessionsPane({
+      viewMode: "recent",
+      items: [
+        { session_id: "sess-2", alias: "Newest", cwd: "/work/api", agent_backend: "pi" },
+        { session_id: "sess-1", alias: "Older", cwd: "/work/docs", agent_backend: "pi" },
+      ],
+      remainingRecentCount: 3,
+    });
+
+    expect(root?.querySelectorAll(".sessionGroup")).toHaveLength(0);
+    expect(root?.textContent).toContain("/work/api");
+    expect(root?.textContent).toContain("/work/docs");
+    expect(root?.textContent).toContain("Load more sessions");
+
+    const loadMoreButton = Array.from(root?.querySelectorAll<HTMLButtonElement>("button") || []).find((button) => button.textContent?.includes("Load more sessions"));
+    expect(loadMoreButton).toBeDefined();
+    await click(loadMoreButton!);
+    await flush();
+
+    expect(sessionsStore.loadMoreRecent).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a fallback cwd subtitle in recent mode when a session has no cwd", () => {
+    renderSessionsPane({
+      viewMode: "recent",
+      items: [{ session_id: "sess-1", alias: "Inbox", agent_backend: "pi" }],
+    });
+
+    expect(root?.textContent).toContain("No working directory");
+  });
+
+  it("switches view modes from the header toggle", async () => {
+    const sessionsStore = renderSessionsPane({
+      items: [{ session_id: "sess-1", alias: "Inbox", cwd: "/work/docs", agent_backend: "pi" }],
+    });
+
+    const recentButton = Array.from(root?.querySelectorAll<HTMLButtonElement>("button") || []).find((button) => button.textContent?.trim() === "Recent");
+    expect(recentButton).toBeDefined();
+    await click(recentButton!);
+    await flush();
+
+    expect(sessionsStore.setViewMode).toHaveBeenCalledWith("recent");
   });
 });

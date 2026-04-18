@@ -12,6 +12,7 @@ vi.mock("../../lib/api", () => ({
 describe("createSessionsStore", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
   });
 
   it("selects the newest session on the first refresh", async () => {
@@ -23,19 +24,21 @@ describe("createSessionsStore", () => {
 
     store.subscribe(() => {
       const state = store.getState();
-      snapshots.push(`${state.loading}:${state.activeSessionId}`);
+      snapshots.push(`${state.loading}:${state.activeSessionId}:${state.viewMode}`);
     });
 
     await store.refresh();
 
-    expect(snapshots).toEqual(["true:null", "false:s1"]);
+    expect(snapshots).toEqual(["true:null:directories", "false:s1:directories"]);
     expect(store.getState()).toEqual({
       items: [{ session_id: "s1" }, { session_id: "s2" }],
       activeSessionId: "s1",
       loading: false,
       bootstrapLoaded: false,
+      viewMode: "directories",
       remainingByGroup: {},
       omittedGroupCount: 0,
+      remainingRecentCount: 0,
       newSessionDefaults: null,
       recentCwds: [],
       cwdGroups: {},
@@ -64,8 +67,10 @@ describe("createSessionsStore", () => {
       activeSessionId: "s2",
       loading: false,
       bootstrapLoaded: true,
+      viewMode: "directories",
       remainingByGroup: {},
       omittedGroupCount: 0,
+      remainingRecentCount: 0,
       newSessionDefaults: { default_backend: "pi" },
       recentCwds: ["/tmp/project"],
       cwdGroups: { "/tmp/project": { label: "Project", collapsed: true } },
@@ -98,6 +103,7 @@ describe("createSessionsStore", () => {
     await store.loadMoreGroup("/work/docs");
 
     expect(api.listSessions).toHaveBeenNthCalledWith(2, {
+      view: "directories",
       groupKey: "/work/docs",
       offset: 5,
       limit: 5,
@@ -137,6 +143,7 @@ describe("createSessionsStore", () => {
     await store.loadMoreGroups();
 
     expect(api.listSessions).toHaveBeenNthCalledWith(2, {
+      view: "directories",
       groupOffset: 3,
       groupLimit: 3,
     });
@@ -211,6 +218,46 @@ describe("createSessionsStore", () => {
     expect(store.getState().omittedGroupCount).toBe(0);
   });
 
+  it("keeps previously visible directories visible after loading more directories and a reordered refresh", async () => {
+    vi.mocked(api.listSessions)
+      .mockResolvedValueOnce({
+        sessions: [
+          { session_id: "docs-1", cwd: "/work/docs" },
+          { session_id: "ops-1", cwd: "/work/ops" },
+          { session_id: "lab-1", cwd: "/work/lab" },
+        ],
+        omitted_group_count: 1,
+      } as never)
+      .mockResolvedValueOnce({
+        sessions: [{ session_id: "play-1", cwd: "/work/play" }],
+        omitted_group_count: 0,
+      } as never)
+      .mockResolvedValueOnce({
+        sessions: [
+          { session_id: "docs-1", cwd: "/work/docs", busy: true },
+          { session_id: "lab-1", cwd: "/work/lab" },
+          { session_id: "play-1", cwd: "/work/play", busy: true },
+        ],
+        omitted_group_count: 1,
+      } as never)
+      .mockResolvedValueOnce({
+        sessions: [{ session_id: "ops-1", cwd: "/work/ops", busy: true }],
+        remaining_by_group: {},
+      } as never);
+    const store = createSessionsStore();
+
+    await store.refresh();
+    await store.loadMoreGroups(1);
+    await store.refresh();
+
+    expect(store.getState().items).toEqual([
+      { session_id: "docs-1", cwd: "/work/docs", busy: true },
+      { session_id: "lab-1", cwd: "/work/lab" },
+      { session_id: "play-1", cwd: "/work/play", busy: true },
+      { session_id: "ops-1", cwd: "/work/ops", busy: true },
+    ]);
+  });
+
   it("keeps an explicit selection across refreshes", async () => {
     vi.mocked(api.listSessions)
       .mockResolvedValueOnce({
@@ -230,8 +277,10 @@ describe("createSessionsStore", () => {
       activeSessionId: "s2",
       loading: false,
       bootstrapLoaded: false,
+      viewMode: "directories",
       remainingByGroup: {},
       omittedGroupCount: 0,
+      remainingRecentCount: 0,
       newSessionDefaults: null,
       recentCwds: [],
       cwdGroups: {},
@@ -249,8 +298,10 @@ describe("createSessionsStore", () => {
       activeSessionId: null,
       loading: false,
       bootstrapLoaded: false,
+      viewMode: "directories",
       remainingByGroup: {},
       omittedGroupCount: 0,
+      remainingRecentCount: 0,
       newSessionDefaults: null,
       recentCwds: [],
       cwdGroups: {},
@@ -277,8 +328,10 @@ describe("createSessionsStore", () => {
       activeSessionId: null,
       loading: false,
       bootstrapLoaded: false,
+      viewMode: "directories",
       remainingByGroup: {},
       omittedGroupCount: 0,
+      remainingRecentCount: 0,
       newSessionDefaults: null,
       recentCwds: [],
       cwdGroups: {},
@@ -387,5 +440,62 @@ describe("createSessionsStore", () => {
       { session_id: "broker-a", thread_id: "thread-1", agent_backend: "pi", alias: "Newest" },
     ]);
     expect(store.getState().activeSessionId).toBe("broker-a");
+  });
+
+  it("initializes the persisted recent view mode from local storage", () => {
+    window.localStorage.setItem("sessionsViewMode", "recent");
+
+    const store = createSessionsStore();
+
+    expect(store.getState().viewMode).toBe("recent");
+  });
+
+  it("falls back to directories for invalid persisted view mode", () => {
+    window.localStorage.setItem("sessionsViewMode", "timeline");
+
+    const store = createSessionsStore();
+
+    expect(store.getState().viewMode).toBe("directories");
+  });
+
+  it("switches to recent mode, persists it, and refreshes via recent view", async () => {
+    vi.mocked(api.listSessions).mockResolvedValue({
+      sessions: [{ session_id: "r1" }, { session_id: "r2" }],
+      remaining: 3,
+    } as never);
+    const store = createSessionsStore();
+
+    await store.setViewMode("recent");
+
+    expect(window.localStorage.getItem("sessionsViewMode")).toBe("recent");
+    expect(api.listSessions).toHaveBeenCalledWith({ view: "recent", limit: 20 });
+    expect(store.getState().viewMode).toBe("recent");
+    expect(store.getState().remainingRecentCount).toBe(3);
+  });
+
+  it("loads more rows in recent mode without touching group pagination state", async () => {
+    vi.mocked(api.listSessions)
+      .mockResolvedValueOnce({
+        sessions: [{ session_id: "r1" }, { session_id: "r2" }],
+        remaining: 2,
+      } as never)
+      .mockResolvedValueOnce({
+        sessions: [{ session_id: "r3" }, { session_id: "r4" }],
+        remaining: 0,
+      } as never);
+    const store = createSessionsStore();
+
+    await store.setViewMode("recent");
+    await store.loadMoreRecent();
+
+    expect(api.listSessions).toHaveBeenNthCalledWith(2, {
+      view: "recent",
+      offset: 2,
+      limit: 20,
+    });
+    expect(store.getState().items.map((session) => session.session_id)).toEqual(["r1", "r2", "r3", "r4"]);
+    expect(store.getState().remainingByGroup).toEqual({});
+    expect(store.getState().omittedGroupCount).toBe(0);
+    expect(store.getState().remainingRecentCount).toBe(0);
   });
 });

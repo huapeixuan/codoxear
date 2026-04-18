@@ -23,6 +23,8 @@ import type {
   SessionCommandsResponse,
   SessionDetailsResponse,
   SessionHeartbeatResponse,
+  SessionImageInput,
+  SessionMessagePayload,
   SessionUiStateResponse,
   SessionsResponse,
   VoiceSettingsResponse,
@@ -36,8 +38,21 @@ export const api = {
   login(password: string, signal?: AbortSignal) {
     return postJson<LoginResponse>("/api/login", { password }, signal);
   },
-  listSessions(options?: { groupKey?: string; offset?: number; limit?: number; groupOffset?: number; groupLimit?: number }, signal?: AbortSignal) {
+  listSessions(
+    options?: {
+      view?: "directories" | "recent";
+      groupKey?: string;
+      offset?: number;
+      limit?: number;
+      groupOffset?: number;
+      groupLimit?: number;
+    },
+    signal?: AbortSignal,
+  ) {
     const query = new URLSearchParams();
+    if (options?.view) {
+      query.set("view", options.view);
+    }
     if (options?.groupKey) {
       query.set("group_key", options.groupKey);
     }
@@ -105,11 +120,19 @@ export const api = {
   attachSessionFile(sessionId: string, payload: { filename: string; data_b64: string; attachment_index: number }) {
     return postJson<AttachmentInjectResponse>(`/api/sessions/${sessionId}/inject_image`, payload);
   },
-  async sendMessage(sessionId: string, text: string) {
-    return postJson(`/api/sessions/${sessionId}/send`, { text });
+  async sendMessage(sessionId: string, text: string, payload?: SessionMessagePayload) {
+    const body: { text: string; images?: SessionImageInput[] } = { text };
+    if (Array.isArray(payload?.images) && payload.images.length) {
+      body.images = payload.images;
+    }
+    return postJson(`/api/sessions/${sessionId}/send`, body);
   },
-  async enqueueMessage(sessionId: string, text: string) {
-    return postJson(`/api/sessions/${sessionId}/enqueue`, { text });
+  async enqueueMessage(sessionId: string, text: string, payload?: SessionMessagePayload) {
+    const body: { text: string; images?: SessionImageInput[] } = { text };
+    if (Array.isArray(payload?.images) && payload.images.length) {
+      body.images = payload.images;
+    }
+    return postJson(`/api/sessions/${sessionId}/enqueue`, body);
   },
   heartbeatSession(sessionId: string) {
     return postJson<SessionHeartbeatResponse>(`/api/sessions/${sessionId}/heartbeat`, {});
@@ -136,7 +159,7 @@ export const api = {
   logout() {
     return postJson<LogoutResponse>(`/api/logout`, {});
   },
-  editCwdGroup(payload: { cwd: string; label?: string; collapsed?: boolean }) {
+  editCwdGroup(payload: { cwd: string; label?: string; collapsed?: boolean; hidden?: boolean; hidden_after_live_start_ts?: number | null }) {
     return postJson<EditCwdGroupResponse>(`/api/cwd_groups/edit`, payload);
   },
   getVoiceSettings() {
