@@ -1,5 +1,5 @@
 import { api } from "../../lib/api";
-import type { MessageEvent } from "../../lib/types";
+import type { MessageEvent, SessionMessagePayload } from "../../lib/types";
 
 export interface PendingComposerMessage {
   localId: string;
@@ -10,7 +10,7 @@ export interface PendingComposerMessage {
 }
 
 export interface ComposerState {
-  draft: string;
+  draftBySessionId: Record<string, string>;
   sending: boolean;
   pendingBySessionId: Record<string, PendingComposerMessage[]>;
 }
@@ -18,13 +18,13 @@ export interface ComposerState {
 export interface ComposerStore {
   getState(): ComposerState;
   subscribe(listener: () => void): () => void;
-  setDraft(value: string): void;
-  submit(sessionId: string): Promise<unknown>;
+  setDraft(sessionId: string, value: string): void;
+  submit(sessionId: string, payload?: SessionMessagePayload): Promise<unknown>;
   clearAcknowledgedPending(sessionId: string, persistedEvents: MessageEvent[]): void;
 }
 
 export function createComposerStore(): ComposerStore {
-  let state: ComposerState = { draft: "", sending: false, pendingBySessionId: {} };
+  let state: ComposerState = { draftBySessionId: {}, sending: false, pendingBySessionId: {} };
   const listeners = new Set<() => void>();
   let nextPendingId = 0;
 
@@ -42,15 +42,22 @@ export function createComposerStore(): ComposerStore {
         listeners.delete(listener);
       };
     },
-    setDraft(value: string) {
-      state = { ...state, draft: value };
+    setDraft(sessionId: string, value: string) {
+      state = {
+        ...state,
+        draftBySessionId: {
+          ...state.draftBySessionId,
+          [sessionId]: value,
+        },
+      };
       emit();
     },
-    async submit(sessionId: string) {
-      if (!state.draft.trim() || state.sending) return;
+    async submit(sessionId: string, payload?: SessionMessagePayload) {
+      const draft = state.draftBySessionId[sessionId] ?? "";
+      if (!draft.trim() || state.sending) return;
 
       nextPendingId += 1;
-      const text = state.draft;
+      const text = draft;
       const pendingMessage: PendingComposerMessage = {
         localId: `local-pending-${nextPendingId}`,
         role: "user",
@@ -60,7 +67,10 @@ export function createComposerStore(): ComposerStore {
 
       state = {
         ...state,
-        draft: "",
+        draftBySessionId: {
+          ...state.draftBySessionId,
+          [sessionId]: "",
+        },
         sending: true,
         pendingBySessionId: {
           ...state.pendingBySessionId,
@@ -70,7 +80,7 @@ export function createComposerStore(): ComposerStore {
       emit();
 
       try {
-        const response = await api.sendMessage(sessionId, text);
+        const response = await api.sendMessage(sessionId, text, payload);
         state = {
           ...state,
           sending: false,
@@ -80,7 +90,10 @@ export function createComposerStore(): ComposerStore {
       } catch (error) {
         state = {
           ...state,
-          draft: state.draft ? state.draft : text,
+          draftBySessionId: {
+            ...state.draftBySessionId,
+            [sessionId]: (state.draftBySessionId[sessionId] ?? "") || text,
+          },
           sending: false,
           pendingBySessionId: {
             ...state.pendingBySessionId,

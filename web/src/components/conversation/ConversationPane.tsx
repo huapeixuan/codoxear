@@ -1159,6 +1159,7 @@ export function ConversationPane({ onOpenFilePath }: ConversationPaneProps) {
   const sectionRef = useRef<HTMLElement | null>(null);
   const historyAnchorRef = useRef<{ key: string; top: number } | null>(null);
   const scrollModeRef = useRef<"bottom" | "preserve" | null>(null);
+  const attemptedHistoricalAutoLoadSessionIdRef = useRef<string | null>(null);
   const [showPreviousUserJump, setShowPreviousUserJump] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const hasOlder = activeSessionId ? hasOlderBySessionId[activeSessionId] === true : false;
@@ -1167,8 +1168,7 @@ export function ConversationPane({ onOpenFilePath }: ConversationPaneProps) {
   const activeSessionLoading = activeSessionId ? loadingBySessionId[activeSessionId] === true : false;
   const activeSessionLoaded = activeSessionId ? loadedBySessionId[activeSessionId] === true : false;
   const showHistoryControls = Boolean(activeSessionId && messages.length && (hasOlder || olderCursor > 0 || olderLoading));
-  const waitingForInitialHistoricalReplay = activeSessionIsHistoricalPi && messages.length === 0 && !activeSessionLoaded;
-  const showLoadingState = (activeSessionLoading || waitingForInitialHistoricalReplay) && messages.length === 0 && !activeSessionLoaded;
+  const showLoadingState = activeSessionLoading && messages.length === 0 && !activeSessionLoaded;
   const markdownOptions: MarkdownRenderOptions = {
     sessionId: activeSessionId || undefined,
     cwd: activeSession?.cwd,
@@ -1253,15 +1253,20 @@ export function ConversationPane({ onOpenFilePath }: ConversationPaneProps) {
     await messagesStoreApi.loadOlder(activeSessionId);
   };
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!activeSessionId || !activeSessionIsHistoricalPi) {
       return;
     }
-    if (activeSessionLoaded || activeSessionLoading) {
+    if (activeSessionLoading || attemptedHistoricalAutoLoadSessionIdRef.current === activeSessionId) {
       return;
     }
-    void messagesStoreApi.loadInitial(activeSessionId);
-  }, [activeSessionId, activeSessionIsHistoricalPi, activeSessionLoaded, activeSessionLoading, messagesStoreApi]);
+    attemptedHistoricalAutoLoadSessionIdRef.current = activeSessionId;
+    void messagesStoreApi.loadInitial(activeSessionId).catch(() => undefined);
+  }, [activeSessionId, activeSessionIsHistoricalPi, activeSessionLoading, messagesStoreApi]);
+
+  useEffect(() => {
+    attemptedHistoricalAutoLoadSessionIdRef.current = null;
+  }, [activeSessionId]);
 
   const handleJumpToLatest = async () => {
     if (!activeSessionId) return;

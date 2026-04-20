@@ -15,7 +15,7 @@ import {
   useSessionsStoreApi,
 } from "../../app/providers";
 import { api } from "../../lib/api";
-import type { SessionCommand } from "../../lib/types";
+import type { SessionCommand, SessionImageInput } from "../../lib/types";
 import { getDisplayableTodoSnapshot, TodoComposerPanel } from "./TodoComposerPanel";
 
 function enterToSendEnabled() {
@@ -34,6 +34,46 @@ function formatSlashCommandValue(commandName: string) {
   const normalized = commandName.startsWith("/") ? commandName : `/${commandName}`;
 
   return `${normalized} `;
+}
+
+function formatInteger(value: number) {
+  return new Intl.NumberFormat("en-US").format(value);
+}
+
+function getComposerContextUsage(diagnostics: Record<string, unknown> | null, sessionId: string | null, activeSessionId: string | null) {
+  if (!diagnostics || !sessionId || !activeSessionId || sessionId !== activeSessionId) {
+    return null;
+  }
+
+  const rawToken = diagnostics.token;
+  if (!rawToken || typeof rawToken !== "object") {
+    return null;
+  }
+  const token = rawToken as Record<string, unknown>;
+
+  const percentRemaining = typeof token.percent_remaining === "number" ? token.percent_remaining : null;
+  const tokensInContext = typeof token.tokens_in_context === "number" ? token.tokens_in_context : null;
+  const contextWindow = typeof token.context_window === "number" ? token.context_window : null;
+
+  if (
+    percentRemaining === null
+    || tokensInContext === null
+    || contextWindow === null
+    || !Number.isFinite(percentRemaining)
+    || !Number.isFinite(tokensInContext)
+    || !Number.isFinite(contextWindow)
+    || contextWindow <= 0
+    || tokensInContext < 0
+  ) {
+    return null;
+  }
+
+  const usedPercent = Math.max(0, Math.min(100, Math.round(100 - percentRemaining)));
+
+  return {
+    usedPercent,
+    title: `Context used: ${formatInteger(tokensInContext)} / ${formatInteger(contextWindow)}`,
+  };
 }
 
 const MOBILE_COMPOSER_QUERY = "(max-width: 880px)";
@@ -182,7 +222,7 @@ async function toJpegBlob(file: File, options: { maxDim: number; quality: number
 
 export function Composer() {
   const { activeSessionId, items } = useSessionsStore();
-  const { draft, sending } = useComposerStore();
+  const { draftBySessionId, sending } = useComposerStore();
   const { sessionId: sessionUiSessionId, diagnostics } = useSessionUiStore();
   const sessionsStoreApi = useSessionsStoreApi();
   const composerStoreApi = useComposerStoreApi();
@@ -195,6 +235,7 @@ export function Composer() {
   const [highlightedCommandIndex, setHighlightedCommandIndex] = useState(0);
   const [slashMenuDismissed, setSlashMenuDismissed] = useState(false);
   const [attachedFilesBySessionId, setAttachedFilesBySessionId] = useState<Record<string, number>>({});
+  const [stagedPiImagesBySessionId, setStagedPiImagesBySessionId] = useState<Record<string, SessionImageInput[]>>({});
   const [attachmentUploading, setAttachmentUploading] = useState(false);
   const [mobileComposerAutosize, setMobileComposerAutosize] = useState(() => shouldUseMobileComposerAutosize());
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -203,8 +244,14 @@ export function Composer() {
   const activeSession = items.find((session) => session.session_id === activeSessionId) ?? null;
   const activeSessionIsPi = activeSession?.agent_backend === "pi";
   const activeSessionIsHistoricalPi = activeSessionIsPi && activeSession?.historical === true;
+  const draft = activeSessionId ? draftBySessionId[activeSessionId] ?? "" : "";
   const activeAttachmentCount = activeSessionId ? attachedFilesBySessionId[activeSessionId] ?? 0 : 0;
-  const attachmentsSupported = Boolean(activeSessionId && activeSession?.agent_backend !== "pi");
+  const attachmentsSupported = Boolean(activeSessionId);
+  const activePiImages = activeSessionId ? stagedPiImagesBySessionId[activeSessionId] ?? [] : [];
+  const contextUsage = useMemo(
+    () => getComposerContextUsage(diagnostics, sessionUiSessionId, activeSessionId),
+    [activeSessionId, diagnostics, sessionUiSessionId],
+  );
   const slashQuery = getSlashDraftQuery(draft);
   const todoSnapshot = useMemo(() => {
     if (!activeSessionId || activeSession?.agent_backend !== "pi") {
@@ -357,11 +404,11 @@ export function Composer() {
   }, [visibleCommands.length]);
 
   const applySlashCommand = (command: SessionCommand | undefined) => {
-    if (!command) {
+    if (!command || !activeSessionId) {
       return;
     }
 
-    composerStoreApi.setDraft(formatSlashCommandValue(command.name));
+    composerStoreApi.setDraft(activeSessionId, formatSlashCommandValue(command.name));
     setHighlightedCommandIndex(0);
   };
 
@@ -376,6 +423,30 @@ export function Composer() {
         [sessionId]: 0,
       };
     });
+    setStagedPiImagesBySessionId((value) => {
+      if (!value[sessionId]?.length) {
+        return value;
+      }
+
+      return {
+        ...value,
+        [sessionId]: [],
+      };
+    });
+  };
+
+  const restorePiImages = (sessionId: string, images: SessionImageInput[]) => {
+    if (!images.length) {
+      return;
+    }
+    setStagedPiImagesBySessionId((value) => ({
+      ...value,
+      [sessionId]: images,
+    }));
+    setAttachedFilesBySessionId((value) => ({
+      ...value,
+      [sessionId]: images.length,
+    }));
   };
 
   const refreshSessionAfterSend = (sessionId: string, agentBackend?: string) => {
@@ -422,13 +493,17 @@ export function Composer() {
       return;
     }
 
-    composerStoreApi.submit(activeSessionId)
+    const piImages = activeSessionIsPi ? activePiImages : [];
+
+    composerStoreApi.submit(activeSessionId, piImages.length ? { images: piImages } : undefined)
       .then(async (response) => {
         clearAttachmentCount(activeSessionId);
         const targetSessionId = await resolvePostSendSessionId(response, activeSessionId);
         await refreshSessionAfterSend(targetSessionId, activeSession?.agent_backend);
       })
-      .catch(() => undefined);
+      .catch(() => {
+        restorePiImages(activeSessionId, piImages);
+      });
   };
 
   const queueCurrentDraft = () => {
@@ -437,10 +512,11 @@ export function Composer() {
     }
 
     const queuedText = draft;
-    composerStoreApi.setDraft("");
-    api.enqueueMessage(activeSessionId, queuedText)
+    const piImages = activeSessionIsPi ? activePiImages : [];
+    composerStoreApi.setDraft(activeSessionId, "");
+    clearAttachmentCount(activeSessionId);
+    api.enqueueMessage(activeSessionId, queuedText, piImages.length ? { images: piImages } : undefined)
       .then(async (response) => {
-        clearAttachmentCount(activeSessionId);
         const targetSessionId = await resolvePostSendSessionId(response, activeSessionId);
         if (activeSessionIsHistoricalPi && targetSessionId !== activeSessionId) {
           return refreshSessionAfterSend(targetSessionId, activeSession?.agent_backend);
@@ -448,7 +524,8 @@ export function Composer() {
         return sessionUiStoreApi.refresh(targetSessionId, { agentBackend: activeSession?.agent_backend });
       })
       .catch(() => {
-        composerStoreApi.setDraft(queuedText);
+        composerStoreApi.setDraft(activeSessionId, queuedText);
+        restorePiImages(activeSessionId, piImages);
       });
   };
 
@@ -480,7 +557,6 @@ export function Composer() {
       return;
     }
 
-    const attachmentIndex = activeAttachmentCount + 1;
     setAttachmentUploading(true);
 
     try {
@@ -516,6 +592,26 @@ export function Composer() {
         throw new Error("file too large");
       }
 
+      if (activeSessionIsPi) {
+        const nextImage: SessionImageInput = {
+          file_name: uploadName,
+          mime_type: uploadBlob.type || file.type || "image/jpeg",
+          data_b64: bytesToBase64(new Uint8Array(buffer)),
+        };
+        const nextImages = [...activePiImages, nextImage];
+        setStagedPiImagesBySessionId((value) => ({
+          ...value,
+          [activeSessionId]: nextImages,
+        }));
+        setAttachedFilesBySessionId((value) => ({
+          ...value,
+          [activeSessionId]: nextImages.length,
+        }));
+        return;
+      }
+
+      const attachmentIndex = activeAttachmentCount + 1;
+
       await api.attachSessionFile(activeSessionId, {
         filename: uploadName,
         data_b64: bytesToBase64(new Uint8Array(buffer)),
@@ -536,7 +632,9 @@ export function Composer() {
   const attachButtonTitle = !activeSessionId
     ? "Select a session first"
     : activeSessionIsPi
-      ? "Attachments are not available for Pi sessions"
+      ? attachmentUploading
+        ? "Uploading image..."
+        : "Attach image"
       : attachmentUploading
         ? "Uploading attachment..."
         : "Attach file";
@@ -574,6 +672,11 @@ export function Composer() {
             }}
           >
             <div className="composerInputWrap flex-1">
+              {contextUsage ? (
+                <div className="composerContextBadge" title={contextUsage.title} aria-label={contextUsage.title}>
+                  {contextUsage.usedPercent}%
+                </div>
+              ) : null}
               <Textarea
                 textareaRef={textareaRef}
                 value={draft}
@@ -582,7 +685,10 @@ export function Composer() {
                 className="composerTextarea"
                 onInput={(event) => {
                   syncComposerTextareaHeight(event.currentTarget, mobileComposerAutosize);
-                  composerStoreApi.setDraft(event.currentTarget.value);
+                  if (!activeSessionId) {
+                    return;
+                  }
+                  composerStoreApi.setDraft(activeSessionId, event.currentTarget.value);
                 }}
                 onKeyDown={(event) => {
                   if (commandMenuOpen) {
@@ -651,7 +757,7 @@ export function Composer() {
               ) : null}
             </div>
             <div className="composerControlsRow">
-              <input ref={fileInputRef} type="file" hidden tabIndex={-1} onChange={handleAttachChange} />
+              <input ref={fileInputRef} type="file" accept="image/*" hidden tabIndex={-1} onChange={handleAttachChange} />
               <Button
                 type="button"
                 variant="outline"

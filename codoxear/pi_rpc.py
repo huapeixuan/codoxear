@@ -228,11 +228,27 @@ class PiRpcClient:
         return result
 
     def prompt(
-        self, text: str, *, streaming_behavior: str | None = None
+        self,
+        text: str,
+        *,
+        streaming_behavior: str | None = None,
+        images: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"message": text}
         if isinstance(streaming_behavior, str) and streaming_behavior:
             payload["streamingBehavior"] = streaming_behavior
+        if images:
+            payload["images"] = [
+                {
+                    "type": "image",
+                    "data": item["data_b64"],
+                    "mimeType": item["mime_type"],
+                }
+                for item in images
+                if isinstance(item, dict)
+                and isinstance(item.get("data_b64"), str)
+                and isinstance(item.get("mime_type"), str)
+            ]
         return self.send_command("prompt", payload=payload)
 
     def abort(self, turn_id: str | None = None) -> dict[str, Any]:

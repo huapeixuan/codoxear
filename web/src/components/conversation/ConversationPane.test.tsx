@@ -1383,7 +1383,7 @@ describe("ConversationPane", () => {
     );
     const composerStore = createStaticStore(
       {
-        draft: "",
+        draftBySessionId: {},
         sending: true,
         pendingBySessionId: {
           "sess-pending": [{ role: "user", text: "Please continue", pending: true, localId: "local-1" }],
@@ -1514,6 +1514,69 @@ describe("ConversationPane", () => {
     expect(loadInitial).toHaveBeenCalledWith("history:pi:resume-hist");
   });
 
+  it("reloads historical pi messages when revisiting the same synthetic history session", async () => {
+    const sessionsStore = createMutableStore(
+      {
+        items: [{ session_id: "history:pi:resume-hist", agent_backend: "pi", historical: true }],
+        activeSessionId: "history:pi:resume-hist",
+        loading: false,
+        newSessionDefaults: null,
+      },
+      (_getState, setState) => ({
+        refresh: () => Promise.resolve(),
+        select: (sessionId: string) => {
+          setState({
+            ..._getState(),
+            activeSessionId: sessionId,
+          });
+        },
+      }),
+    );
+    const loadInitial = vi.fn().mockResolvedValue(undefined);
+    const messagesStore = createStaticStore(
+      {
+        bySessionId: {
+          "history:pi:resume-hist": [{ role: "assistant", text: "Cached reply" }],
+        },
+        offsetsBySessionId: { "history:pi:resume-hist": 1 },
+        hasOlderBySessionId: {},
+        olderBeforeBySessionId: {},
+        loadingOlderBySessionId: {},
+        loadingBySessionId: { "history:pi:resume-hist": false },
+        loadedBySessionId: { "history:pi:resume-hist": true },
+        loading: false,
+      },
+      { loadInitial, poll: () => Promise.resolve(), loadOlder: () => Promise.resolve() },
+    );
+
+    root = document.createElement("div");
+    document.body.appendChild(root);
+    await act(async () => {
+      render(
+        <AppProviders sessionsStore={sessionsStore as any} messagesStore={messagesStore as any}>
+          <ConversationPane />
+        </AppProviders>,
+        root!,
+      );
+      await Promise.resolve();
+    });
+
+    expect(loadInitial).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      (sessionsStore as any).select(null);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      (sessionsStore as any).select("history:pi:resume-hist");
+      await Promise.resolve();
+    });
+
+    expect(loadInitial).toHaveBeenCalledTimes(2);
+    expect(loadInitial).toHaveBeenLastCalledWith("history:pi:resume-hist");
+  });
+
   it("shows the loading skeleton immediately for an unloaded historical pi session", async () => {
     const sessionsStore = createStaticStore(
       {
@@ -1561,12 +1624,15 @@ describe("ConversationPane", () => {
 
     root = document.createElement("div");
     document.body.appendChild(root);
-    render(
-      <AppProviders sessionsStore={sessionsStore as any} messagesStore={messagesStore as any}>
-        <ConversationPane />
-      </AppProviders>,
-      root,
-    );
+    await act(async () => {
+      render(
+        <AppProviders sessionsStore={sessionsStore as any} messagesStore={messagesStore as any}>
+          <ConversationPane />
+        </AppProviders>,
+        root!,
+      );
+      await Promise.resolve();
+    });
 
     expect(root.querySelector("[data-kind='loading']")).not.toBeNull();
     expect(root.textContent).not.toContain("No conversation events yet.");
@@ -1575,5 +1641,65 @@ describe("ConversationPane", () => {
       resolveLoad?.();
       await Promise.resolve();
     });
+  });
+
+  it("does not stay stuck on the loading skeleton when a historical load fails", async () => {
+    const sessionsStore = createStaticStore(
+      {
+        items: [{ session_id: "history:pi:resume-fail", agent_backend: "pi", historical: true }],
+        activeSessionId: "history:pi:resume-fail",
+        loading: false,
+        newSessionDefaults: null,
+      },
+      { refresh: () => Promise.resolve(), select: () => undefined },
+    );
+    const loadInitial = vi.fn(async (sessionId: string) => {
+      messagesStore.setState({
+        ...messagesStore.getState(),
+        loadingBySessionId: { ...messagesStore.getState().loadingBySessionId, [sessionId]: true },
+        loading: true,
+      });
+      await Promise.resolve();
+      messagesStore.setState({
+        ...messagesStore.getState(),
+        loadingBySessionId: { ...messagesStore.getState().loadingBySessionId, [sessionId]: false },
+        loading: false,
+      });
+      throw new Error("boom");
+    });
+    const messagesStore = createMutableStore(
+      {
+        bySessionId: {},
+        offsetsBySessionId: {},
+        hasOlderBySessionId: {},
+        olderBeforeBySessionId: {},
+        loadingOlderBySessionId: {},
+        loadingBySessionId: {},
+        loadedBySessionId: {},
+        loading: false,
+      },
+      () => ({
+        loadInitial,
+        poll: () => Promise.resolve(),
+        loadOlder: () => Promise.resolve(),
+      }),
+    );
+
+    root = document.createElement("div");
+    document.body.appendChild(root);
+    await act(async () => {
+      render(
+        <AppProviders sessionsStore={sessionsStore as any} messagesStore={messagesStore as any}>
+          <ConversationPane />
+        </AppProviders>,
+        root!,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(root.querySelector("[data-kind='loading']")).toBeNull();
+    expect(root.textContent).toContain("No conversation events yet.");
+    expect(loadInitial).toHaveBeenCalledTimes(1);
   });
 });

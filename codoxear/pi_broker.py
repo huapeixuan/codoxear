@@ -200,6 +200,32 @@ def _ask_user_request_id_from_message(message: Any) -> str | None:
     return tool_call_id if isinstance(tool_call_id, str) and tool_call_id else None
 
 
+def _clean_prompt_images(value: Any) -> list[dict[str, str]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("images must be a list")
+    cleaned: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("images must contain objects")
+        data_b64 = item.get("data_b64")
+        mime_type = item.get("mime_type")
+        file_name = item.get("file_name")
+        if not isinstance(data_b64, str) or not data_b64:
+            raise ValueError("image data_b64 required")
+        if not isinstance(mime_type, str) or not mime_type.startswith("image/"):
+            raise ValueError("image mime_type must start with image/")
+        cleaned.append(
+            {
+                "data_b64": data_b64,
+                "mime_type": mime_type,
+                "file_name": file_name if isinstance(file_name, str) else "image",
+            }
+        )
+    return cleaned
+
+
 def _resolved_ui_request_ids(event: dict[str, Any]) -> set[str]:
     resolved_ids: set[str] = set()
 
@@ -526,7 +552,9 @@ class PiBroker:
                 pass
             self._stop.wait(1.0)
 
-    def _submit_terminal_prompt(self, text: str) -> dict[str, Any]:
+    def _submit_terminal_prompt(
+        self, text: str, *, images: list[dict[str, str]] | None = None
+    ) -> dict[str, Any]:
         st = self._get_state_snapshot()
         if not st:
             raise RuntimeError("no state")
@@ -538,7 +566,9 @@ class PiBroker:
                 st.busy = True
                 st.prompt_sent_at = time.monotonic()
         try:
-            result = st.rpc.prompt(text, streaming_behavior=streaming_behavior)
+            result = st.rpc.prompt(
+                text, streaming_behavior=streaming_behavior, images=images
+            )
         except Exception:
             with self._lock:
                 if self.state is st:
@@ -786,7 +816,12 @@ class PiBroker:
                 if not isinstance(text, str) or not text.strip():
                     _send_socket_json_line(conn, {"error": "text required"})
                     return
-                self._submit_terminal_prompt(text)
+                try:
+                    images = _clean_prompt_images(req.get("images"))
+                except ValueError as exc:
+                    _send_socket_json_line(conn, {"error": str(exc)})
+                    return
+                self._submit_terminal_prompt(text, images=images or None)
                 _send_socket_json_line(conn, {"queued": False, "queue_len": 0})
                 return
 

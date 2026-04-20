@@ -177,7 +177,7 @@ function renderAppShell({
     { loadInitial: vi.fn().mockResolvedValue(undefined), poll: vi.fn().mockResolvedValue(undefined) },
   );
   const composerStore = createStaticStore(
-    { draft: "", sending: false },
+    { draftBySessionId: {}, sending: false },
     { setDraft: vi.fn(), submit: vi.fn() },
   );
   const sessionUiStore = createStaticStore(
@@ -1637,7 +1637,7 @@ describe("AppShell", () => {
       { loadInitial: vi.fn(), poll: vi.fn() },
     );
     const composerStore = createStaticStore(
-      { draft: "", sending: false },
+      { draftBySessionId: {}, sending: false },
       { setDraft: vi.fn(), submit: vi.fn() },
     );
     const sessionUiStore = createStaticStore(
@@ -1684,7 +1684,7 @@ describe("AppShell", () => {
       { loadInitial: vi.fn().mockRejectedValue({ status: 404 }), poll: vi.fn().mockResolvedValue(undefined) },
     );
     const composerStore = createStaticStore(
-      { draft: "", sending: false },
+      { draftBySessionId: {}, sending: false },
       { setDraft: vi.fn(), submit: vi.fn() },
     );
     const sessionUiStore = createStaticStore(

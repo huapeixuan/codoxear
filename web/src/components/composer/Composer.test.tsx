@@ -36,6 +36,7 @@ interface RenderComposerOptions {
   sessionUiSessionId?: string | null;
   diagnostics?: Record<string, unknown> | null;
   draft?: string;
+  draftBySessionId?: Record<string, string>;
   submitResult?: unknown;
 }
 
@@ -102,6 +103,7 @@ function renderComposer(options: RenderComposerOptions = {}) {
     sessionUiSessionId = activeSessionId,
     diagnostics = null,
     draft = "Hello",
+    draftBySessionId,
     submitResult,
   } = options;
   const submit = vi.fn().mockResolvedValue(submitResult);
@@ -114,10 +116,15 @@ function renderComposer(options: RenderComposerOptions = {}) {
     (setState) => ({ refresh: vi.fn(), select: vi.fn(), setState }),
   );
   const composerStore = createStore(
-    { draft, sending: false },
-    (setState) => ({
-      setDraft(value: string) {
-        setState({ draft: value });
+    { draftBySessionId: draftBySessionId ?? (activeSessionId ? { [activeSessionId]: draft } : {}), sending: false },
+    (setState, getState) => ({
+      setDraft(sessionId: string, value: string) {
+        setState({
+          draftBySessionId: {
+            ...(getState().draftBySessionId ?? {}),
+            [sessionId]: value,
+          },
+        });
       },
       submit,
     }),
@@ -188,7 +195,7 @@ describe("Composer", () => {
     Object.defineProperty(event, "isComposing", { value: false });
     textarea.dispatchEvent(event);
 
-    expect(submit).toHaveBeenCalledWith("sess-1");
+    expect(submit).toHaveBeenCalledWith("sess-1", undefined);
     expect(event.defaultPrevented).toBe(true);
   });
 
@@ -202,7 +209,7 @@ describe("Composer", () => {
       await Promise.resolve();
     });
 
-    expect(submit).toHaveBeenCalledWith("sess-1");
+    expect(submit).toHaveBeenCalledWith("sess-1", undefined);
     expect(liveSessionStore.loadInitial).toHaveBeenCalledWith("sess-1");
     expect(sessionUiStore.refresh).toHaveBeenCalledWith("sess-1", { agentBackend: "pi" });
     expect(sessionsStore.refresh).toHaveBeenCalledTimes(1);
@@ -222,7 +229,7 @@ describe("Composer", () => {
       await Promise.resolve();
     });
 
-    expect(submit).toHaveBeenCalledWith("history:pi:resume-hist");
+    expect(submit).toHaveBeenCalledWith("history:pi:resume-hist", undefined);
     expect(sessionsStore.refresh).toHaveBeenCalledTimes(2);
     expect(sessionsStore.select).toHaveBeenCalledWith("live-pi-1");
     expect(liveSessionStore.loadInitial).toHaveBeenCalledWith("live-pi-1");
@@ -263,7 +270,7 @@ describe("Composer", () => {
     Object.defineProperty(event, "isComposing", { value: false });
     textarea.dispatchEvent(event);
 
-    expect(submit).toHaveBeenCalledWith("sess-1");
+    expect(submit).toHaveBeenCalledWith("sess-1", undefined);
     expect(event.defaultPrevented).toBe(true);
   });
 
@@ -339,15 +346,48 @@ describe("Composer", () => {
     expect(getSessionCommands).toHaveBeenCalledTimes(1);
 
     act(() => {
-      composerStore.setDraft("hello");
+      composerStore.setDraft("sess-1", "hello");
     });
     await flushEffects();
 
     act(() => {
-      composerStore.setDraft("/re");
+      composerStore.setDraft("sess-1", "/re");
     });
     await flushEffects();
 
+    expect(getSessionCommands).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not leak a slash draft into another session", async () => {
+    const getSessionCommands = vi.spyOn(api, "getSessionCommands").mockResolvedValue({
+      commands: [
+        { name: "autocontinue", description: "Enable AutoContinue" },
+        { name: "autocontinue-stop", description: "Stop AutoContinue" },
+      ],
+    });
+    const { sessionsStore } = renderComposer({
+      activeSessionId: "sess-1",
+      items: [
+        { session_id: "sess-1", agent_backend: "pi", busy: false },
+        { session_id: "sess-2", agent_backend: "pi", busy: false },
+      ],
+      draftBySessionId: { "sess-1": "/aut" },
+    });
+
+    await flushEffects();
+    await act(async () => {
+      await getSessionCommands.mock.results[0]?.value;
+    });
+    await flushEffects();
+
+    expect(getRoot().textContent).toContain("/autocontinue");
+
+    act(() => {
+      sessionsStore.setState({ activeSessionId: "sess-2" });
+    });
+    await flushEffects();
+
+    expect(getRoot().querySelector("[data-testid='composer-command-menu']")).toBeNull();
     expect(getSessionCommands).toHaveBeenCalledTimes(1);
   });
 
@@ -427,16 +467,54 @@ describe("Composer", () => {
     expect(composerRoot.querySelector(".composerAttachBadge")?.textContent).toBe("1");
   });
 
-  it("disables attachments for pi sessions", () => {
+  it("enables image attachments for pi sessions", () => {
     renderComposer({
       items: [{ session_id: "sess-1", agent_backend: "pi", busy: false }],
     });
     const composerRoot = getRoot();
 
     const attachButton = composerRoot.querySelector(".composerAttachButton") as HTMLButtonElement;
+    const fileInput = composerRoot.querySelector('input[type="file"]') as HTMLInputElement;
 
-    expect(attachButton.disabled).toBe(true);
-    expect(attachButton.title).toContain("Pi");
+    expect(attachButton.disabled).toBe(false);
+    expect(attachButton.title).toContain("Attach image");
+    expect(fileInput.accept).toBe("image/*");
+  });
+
+  it("sends staged Pi images with the draft", async () => {
+    const { submit } = renderComposer({
+      items: [{ session_id: "sess-1", agent_backend: "pi", busy: false }],
+    });
+    const composerRoot = getRoot();
+
+    const attachButton = composerRoot.querySelector(".composerAttachButton") as HTMLButtonElement;
+    const fileInput = composerRoot.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(["hello"], "shot.png", { type: "image/png" });
+
+    Object.defineProperty(fileInput, "files", {
+      configurable: true,
+      value: [file],
+    });
+
+    await act(async () => {
+      attachButton.click();
+      fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      (composerRoot.querySelector("button[type='submit']") as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+
+    expect(submit).toHaveBeenCalledWith("sess-1", {
+      images: [{
+        file_name: "shot.png",
+        mime_type: "image/png",
+        data_b64: "aGVsbG8=",
+      }],
+    });
   });
 
   it("queues the current draft through the queue button and refreshes workspace state", async () => {
@@ -455,9 +533,9 @@ describe("Composer", () => {
     });
     await flushEffects();
 
-    expect(enqueueMessage).toHaveBeenCalledWith("sess-1", "After this turn, also inspect logs");
+    expect(enqueueMessage).toHaveBeenCalledWith("sess-1", "After this turn, also inspect logs", undefined);
     expect(sessionUiStore.refresh).toHaveBeenCalledWith("sess-1", { agentBackend: "pi" });
-    expect(composerStore.getState().draft).toBe("");
+    expect(composerStore.getState().draftBySessionId["sess-1"]).toBe("");
   });
 
   it("shows a todo summary bar above the composer for a current pi session with todo items", () => {
@@ -607,6 +685,41 @@ describe("Composer", () => {
     const composerRoot = getRoot();
 
     expect(composerRoot.querySelector(".composerTodoBar")).toBeNull();
+  });
+
+  it("shows a context usage badge for the active session when token data is available", () => {
+    renderComposer({
+      diagnostics: {
+        token: {
+          percent_remaining: 58,
+          tokens_in_context: 84000,
+          context_window: 200000,
+        },
+      },
+    });
+    const composerRoot = getRoot();
+
+    const badge = composerRoot.querySelector(".composerContextBadge") as HTMLElement | null;
+
+    expect(badge).not.toBeNull();
+    expect(badge?.textContent).toContain("42%");
+    expect(badge?.getAttribute("title")).toContain("84,000 / 200,000");
+  });
+
+  it("hides the context usage badge when session ui state is stale", () => {
+    renderComposer({
+      sessionUiSessionId: "sess-2",
+      diagnostics: {
+        token: {
+          percent_remaining: 58,
+          tokens_in_context: 84000,
+          context_window: 200000,
+        },
+      },
+    });
+    const composerRoot = getRoot();
+
+    expect(composerRoot.querySelector(".composerContextBadge")).toBeNull();
   });
 
   it("does not show a todo bar when session ui state is stale", () => {

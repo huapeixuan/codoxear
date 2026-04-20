@@ -408,6 +408,64 @@ describe("api", () => {
     }));
   });
 
+  it("posts Pi send payloads with images", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => '{"ok":true}',
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.sendMessage("pi-session", "check this", {
+      images: [{
+        file_name: "shot.png",
+        mime_type: "image/png",
+        data_b64: "aGVsbG8=",
+      }],
+    })).resolves.toEqual({ ok: true });
+
+    expect(fetchMock).toHaveBeenCalledWith("api/sessions/pi-session/send", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({
+        text: "check this",
+        images: [{
+          file_name: "shot.png",
+          mime_type: "image/png",
+          data_b64: "aGVsbG8=",
+        }],
+      }),
+    }));
+  });
+
+  it("posts Pi queue payloads with images", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => '{"ok":true}',
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.enqueueMessage("pi-session", "after this", {
+      images: [{
+        file_name: "shot.png",
+        mime_type: "image/png",
+        data_b64: "aGVsbG8=",
+      }],
+    })).resolves.toEqual({ ok: true });
+
+    expect(fetchMock).toHaveBeenCalledWith("api/sessions/pi-session/enqueue", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({
+        text: "after this",
+        images: [{
+          file_name: "shot.png",
+          mime_type: "image/png",
+          data_b64: "aGVsbG8=",
+        }],
+      }),
+    }));
+  });
+
   it("requests file reads for a session path", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

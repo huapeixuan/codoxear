@@ -302,6 +302,30 @@ def read_latest_pi_todo_snapshot(
     )
 
 
+def _user_image_attachment_summary(payload: dict[str, Any]) -> str | None:
+    if payload.get("role") != "user":
+        return None
+    count = 0
+    content = payload.get("content")
+    if isinstance(content, list):
+        count += sum(
+            1
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "image"
+        )
+    attachments = payload.get("attachments")
+    if isinstance(attachments, list):
+        count += sum(
+            1
+            for item in attachments
+            if isinstance(item, dict) and item.get("type") == "image"
+        )
+    if count <= 0:
+        return None
+    suffix = "image" if count == 1 else "images"
+    return f"[Attached {count} {suffix}]"
+
+
 def _message_event_info(entry: dict[str, Any]) -> tuple[str | None, str | None, bool]:
     payload = _payload_for_entry(entry)
     if not isinstance(payload, dict):
@@ -313,6 +337,8 @@ def _message_event_info(entry: dict[str, Any]) -> tuple[str | None, str | None, 
     if role not in {"user", "assistant"}:
         return None, None, False
     text = _entry_text(payload)
+    if (not isinstance(text, str) or not text) and role == "user":
+        text = _user_image_attachment_summary(payload)
     if not isinstance(text, str) or not text:
         return None, None, False
     has_ts = _entry_ts(payload) is not None or _entry_ts(entry) is not None
