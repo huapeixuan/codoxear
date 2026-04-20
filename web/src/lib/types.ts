@@ -18,6 +18,31 @@ export interface NewSessionDefaults {
   backends?: Record<string, LaunchBackendDefaults>;
 }
 
+export type PrState = "OPEN" | "DRAFT" | "CLOSED" | "MERGED";
+
+export interface PrSummary {
+  number: number;
+  state: PrState;
+}
+
+export interface PullRequestDetail {
+  number: number;
+  title: string;
+  state: PrState | string;
+  url: string;
+  is_draft: boolean;
+  head_ref_name: string;
+}
+
+export type RepoAvailability = "ok" | "no-gh" | "no-pr" | "not-a-repo" | "error";
+
+export interface SessionRepoDetail {
+  cwd: string;
+  git_branch: string | null;
+  pr: PullRequestDetail | null;
+  availability: RepoAvailability;
+}
+
 export interface SessionSummary {
   session_id: string;
   thread_id?: string | null;
@@ -35,6 +60,7 @@ export interface SessionSummary {
   start_ts?: number;
   updated_ts?: number;
   git_branch?: string | null;
+  pr_summary?: PrSummary | null;
   model?: string | null;
   provider_choice?: string | null;
   reasoning_effort?: string | null;

@@ -25,6 +25,7 @@ import type {
   SessionHeartbeatResponse,
   SessionImageInput,
   SessionMessagePayload,
+  SessionRepoDetail,
   SessionUiStateResponse,
   SessionsResponse,
   VoiceSettingsResponse,
@@ -76,6 +77,10 @@ export const api = {
   },
   getSessionDetails(sessionId: string, signal?: AbortSignal) {
     return getJson<SessionDetailsResponse>(`/api/sessions/${sessionId}/details`, signal);
+  },
+  getSessionRepo(sessionId: string, options?: { refresh?: boolean }, signal?: AbortSignal) {
+    const suffix = options?.refresh ? "?refresh=1" : "";
+    return getJson<SessionRepoDetail>(`/api/sessions/${sessionId}/repo${suffix}`, signal);
   },
   listMessages(sessionId: string, init = false, signal?: AbortSignal, offset?: number, before?: number, limit?: number) {
     const query = new URLSearchParams();

@@ -35,6 +35,12 @@ Currently supported agent backends:
 - Writes the same `socks/*.sock` + `socks/*.json` metadata the server expects.
 - Linux and macOS.
 
+### `codoxear.git_context`
+
+- Resolves the current git branch and the GitHub pull request (via `gh pr view`) for a session's `cwd`, with per-`cwd` TTL caching and a per-`cwd` lock to keep session-list polling cheap.
+- Powers the `pr_summary` field returned in `GET /api/sessions` and the new detail endpoint `GET /api/sessions/<id>/repo` (honors `?refresh=1`).
+- Degrades to `availability: "no-gh" | "no-pr" | "not-a-repo" | "error"` when `gh` is missing, the branch has no PR, the cwd is not a git tree, or a subprocess fails/timeouts.
+
 ### `codoxear.rollout_log` and `codoxear.pi_log`
 
 - Shared normalization layer that turns backend-native logs into the UI’s common event/token/busy model.

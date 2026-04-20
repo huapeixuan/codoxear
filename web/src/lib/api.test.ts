@@ -649,4 +649,52 @@ describe("api", () => {
       body: JSON.stringify({ cwd: "/tmp", label: "New Label", collapsed: true }),
     }));
   });
+
+  it("fetches session repo detail without refresh", async () => {
+    const payload = {
+      cwd: "/tmp/repo",
+      git_branch: "feature/login",
+      pr: { number: 42, title: "Add login", state: "OPEN", url: "https://gh/x/y/pull/42", is_draft: false, head_ref_name: "feature/login" },
+      availability: "ok",
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify(payload),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.getSessionRepo("s1")).resolves.toEqual(payload);
+    expect(fetchMock).toHaveBeenCalledWith("api/sessions/s1/repo", expect.objectContaining({
+      headers: { Accept: "application/json" },
+    }));
+  });
+
+  it("fetches session repo detail with refresh flag", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => '{"cwd":"/tmp","git_branch":null,"pr":null,"availability":"not-a-repo"}',
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.getSessionRepo("s1", { refresh: true });
+    expect(fetchMock).toHaveBeenCalledWith("api/sessions/s1/repo?refresh=1", expect.any(Object));
+  });
+
+  it("propagates 404 on session repo lookup", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        text: async () => '{"error":"session not found"}',
+      }),
+    );
+
+    await expect(api.getSessionRepo("missing")).rejects.toMatchObject({
+      message: "session not found",
+      status: 404,
+    });
+  });
 });

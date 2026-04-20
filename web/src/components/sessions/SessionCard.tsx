@@ -4,6 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
 import type { SessionSummary } from "../../lib/types";
+import { RepoBadges } from "./RepoBadges";
 
 interface SessionCardProps {
   session: SessionSummary;
@@ -96,6 +97,15 @@ export function SessionCard({ session, active, subtitle, onSelect, onEdit, onDup
               <div className="sessionTitleWrap">
                 <div id={titleId} className="sessionTitle">{title}</div>
                 {subtitle ? <div className="sessionCwdText">{subtitle}</div> : null}
+                {(session.git_branch || session.pr_summary) ? (
+                  <div className="sessionRepoBadgesRow relative z-10 mt-1">
+                    <RepoBadges
+                      sessionId={session.session_id}
+                      branch={session.git_branch ?? null}
+                      prSummary={session.pr_summary ?? null}
+                    />
+                  </div>
+                ) : null}
               </div>
             </div>
             <div className="sessionCardFooterRow">

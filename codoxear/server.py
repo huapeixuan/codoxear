@@ -1786,6 +1786,7 @@ SESSION_LIST_ROW_KEYS = (
     "busy",
     "queue_len",
     "git_branch",
+    "pr_summary",
     "transport",
     "blocked",
     "snoozed",
@@ -2135,18 +2136,9 @@ def _priority_from_elapsed_seconds(elapsed_s: float) -> float:
 
 
 def _current_git_branch(cwd: Path) -> str | None:
-    try:
-        branch = _run_git(
-            cwd,
-            ["rev-parse", "--abbrev-ref", "HEAD"],
-            timeout_s=GIT_DIFF_TIMEOUT_SECONDS,
-            max_bytes=64 * 1024,
-        ).strip()
-    except (RuntimeError, FileNotFoundError):
-        return None
-    if not branch:
-        return None
-    return branch
+    from codoxear import git_context as _git_context
+
+    return _git_context.current_git_branch(cwd)
 
 
 def _todo_snapshot_payload_for_session(s: Session) -> dict[str, Any]:
@@ -3936,7 +3928,11 @@ def _session_diagnostics_payload(
     cwd_path = _safe_expanduser(Path(s.cwd))
     if not cwd_path.is_absolute():
         cwd_path = cwd_path.resolve()
-    git_branch = _current_git_branch(cwd_path)
+    from codoxear import git_context as _git_context
+
+    repo_ctx = _git_context.resolve_repo_context(cwd_path)
+    git_branch = repo_ctx.git_branch
+    pr_summary = repo_ctx.pr_summary()
     updated_ts = _display_updated_ts(s)
     elapsed_s = max(0.0, time.time() - updated_ts)
     time_priority = _priority_from_elapsed_seconds(elapsed_s)
@@ -3979,6 +3975,7 @@ def _session_diagnostics_payload(
         "tmux_session": s.tmux_session,
         "tmux_window": s.tmux_window,
         "git_branch": git_branch,
+        "pr_summary": pr_summary,
         "time_priority": time_priority,
         "base_priority": base_priority,
         "final_priority": final_priority,
@@ -6549,7 +6546,11 @@ class SessionManager:
                 cwd_path = _safe_expanduser(Path(canonical_cwd or s.cwd))
                 if not cwd_path.is_absolute():
                     cwd_path = cwd_path.resolve()
-                git_branch = _current_git_branch(cwd_path)
+                from codoxear import git_context as _git_context
+
+                repo_ctx = _git_context.resolve_repo_context(cwd_path)
+                git_branch = repo_ctx.git_branch
+                pr_summary = repo_ctx.pr_summary()
                 if s.first_user_message is None:
                     try:
                         preview = ""
@@ -6597,6 +6598,7 @@ class SessionManager:
                         "first_user_message": s.first_user_message or "",
                         "files": list(files),
                         "git_branch": git_branch,
+                        "pr_summary": pr_summary,
                         "model_provider": s.model_provider,
                         "preferred_auth_method": s.preferred_auth_method,
                         "provider_choice": _provider_choice_for_backend(
@@ -9110,7 +9112,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 cwd_path = _safe_expanduser(Path(s.cwd))
                 if not cwd_path.is_absolute():
                     cwd_path = cwd_path.resolve()
-                git_branch = _current_git_branch(cwd_path)
+                from codoxear import git_context as _git_context
+
+                _repo_ctx = _git_context.resolve_repo_context(cwd_path)
+                git_branch = _repo_ctx.git_branch
+                pr_summary = _repo_ctx.pr_summary()
                 updated_ts = _display_updated_ts(s)
                 elapsed_s = max(0.0, time.time() - updated_ts)
                 time_priority = _priority_from_elapsed_seconds(elapsed_s)
@@ -9171,6 +9177,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         "tmux_session": s.tmux_session,
                         "tmux_window": s.tmux_window,
                         "git_branch": git_branch,
+                        "pr_summary": pr_summary,
                         "time_priority": time_priority,
                         "base_priority": base_priority,
                         "final_priority": final_priority,
@@ -9688,6 +9695,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         "staged": staged2,
                     },
                 )
+                return
+
+            if path.startswith("/api/sessions/") and path.endswith("/repo"):
+                if not _require_auth(self):
+                    self._unauthorized()
+                    return
+                parts = path.split("/")
+                session_id = parts[3] if len(parts) >= 4 else ""
+                if not session_id:
+                    self.send_error(404)
+                    return
+                MANAGER.refresh_session_meta(session_id, strict=False)
+                s = MANAGER.get_session(session_id)
+                if not s:
+                    _json_response(self, 404, {"error": "session not found"})
+                    return
+                qs = urllib.parse.parse_qs(u.query)
+                refresh_q = qs.get("refresh", [""])[0]
+                refresh = refresh_q == "1"
+                cwd_path = _safe_expanduser(Path(s.cwd))
+                if not cwd_path.is_absolute():
+                    cwd_path = cwd_path.resolve()
+                from codoxear import git_context as _git_context
+
+                ctx = _git_context.resolve_repo_context(cwd_path, refresh=refresh)
+                _json_response(self, 200, ctx.to_detail_dict())
                 return
 
             if path.startswith("/api/sessions/") and path.endswith("/git/diff"):
