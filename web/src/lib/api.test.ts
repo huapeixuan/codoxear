@@ -635,7 +635,7 @@ describe("api", () => {
   });
 
   it("edits cwd group metadata", async () => {
-    const payload = { ok: true, cwd: "/tmp", label: "New Label", collapsed: true };
+    const payload = { ok: true, cwd: "/tmp", label: "New Label", collapsed: true, hidden: true, hidden_after_live_start_ts: 123.5 };
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -643,10 +643,10 @@ describe("api", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(api.editCwdGroup({ cwd: "/tmp", label: "New Label", collapsed: true })).resolves.toEqual(payload);
+    await expect(api.editCwdGroup({ cwd: "/tmp", label: "New Label", collapsed: true, hidden: true, hidden_after_live_start_ts: 123.5 })).resolves.toEqual(payload);
     expect(fetchMock).toHaveBeenCalledWith("api/cwd_groups/edit", expect.objectContaining({
       method: "POST",
-      body: JSON.stringify({ cwd: "/tmp", label: "New Label", collapsed: true }),
+      body: JSON.stringify({ cwd: "/tmp", label: "New Label", collapsed: true, hidden: true, hidden_after_live_start_ts: 123.5 }),
     }));
   });
 

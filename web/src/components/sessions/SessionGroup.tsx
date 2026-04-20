@@ -6,9 +6,11 @@ interface SessionGroupProps {
   subtitle: string;
   collapsed?: boolean;
   canRename?: boolean;
+  canHide?: boolean;
   isSaving?: boolean;
   errorMessage?: string;
   onRename?: (value: string) => Promise<boolean> | boolean;
+  onHide?: () => void;
   onToggle?: () => void;
   children: ComponentChildren;
 }
@@ -30,16 +32,41 @@ export function SessionGroup({
   subtitle,
   collapsed = false,
   canRename = false,
+  canHide = false,
   isSaving = false,
   errorMessage = "",
   onRename,
+  onHide,
   onToggle,
   children,
 }: SessionGroupProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState(title);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
   const savingRef = useRef(false);
+  const longPressTimerRef = useRef<number | null>(null);
   const titleTooltip = subtitle?.trim() ? subtitle : title;
+
+  useEffect(() => {
+    if (!menuOpen) {
+      return;
+    }
+
+    const closeMenu = () => setMenuOpen(false);
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("scroll", closeMenu, true);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("scroll", closeMenu, true);
+    };
+  }, [menuOpen]);
+
+  useEffect(() => () => {
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current);
+    }
+  }, []);
 
   useEffect(() => {
     if (!isEditing) {
@@ -58,6 +85,32 @@ export function SessionGroup({
     if (saved) {
       setIsEditing(false);
     }
+  }
+
+  function openMenu(x: number, y: number) {
+    if (!canRename && !canHide) {
+      return;
+    }
+    setMenuPosition({ x, y });
+    setMenuOpen(true);
+  }
+
+  function clearLongPress() {
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }
+
+  function beginRename() {
+    setMenuOpen(false);
+    setDraftTitle(title);
+    setIsEditing(true);
+  }
+
+  function hideGroup() {
+    setMenuOpen(false);
+    onHide?.();
   }
 
   return (
@@ -97,6 +150,23 @@ export function SessionGroup({
                   className="sessionGroupTitleButton"
                   aria-expanded={!collapsed}
                   onClick={onToggle}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    openMenu(event.clientX, event.clientY);
+                  }}
+                  onPointerDown={(event) => {
+                    if (event.pointerType !== "touch") {
+                      return;
+                    }
+                    clearLongPress();
+                    longPressTimerRef.current = window.setTimeout(() => {
+                      openMenu(event.clientX, event.clientY);
+                      longPressTimerRef.current = null;
+                    }, 450);
+                  }}
+                  onPointerUp={clearLongPress}
+                  onPointerCancel={clearLongPress}
+                  onPointerLeave={clearLongPress}
                   disabled={isSaving}
                   title={titleTooltip}
                 >
@@ -117,10 +187,7 @@ export function SessionGroup({
               <button
                 type="button"
                 className="sessionGroupRenameButton"
-                onClick={() => {
-                  setDraftTitle(title);
-                  setIsEditing(true);
-                }}
+                onClick={beginRename}
                 disabled={isSaving}
               >
                 Rename
@@ -129,6 +196,24 @@ export function SessionGroup({
           </span>
         </div>
         {errorMessage ? <p className="sessionGroupError">{errorMessage}</p> : null}
+        {menuOpen ? (
+          <div
+            className="sessionGroupMenu"
+            style={{ left: `${menuPosition.x}px`, top: `${menuPosition.y}px` }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            {canRename ? (
+              <button type="button" className="sessionGroupMenuItem" onClick={beginRename}>
+                Rename
+              </button>
+            ) : null}
+            {canHide ? (
+              <button type="button" className="sessionGroupMenuItem sessionGroupMenuItemDanger" onClick={hideGroup}>
+                Hide working directory
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {collapsed ? null : <div className="sessionGroupList">{children}</div>}
       </div>
     </section>

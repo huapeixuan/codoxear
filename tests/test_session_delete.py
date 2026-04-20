@@ -12,6 +12,7 @@ class TestSessionDelete(unittest.TestCase):
         manager._lock = threading.Lock()
         manager._sessions = {}
         manager._hidden_sessions = set()
+        manager._hidden_session_cutoffs = {}
         manager._aliases = {}
         manager._sidebar_meta = {}
         manager._harness = {}
@@ -76,6 +77,75 @@ class TestSessionDelete(unittest.TestCase):
                 "history:pi:resume-1", "thread-1", "resume-1", "pi"
             )
         )
+        self.assertEqual(manager._hidden_sessions, set())
+        self.assertEqual(manager._hidden_session_cutoffs["thread:pi:thread-1"], 1.0)
+        self.assertEqual(manager._hidden_session_cutoffs["resume:pi:resume-1"], 1.0)
+
+    def test_list_sessions_unhides_cutoff_hidden_historical_entry_after_update(
+        self,
+    ) -> None:
+        manager = self._manager()
+        manager._include_historical_sessions = True
+        manager._discover_existing_if_stale = lambda *args, **kwargs: None  # type: ignore[method-assign]
+        manager._prune_dead_sessions = lambda *args, **kwargs: None  # type: ignore[method-assign]
+        manager._update_meta_counters = lambda *args, **kwargs: None  # type: ignore[method-assign]
+        manager._maybe_drain_session_queue = lambda *args, **kwargs: None  # type: ignore[method-assign]
+        manager._save_hidden_sessions = lambda: None  # type: ignore[method-assign]
+        manager._hidden_session_cutoffs = {"resume:pi:resume-1": 10.0}
+
+        historical = {
+            "session_id": "history:pi:resume-1",
+            "thread_id": "resume-1",
+            "agent_backend": "pi",
+            "backend": "pi",
+            "resume_session_id": "resume-1",
+            "updated_ts": 20.0,
+            "start_ts": 20.0,
+            "queue_len": 0,
+            "busy": False,
+            "historical": True,
+        }
+
+        with patch(
+            "codoxear.server._historical_sidebar_items", return_value=[historical]
+        ):
+            rows = manager.list_sessions()
+
+        self.assertEqual([row["session_id"] for row in rows], ["history:pi:resume-1"])
+        self.assertNotIn("resume:pi:resume-1", manager._hidden_session_cutoffs)
+
+    def test_list_sessions_keeps_cutoff_hidden_historical_entry_without_update(
+        self,
+    ) -> None:
+        manager = self._manager()
+        manager._include_historical_sessions = True
+        manager._discover_existing_if_stale = lambda *args, **kwargs: None  # type: ignore[method-assign]
+        manager._prune_dead_sessions = lambda *args, **kwargs: None  # type: ignore[method-assign]
+        manager._update_meta_counters = lambda *args, **kwargs: None  # type: ignore[method-assign]
+        manager._maybe_drain_session_queue = lambda *args, **kwargs: None  # type: ignore[method-assign]
+        manager._save_hidden_sessions = lambda: None  # type: ignore[method-assign]
+        manager._hidden_session_cutoffs = {"resume:pi:resume-1": 10.0}
+
+        historical = {
+            "session_id": "history:pi:resume-1",
+            "thread_id": "resume-1",
+            "agent_backend": "pi",
+            "backend": "pi",
+            "resume_session_id": "resume-1",
+            "updated_ts": 10.0,
+            "start_ts": 10.0,
+            "queue_len": 0,
+            "busy": False,
+            "historical": True,
+        }
+
+        with patch(
+            "codoxear.server._historical_sidebar_items", return_value=[historical]
+        ):
+            rows = manager.list_sessions()
+
+        self.assertEqual(rows, [])
+        self.assertEqual(manager._hidden_session_cutoffs["resume:pi:resume-1"], 10.0)
 
     def test_list_sessions_omits_hidden_historical_entry(self) -> None:
         manager = self._manager()
@@ -105,6 +175,44 @@ class TestSessionDelete(unittest.TestCase):
             rows = manager.list_sessions()
 
         self.assertEqual(rows, [])
+
+    def test_delete_historical_session_hides_only_history_entry(self) -> None:
+        manager = self._manager()
+        manager._save_hidden_sessions = lambda: None  # type: ignore[method-assign]
+
+        kill_calls: list[str] = []
+
+        def kill_session(session_id: str) -> bool:
+            kill_calls.append(session_id)
+            return True
+
+        manager.kill_session = kill_session  # type: ignore[method-assign]
+
+        with patch(
+            "codoxear.server._historical_session_row",
+            return_value={
+                "session_id": "history:pi:resume-1",
+                "resume_session_id": "resume-1",
+                "thread_id": "resume-1",
+                "agent_backend": "pi",
+                "backend": "pi",
+                "historical": True,
+            },
+        ):
+            ok = manager.delete_session("history:pi:resume-1")
+
+        self.assertTrue(ok)
+        self.assertEqual(kill_calls, [])
+        self.assertIn("history:pi:resume-1", manager._hidden_sessions)
+        self.assertFalse(
+            manager._session_is_hidden(
+                "live-broker",
+                "thread-1",
+                "resume-1",
+                "pi",
+                include_historical_identity=False,
+            )
+        )
 
 
 if __name__ == "__main__":
