@@ -703,7 +703,7 @@ def _ask_user_prompt_fallback_available(payload: dict[str, Any], answer: Any) ->
     return (
         "cannot read properties of undefined" in content_text
         and "answers" in content_text
-    )
+    ) or "askuserquestion bridge could not open an interactive editor" in content_text
 
 
 def _todo_snapshot_event(

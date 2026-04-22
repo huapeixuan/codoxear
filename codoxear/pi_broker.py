@@ -157,7 +157,7 @@ def _record_ui_request(st: "State", event: dict[str, Any]) -> None:
             else event.get("allowMultiple")
         )
 
-    st.pending_ui_requests[request_id] = {
+    pending_request = {
         "id": request_id,
         "method": method,
         "title": event.get("title"),
@@ -174,6 +174,10 @@ def _record_ui_request(st: "State", event: dict[str, Any]) -> None:
         "timeout_ms": timeout_ms,
         "status": "pending",
     }
+    prefill = event.get("prefill")
+    if isinstance(prefill, str):
+        pending_request["prefill"] = prefill
+    st.pending_ui_requests[request_id] = pending_request
 
 
 def _resume_session_id_from_agent_args(args: list[str]) -> str | None:

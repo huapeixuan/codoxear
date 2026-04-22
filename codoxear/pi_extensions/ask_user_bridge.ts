@@ -27,6 +27,7 @@ type AskUserOutcome = {
 };
 
 const ASK_USER_BRIDGE_PREFIX = "__codoxear_ask_user_bridge_v1__";
+const ASK_USER_BRIDGE_UNAVAILABLE_ERROR = "AskUserQuestion bridge could not open an interactive editor for this session.";
 
 function encodeAskUserBridgeRequest(params: AskUserParams) {
   return `${ASK_USER_BRIDGE_PREFIX}\n${JSON.stringify({
@@ -70,7 +71,14 @@ async function askViaEditor(ctx: ExtensionContext, params: AskUserParams): Promi
     throw new Error("AskUserQuestion requires an interactive UI");
   }
 
-  const response = await ctx.ui.editor("AskUserQuestion", encodeAskUserBridgeRequest(params));
+  let response: string | undefined;
+  try {
+    response = await ctx.ui.editor("AskUserQuestion", encodeAskUserBridgeRequest(params));
+  } catch {
+    // Fall back to a deterministic tool error so Codoxear can offer chat-based
+    // answer submission instead of exposing a host-specific JS exception.
+    throw new Error(ASK_USER_BRIDGE_UNAVAILABLE_ERROR);
+  }
   return parseAskUserBridgeResponse(response);
 }
 

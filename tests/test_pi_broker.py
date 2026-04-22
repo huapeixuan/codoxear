@@ -338,11 +338,19 @@ class _FakeRpc:
         return dict(self.state)
 
     def prompt(
-        self, text: str, *, streaming_behavior: str | None = None
+        self,
+        text: str,
+        *,
+        streaming_behavior: str | None = None,
+        images: list[dict[str, str]] | None = None,
     ) -> dict[str, object]:
-        self.calls.append(
-            ("prompt", {"text": text, "streaming_behavior": streaming_behavior})
-        )
+        payload: dict[str, object] = {
+            "text": text,
+            "streaming_behavior": streaming_behavior,
+        }
+        if images is not None:
+            payload["images"] = images
+        self.calls.append(("prompt", payload))
         self.state["busy"] = True
         return {"turn_id": "turn-001", "queued": False}
 
@@ -376,11 +384,19 @@ class _BlockingPromptRpc(_FakeRpc):
         self.release_prompt = threading.Event()
 
     def prompt(
-        self, text: str, *, streaming_behavior: str | None = None
+        self,
+        text: str,
+        *,
+        streaming_behavior: str | None = None,
+        images: list[dict[str, str]] | None = None,
     ) -> dict[str, object]:
-        self.calls.append(
-            ("prompt", {"text": text, "streaming_behavior": streaming_behavior})
-        )
+        payload: dict[str, object] = {
+            "text": text,
+            "streaming_behavior": streaming_behavior,
+        }
+        if images is not None:
+            payload["images"] = images
+        self.calls.append(("prompt", payload))
         self.prompt_started.set()
         self.release_prompt.wait(1.0)
         self.state["busy"] = True
@@ -759,6 +775,57 @@ class TestPiBroker(unittest.TestCase):
                         "options": ["Details", "Sidebar"],
                         "allow_freeform": False,
                         "allow_multiple": True,
+                        "timeout_ms": None,
+                        "status": "pending",
+                    }
+                ]
+            },
+        )
+
+    def test_ui_state_preserves_editor_prefill_for_ask_user_bridge(self) -> None:
+        rpc = _FakeRpc()
+        prefill = (
+            "__codoxear_ask_user_bridge_v1__\n"
+            '{"questions":[{"header":"测试","question":"想测试哪种 AskUser 交互？","options":[{"label":"单选","description":"返回一个单选题示例。"}]}]}'
+        )
+        rpc.events = [
+            {
+                "type": "extension_ui_request",
+                "id": "ui-editor-1",
+                "method": "editor",
+                "title": "AskUserQuestion",
+                "prefill": prefill,
+            }
+        ]
+        broker = PiBroker(cwd="/tmp")
+        broker.state = PiBrokerState(
+            session_id="pi-session-001",
+            codex_pid=123,
+            sock_path=Path("/tmp/pi.sock"),
+            session_path=Path("/tmp/pi-session.jsonl"),
+            start_ts=0.0,
+            rpc=rpc,
+        )
+
+        broker._sync_output_from_rpc()
+
+        resp = _roundtrip_json(broker, {"cmd": "ui_state"})
+
+        self.assertEqual(
+            resp,
+            {
+                "requests": [
+                    {
+                        "id": "ui-editor-1",
+                        "method": "editor",
+                        "title": "AskUserQuestion",
+                        "message": None,
+                        "question": None,
+                        "context": None,
+                        "prefill": prefill,
+                        "options": [],
+                        "allow_freeform": True,
+                        "allow_multiple": False,
                         "timeout_ms": None,
                         "status": "pending",
                     }
@@ -1300,17 +1367,19 @@ class TestPiBroker(unittest.TestCase):
     def test_send_surfaces_rpc_error_payload(self) -> None:
         class _ErrorRpc(_FakeRpc):
             def prompt(
-                self, text: str, *, streaming_behavior: str | None = None
+                self,
+                text: str,
+                *,
+                streaming_behavior: str | None = None,
+                images: list[dict[str, str]] | None = None,
             ) -> dict[str, object]:
-                self.calls.append(
-                    (
-                        "prompt",
-                        {
-                            "text": text,
-                            "streaming_behavior": streaming_behavior,
-                        },
-                    )
-                )
+                payload: dict[str, object] = {
+                    "text": text,
+                    "streaming_behavior": streaming_behavior,
+                }
+                if images is not None:
+                    payload["images"] = images
+                self.calls.append(("prompt", payload))
                 return {"error": "prompt rejected"}
 
         rpc = _ErrorRpc()
@@ -1386,17 +1455,19 @@ class TestPiBroker(unittest.TestCase):
     def test_send_surfaces_rpc_exception_message(self) -> None:
         class _ErrorRpc(_FakeRpc):
             def prompt(
-                self, text: str, *, streaming_behavior: str | None = None
+                self,
+                text: str,
+                *,
+                streaming_behavior: str | None = None,
+                images: list[dict[str, str]] | None = None,
             ) -> dict[str, object]:
-                self.calls.append(
-                    (
-                        "prompt",
-                        {
-                            "text": text,
-                            "streaming_behavior": streaming_behavior,
-                        },
-                    )
-                )
+                payload: dict[str, object] = {
+                    "text": text,
+                    "streaming_behavior": streaming_behavior,
+                }
+                if images is not None:
+                    payload["images"] = images
+                self.calls.append(("prompt", payload))
                 raise RuntimeError("prompt rejected")
 
         rpc = _ErrorRpc()
@@ -2099,14 +2170,19 @@ class _SlowBusyRpc(_FakeRpc):
         self._report_busy = False
 
     def prompt(
-        self, text: str, *, streaming_behavior: str | None = None
+        self,
+        text: str,
+        *,
+        streaming_behavior: str | None = None,
+        images: list[dict[str, str]] | None = None,
     ) -> dict[str, object]:
-        self.calls.append(
-            (
-                "prompt",
-                {"text": text, "streaming_behavior": streaming_behavior},
-            )
-        )
+        payload: dict[str, object] = {
+            "text": text,
+            "streaming_behavior": streaming_behavior,
+        }
+        if images is not None:
+            payload["images"] = images
+        self.calls.append(("prompt", payload))
         # Pi accepts the prompt but doesn't set busy yet in its internal state
         return {"turn_id": "turn-001", "queued": False}
 

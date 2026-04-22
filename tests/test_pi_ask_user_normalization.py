@@ -395,3 +395,64 @@ def test_ask_user_question_rpc_custom_ui_failure_exposes_prompt_fallback() -> No
     assert events[0]["resolved"] is True
     assert events[0]["answer"] is None
     assert events[0]["prompt_fallback_available"] is True
+
+
+def test_ask_user_question_bridge_unavailable_exposes_prompt_fallback() -> None:
+    entries = [
+        {
+            "type": "message",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "toolCall",
+                        "id": "call_ask_q_bridge_missing",
+                        "name": "AskUserQuestion",
+                        "arguments": {
+                            "questions": [
+                                {
+                                    "header": "展示位置",
+                                    "question": "这个 `claude-todo-v2-state` 你希望优先展示在哪一层？",
+                                    "options": [
+                                        {"label": "Composer 上方 (Recommended)"},
+                                        {"label": "会话详情"},
+                                    ],
+                                    "multiSelect": False,
+                                }
+                            ]
+                        },
+                    }
+                ],
+            },
+        },
+        {
+            "type": "message",
+            "message": {
+                "role": "toolResult",
+                "toolCallId": "call_ask_q_bridge_missing",
+                "toolName": "AskUserQuestion",
+                "isError": True,
+                "details": {},
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "AskUserQuestion bridge could not open an interactive editor for this session.",
+                    }
+                ],
+            },
+        },
+    ]
+
+    events, _meta, _flags, _diag = pi_messages.normalize_pi_entries(
+        entries, include_system=True
+    )
+
+    assert len(events) == 1
+    assert events[0]["type"] == "ask_user"
+    assert (
+        events[0]["question"] == "这个 `claude-todo-v2-state` 你希望优先展示在哪一层？"
+    )
+    assert events[0]["context"] == "展示位置"
+    assert events[0]["resolved"] is True
+    assert events[0]["answer"] is None
+    assert events[0]["prompt_fallback_available"] is True
