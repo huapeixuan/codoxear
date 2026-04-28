@@ -3049,6 +3049,35 @@ class TestPiBackendRouting(unittest.TestCase):
         self.assertEqual(payload["session"]["provider_choice"], "openai-api")
         self.assertEqual(payload["session"]["priority_offset"], 0.25)
 
+    def test_session_details_resolves_historical_session_not_present_in_visible_list(
+        self,
+    ) -> None:
+        handler = _HandlerHarness("/api/sessions/history:codex:resume-hist/details")
+        with (
+            patch("codoxear.server._require_auth", return_value=True),
+            patch("codoxear.server.MANAGER") as manager,
+            patch(
+                "codoxear.server._historical_session_row",
+                return_value={
+                    "session_id": "history:codex:resume-hist",
+                    "cwd": "/tmp/project",
+                    "agent_backend": "codex",
+                    "historical": True,
+                    "resume_session_id": "resume-hist",
+                },
+            ),
+        ):
+            manager.list_sessions.return_value = []
+            manager.get_session.return_value = None
+
+            Handler.do_GET(handler)  # type: ignore[arg-type]
+
+        payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
+        self.assertEqual(handler.status, 200)
+        self.assertEqual(payload["session"]["session_id"], "history:codex:resume-hist")
+        self.assertEqual(payload["session"]["resume_session_id"], "resume-hist")
+        self.assertTrue(payload["session"]["historical"])
+
     def test_session_details_exposes_takeover_capability_for_live_pi_tmux_session(
         self,
     ) -> None:

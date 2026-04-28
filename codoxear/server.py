@@ -1742,6 +1742,18 @@ def _clean_alias(name: str) -> str:
     return cleaned
 
 
+def _session_row_display_name(row: dict[str, Any] | None) -> str:
+    if not isinstance(row, dict):
+        return ""
+    for key in ("alias", "first_user_message", "title"):
+        value = row.get(key)
+        if isinstance(value, str):
+            cleaned = _clean_alias(value)
+            if cleaned:
+                return cleaned
+    return ""
+
+
 def _normalize_cwd_group_key(cwd: Any) -> str:
     if not isinstance(cwd, str) or not cwd.strip():
         raise ValueError("cwd must be a non-empty string")
@@ -1967,11 +1979,23 @@ def _session_recent_payload(
 def _session_details_payload(
     manager: "SessionManager", session_id: str
 ) -> dict[str, Any]:
+    live_session = manager.get_session(session_id)
     for row in manager.list_sessions():
         if str(row.get("session_id") or "") == session_id:
             session = _normalize_session_cwd_row(dict(row))
-            session.update(_session_takeover_flags(manager.get_session(session_id)))
+            if live_session is not None:
+                session.update(_session_takeover_flags(live_session))
             return {"ok": True, "session": session}
+    historical_row = _historical_session_row(session_id)
+    if historical_row is not None:
+        session = _normalize_session_cwd_row(dict(historical_row))
+        session.update(
+            {
+                "can_takeover_in_tmux": False,
+                "takeover_reason_unavailable": "takeover is only available for live sessions",
+            }
+        )
+        return {"ok": True, "session": session}
     raise KeyError("unknown session")
 
 
@@ -7857,6 +7881,23 @@ class SessionManager:
                     else ""
                 )
                 codex_args.extend(["--session", resume_target or resume_id])
+
+        def _maybe_seed_resumed_session_title(
+            payload: dict[str, Any],
+        ) -> dict[str, Any]:
+            resumed_label = _session_row_display_name(resume_row)
+            created_session_id = _clean_optional_text(payload.get("session_id"))
+            if not resumed_label or not created_session_id:
+                return payload
+            with self._lock:
+                aliases = getattr(self, "_aliases", None)
+                if not isinstance(aliases, dict):
+                    self._aliases = {}
+                    aliases = self._aliases
+                aliases[created_session_id] = resumed_label
+            self._save_aliases()
+            return payload
+
         codex_args.extend(args or [])
         argv.extend(codex_args)
 
@@ -7993,7 +8034,7 @@ class SessionManager:
             meta = _wait_for_spawned_broker_meta(spawn_nonce)
             payload = _spawn_result_from_meta(meta)
             return {
-                **payload,
+                **_maybe_seed_resumed_session_title(payload),
                 "tmux_session": TMUX_SESSION_NAME,
                 "tmux_window": tmux_window,
             }
@@ -8019,7 +8060,7 @@ class SessionManager:
         # Prevent zombies when the broker exits.
         threading.Thread(target=proc.wait, daemon=True).start()
         meta = _wait_for_spawned_broker_meta(spawn_nonce)
-        return _spawn_result_from_meta(meta)
+        return _maybe_seed_resumed_session_title(_spawn_result_from_meta(meta))
 
     def delete_session(self, session_id: str) -> bool:
         historical_row = _historical_session_row(session_id)

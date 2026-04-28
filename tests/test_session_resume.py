@@ -525,6 +525,9 @@ class TestSpawnWebSessionResume(unittest.TestCase):
 
     def test_spawn_web_session_passes_resume_id_to_broker(self) -> None:
         manager = SessionManager.__new__(SessionManager)
+        manager._aliases = {}
+        manager._lock = threading.Lock()
+        manager._save_aliases = lambda: None
         thread_calls: list[str] = []
 
         class _Proc:
@@ -538,12 +541,17 @@ class TestSpawnWebSessionResume(unittest.TestCase):
             TemporaryDirectory() as td,
             patch(
                 "codoxear.server._list_resume_candidates_for_cwd",
-                return_value=[{"session_id": "resume-a"}],
+                return_value=[
+                    {
+                        "session_id": "resume-a",
+                        "first_user_message": "Recovered codex thread",
+                    }
+                ],
             ),
             patch("codoxear.server._wait_or_raise", return_value=None),
             patch(
                 "codoxear.server._wait_for_spawned_broker_meta",
-                return_value={"broker_pid": 4321},
+                return_value={"broker_pid": 4321, "sock_path": "/tmp/broker-2.sock"},
             ),
             patch(
                 "codoxear.server.subprocess.Popen", return_value=_Proc()
@@ -581,7 +589,8 @@ class TestSpawnWebSessionResume(unittest.TestCase):
             ],
         )
         self.assertEqual(env["CODEX_WEB_RESUME_SESSION_ID"], "resume-a")
-        self.assertEqual(result, {"broker_pid": 4321})
+        self.assertEqual(result, {"broker_pid": 4321, "session_id": "broker-2"})
+        self.assertEqual(manager._aliases.get("broker-2"), "Recovered codex thread")
         self.assertEqual(thread_calls, ["start"])
 
     def test_spawn_web_session_passes_pi_resume_session_file_to_pi_broker(self) -> None:

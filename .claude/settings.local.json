@@ -19,7 +19,8 @@
       "Bash(find /Users/huapeixuan -path */pi-sessions/* -name *.jsonl -type f)",
       "Bash(netstat -anp tcp)",
       "Bash(lsof -nP -iTCP -sTCP:LISTEN)",
-      "mcp__plugin_playwright_playwright__browser_navigate"
+      "mcp__plugin_playwright_playwright__browser_navigate",
+      "Bash(python3 *)"
     ]
   }
 }

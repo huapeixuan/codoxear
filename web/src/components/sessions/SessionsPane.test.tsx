@@ -13,6 +13,7 @@ vi.mock("../../lib/api", () => ({
     editCwdGroup: vi.fn().mockResolvedValue({ ok: true }),
     deleteSession: vi.fn().mockResolvedValue({ ok: true }),
     getSessionDetails: vi.fn().mockResolvedValue({ ok: true, session: { session_id: "sess-1", alias: "Inbox cleanup", agent_backend: "pi", priority_offset: 0 } }),
+    renameSession: vi.fn().mockResolvedValue({ ok: true, alias: "Recovered codex thread" }),
   },
 }));
 
@@ -261,6 +262,172 @@ describe("SessionsPane", () => {
 
     expect(api.createSession).not.toHaveBeenCalled();
     expect(sessionsStore.select).toHaveBeenCalledWith("history:pi:resume-hist");
+  });
+
+  it("resumes historical codex sessions from sidebar metadata without loading details first", async () => {
+    const sessionsStore = renderSessionsPane({
+      items: [{
+        session_id: "history:codex:resume-hist",
+        alias: "Recovered codex thread",
+        cwd: "/tmp/project",
+        agent_backend: "codex",
+        historical: true,
+        resume_session_id: "resume-hist",
+      }],
+      activeSessionId: null,
+      loading: false,
+      newSessionDefaults: null,
+      recentCwds: ["/tmp/project"],
+      cwdGroups: {},
+      tmuxAvailable: false,
+    });
+
+    sessionsStore.refresh = vi.fn(async () => {
+      sessionsStore.setState({
+        ...sessionsStore.getState(),
+        items: [...sessionsStore.getState().items, {
+          session_id: "sess-2",
+          alias: "Recovered codex thread",
+          cwd: "/tmp/project",
+          agent_backend: "codex",
+        }],
+      });
+    });
+
+    const sessionButton = root?.querySelector<HTMLButtonElement>(".sessionCardButton");
+    expect(sessionButton).not.toBeNull();
+    await click(sessionButton!);
+    await flush();
+
+    expect(api.getSessionDetails).not.toHaveBeenCalled();
+    expect(api.createSession).toHaveBeenCalledWith({
+      cwd: "/tmp/project",
+      backend: "codex",
+      resume_session_id: "resume-hist",
+    });
+    expect(sessionsStore.select).toHaveBeenCalledWith("sess-2");
+  });
+
+  it("derives the historical codex resume id from the synthetic session id before falling back to details", async () => {
+    const sessionsStore = renderSessionsPane({
+      items: [{
+        session_id: "history:codex:resume-derived",
+        alias: "Recovered codex thread",
+        cwd: "/tmp/project",
+        agent_backend: "codex",
+        historical: true,
+      }],
+      activeSessionId: null,
+      loading: false,
+      newSessionDefaults: null,
+      recentCwds: ["/tmp/project"],
+      cwdGroups: {},
+      tmuxAvailable: false,
+    });
+
+    sessionsStore.refresh = vi.fn(async () => {
+      sessionsStore.setState({
+        ...sessionsStore.getState(),
+        items: [...sessionsStore.getState().items, {
+          session_id: "sess-2",
+          alias: "Recovered codex thread",
+          cwd: "/tmp/project",
+          agent_backend: "codex",
+        }],
+      });
+    });
+
+    const sessionButton = root?.querySelector<HTMLButtonElement>(".sessionCardButton");
+    expect(sessionButton).not.toBeNull();
+    await click(sessionButton!);
+    await flush();
+
+    expect(api.getSessionDetails).not.toHaveBeenCalled();
+    expect(api.createSession).toHaveBeenCalledWith({
+      cwd: "/tmp/project",
+      backend: "codex",
+      resume_session_id: "resume-derived",
+    });
+    expect(sessionsStore.select).toHaveBeenCalledWith("sess-2");
+  });
+
+  it("preserves the historical codex title on the resumed live session when the new row is still unlabeled", async () => {
+    const sessionsStore = renderSessionsPane({
+      items: [{
+        session_id: "history:codex:resume-hist",
+        first_user_message: "Recovered codex thread",
+        cwd: "/tmp/project",
+        agent_backend: "codex",
+        historical: true,
+        resume_session_id: "resume-hist",
+      }],
+      activeSessionId: null,
+      loading: false,
+      newSessionDefaults: null,
+      recentCwds: ["/tmp/project"],
+      cwdGroups: {},
+      tmuxAvailable: false,
+    });
+
+    sessionsStore.refresh = vi.fn(async () => {
+      sessionsStore.setState({
+        ...sessionsStore.getState(),
+        items: [...sessionsStore.getState().items, {
+          session_id: "sess-2",
+          cwd: "/tmp/project",
+          agent_backend: "codex",
+        }],
+      });
+    });
+
+    const sessionButton = root?.querySelector<HTMLButtonElement>(".sessionCardButton");
+    expect(sessionButton).not.toBeNull();
+    await click(sessionButton!);
+    await flush();
+
+    expect(api.renameSession).toHaveBeenCalledWith("sess-2", "Recovered codex thread");
+  });
+
+  it("preserves the historical codex title even when the first refresh does not surface the new live row yet", async () => {
+    const sessionsStore = renderSessionsPane({
+      items: [{
+        session_id: "history:codex:resume-hist",
+        first_user_message: "Recovered codex thread",
+        cwd: "/tmp/project",
+        agent_backend: "codex",
+        historical: true,
+        resume_session_id: "resume-hist",
+      }],
+      activeSessionId: "history:codex:resume-hist",
+      loading: false,
+      newSessionDefaults: null,
+      recentCwds: ["/tmp/project"],
+      cwdGroups: {},
+      tmuxAvailable: false,
+    });
+
+    let refreshCount = 0;
+    sessionsStore.refresh = vi.fn(async () => {
+      refreshCount += 1;
+      if (refreshCount < 3) {
+        return;
+      }
+      sessionsStore.setState({
+        ...sessionsStore.getState(),
+        items: [...sessionsStore.getState().items, {
+          session_id: "sess-2",
+          cwd: "/tmp/project",
+          agent_backend: "codex",
+        }],
+      });
+    });
+
+    const sessionButton = root?.querySelector<HTMLButtonElement>(".sessionCardButton");
+    expect(sessionButton).not.toBeNull();
+    await click(sessionButton!);
+    await flush();
+
+    expect(api.renameSession).toHaveBeenCalledWith("sess-2", "Recovered codex thread");
   });
 
   it("deletes a historical session after confirmation", async () => {

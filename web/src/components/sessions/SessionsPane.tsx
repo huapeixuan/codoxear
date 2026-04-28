@@ -34,6 +34,33 @@ function shortSessionId(sessionId: string) {
   return match ? match[1] : sessionId.slice(0, 8);
 }
 
+function historicalResumeSessionId(session: SessionSummary) {
+  const explicit = String(session.resume_session_id || "").trim();
+  if (explicit) {
+    return explicit;
+  }
+  if (session.historical !== true) {
+    return "";
+  }
+  const rawSessionId = String(session.session_id || "").trim();
+  if (!rawSessionId.startsWith("history:")) {
+    return "";
+  }
+  const parts = rawSessionId.split(":", 3);
+  return parts.length === 3 ? String(parts[2] || "").trim() : "";
+}
+
+function sessionDisplayName(session: SessionSummary) {
+  return String(session.alias || session.first_user_message || session.title || "").trim();
+}
+
+function sessionHasVisibleLabel(session: SessionSummary | null | undefined) {
+  if (!session) {
+    return false;
+  }
+  return Boolean(sessionDisplayName(session));
+}
+
 function deleteSessionConfirmText(session: SessionSummary) {
   const name = session.alias || session.first_user_message || session.title || "";
   const sid = shortSessionId(session.session_id);
@@ -154,32 +181,51 @@ export function SessionsPane({ onNewSession }: SessionsPaneProps) {
     if (createdSession) {
       sessionsStoreApi.select(createdSession.session_id);
     }
+    return createdSession ?? null;
   };
 
   const resumeHistoricalSession = async (session: SessionSummary) => {
-    const cwd = String(session.cwd || "").trim();
-    if (!cwd) {
-      setActionError("This historical session is missing resume metadata.");
-      return;
-    }
-
     setActionError("");
 
     try {
-      const details = await api.getSessionDetails(session.session_id);
-      const source = details.session;
-      const resumeSessionId = String(source.resume_session_id || "").trim();
-      if (!resumeSessionId) {
+      let cwd = String(session.cwd || "").trim();
+      let resumeSessionId = historicalResumeSessionId(session);
+      let backend = normalizeLaunchBackend(session.agent_backend);
+
+      // Historical rows already carry resume metadata; only fall back to details
+      // if an older cached row is missing fields we now expect in the sidebar.
+      if (!cwd || !resumeSessionId) {
+        const details = await api.getSessionDetails(session.session_id);
+        const source = details.session;
+        cwd = cwd || String(source.cwd || "").trim();
+        resumeSessionId = resumeSessionId || String(source.resume_session_id || "").trim();
+        backend = normalizeLaunchBackend(source.agent_backend);
+      }
+
+      if (!cwd || !resumeSessionId) {
         setActionError("This historical session is missing resume metadata.");
         return;
       }
-      const backend = normalizeLaunchBackend(source.agent_backend);
+
       const response = await api.createSession({
         cwd,
         backend,
         resume_session_id: resumeSessionId,
       });
-      await selectCreatedSession(response);
+      const createdSession = await selectCreatedSession(response);
+      const createdSessionId = String(response.session_id || createdSession?.session_id || "").trim();
+      const historicalLabel = sessionDisplayName(session);
+      const needsRenamedTitle = historicalLabel
+        && createdSessionId
+        && (
+          !createdSession
+          || createdSession.session_id !== createdSessionId
+          || !sessionHasVisibleLabel(createdSession)
+        );
+      if (needsRenamedTitle) {
+        await api.renameSession(createdSessionId, historicalLabel);
+        await sessionsStoreApi.refresh();
+      }
       await sessionsStoreApi.refreshBootstrap();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Failed to resume session");
