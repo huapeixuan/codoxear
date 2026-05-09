@@ -19,10 +19,10 @@ These tasks address `rust-backend-skeleton` review退回项 and unblock Phase 2 
 
 ## 2. Read-only broker IPC client
 
-- [ ] 2.1 Implement `backend-rs/src/broker_client.rs::broker_request(sock_path: &Path, request: &Value, timeout: Duration) -> Result<Value, BrokerError>`; reuse the protocol from ref `runtime.rs:7195-7220` (write JSON + `\n`, read one line, parse). Use `std::os::unix::net::UnixStream` with `set_read_timeout`/`set_write_timeout`; close stream on drop.
-- [ ] 2.2 Implement typed wrappers `broker_state(sock_path, timeout) -> Result<BrokerState, BrokerError>`, `broker_ui_state(sock_path, timeout) -> Result<BrokerUiState, BrokerError>`, `broker_commands(sock_path, timeout) -> Result<BrokerCommands, BrokerError>`. Define `BrokerError { ConnectRefused, Timeout, Empty, Malformed(String), Io(String) }` enum.
-- [ ] 2.3 Add unit tests `backend-rs/tests/broker_client.rs` covering: (a) successful state call against a stub `nc -lU` listener that returns a canned JSON line, (b) connect refused (path does not exist), (c) timeout (listener accepts but does not respond), (d) malformed response (returns `not-json\n`), (e) missing `busy`/`queue_len` fields → `Malformed`. Use `tempfile::tempdir()` for sock paths.
-- [ ] 2.4 Verify with `grep -nE '"(state|ui_state|commands|inject|interrupt|shutdown|enqueue)"' backend-rs/src/broker_client.rs` that only `state`, `ui_state`, `commands` literals appear (write commands are Phase 4).
+- [x] 2.1 Implement `backend-rs/src/broker_client.rs::broker_request(sock_path: &Path, request: &Value, timeout: Duration) -> Result<Value, BrokerError>`; reuse the protocol from ref `runtime.rs:7195-7220` (write JSON + `\n`, read one line, parse). Use `std::os::unix::net::UnixStream` with `set_read_timeout`/`set_write_timeout`; close stream on drop.
+- [x] 2.2 Implement typed wrappers `broker_state(sock_path, timeout) -> Result<BrokerState, BrokerError>`, `broker_ui_state(sock_path, timeout) -> Result<BrokerUiState, BrokerError>`, `broker_commands(sock_path, timeout) -> Result<BrokerCommands, BrokerError>`. Define `BrokerError { ConnectRefused, Timeout, Empty, Malformed(String), Io(String) }` enum.
+- [x] 2.3 Add unit tests `backend-rs/tests/broker_client.rs` covering: (a) successful state call against a stub `nc -lU` listener that returns a canned JSON line, (b) connect refused (path does not exist), (c) timeout (listener accepts but does not respond), (d) malformed response (returns `not-json\n`), (e) missing `busy`/`queue_len` fields → `Malformed`. Use `tempfile::tempdir()` for sock paths.
+- [x] 2.4 Verify with `grep -nE '"(state|ui_state|commands|inject|interrupt|shutdown|enqueue)"' backend-rs/src/broker_client.rs` that only `state`, `ui_state`, `commands` literals appear (write commands are Phase 4).
 
 ## 3. Session loader
 
