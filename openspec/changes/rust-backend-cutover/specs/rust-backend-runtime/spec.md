@@ -36,16 +36,16 @@ The system SHALL gate each in-process background worker (harness sweep, queue sw
 #### Scenario: Voice delivery worker disabled
 
 - **WHEN** `CODOXEAR_ENABLE_VOICE_WORKER` is unset (or `0`)
-- **THEN** no voice delivery task is spawned, no WebPush request is sent from the Rust process, and the Python `voice_push.py` (if running) remains the sole writer to `voice_ledger.json`
+- **THEN** no voice delivery task is spawned, no WebPush request is sent from the Rust process, and the Python `voice_push.py` (if running) remains the sole writer to `voice_delivery_ledger.json`
 
 #### Scenario: Both Rust and Python workers are never co-active
 
 - **WHEN** any `CODOXEAR_ENABLE_*` flag is set on the Rust process
-- **THEN** the Python `SessionManager` SHALL detect the same flag at startup and decline to spawn its own equivalent thread, so that a given on-disk file (`harness.json`, `session_queues.json`, `voice_ledger.json`) is written by exactly one process at a time
+- **THEN** the Python `SessionManager` SHALL detect the same flag at startup and decline to spawn its own equivalent thread, so that a given on-disk file (`harness.json`, `session_queues.json`, `voice_delivery_ledger.json`) is written by exactly one process at a time
 
 ### Requirement: Disk metadata format is preserved byte-for-byte across the cutover
 
-The system SHALL read and write all on-disk state (`~/.local/share/codoxear/socks/<id>.{sock,json}`, `session_aliases.json`, `harness.json`, `session_queues.json`, `session_sidebar.json`, `session_files.json`, `hidden_sessions.json`, `recent_cwds.json`, `voice_ledger.json`, `notification_subscriptions.json`, `voice_settings.json`, `hmac_secret`) using the existing JSON keys, value types, key ordering rules, atomic-rename semantics, and file-mode bits used by the Python implementation as of the head of `main` at the time of cutover.
+The system SHALL read and write all on-disk state (`~/.local/share/codoxear/socks/<id>.{sock,json}`, `session_aliases.json`, `harness.json`, `session_queues.json`, `session_sidebar.json`, `session_files.json`, `hidden_sessions.json`, `recent_cwds.json`, `cwd_groups.json`, `voice_settings.json`, `push_subscriptions.json`, `voice_delivery_ledger.json`, `hmac_secret`) using the existing JSON keys, value types, key ordering rules, atomic-rename semantics, and file-mode bits used by the Python implementation as of the head of `main` at the time of cutover.
 
 #### Scenario: Round-trip socket sidecar through Rust
 
@@ -116,7 +116,7 @@ The system SHALL ensure that for every migration phase listed in `design.md`'s P
 #### Scenario: Voice scan disable rollback
 
 - **WHEN** the Rust voice scan worker has been running for an hour and a regression is observed; the operator sets `CODOXEAR_ENABLE_VOICE_SCAN=0` and restarts the Rust server, then starts the Python `codoxear-server`
-- **THEN** the Python `voice_push.VoicePushCoordinator` resumes scanning from `voice_ledger.json` without producing duplicate notifications, dropped notifications, or corrupted ledger entries
+- **THEN** the Python `voice_push.VoicePushCoordinator` resumes scanning from `voice_delivery_ledger.json` without producing duplicate notifications, dropped notifications, or corrupted ledger entries
 
 #### Scenario: Broker rollback mid-flight
 

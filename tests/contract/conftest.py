@@ -27,16 +27,16 @@ def _wait_for_http(url: str, *, timeout: float = 10.0) -> None:
     import urllib.request
 
     deadline = time.time() + timeout
-    last_error: BaseException | None = None
+    last_error: Exception | None = None
     while time.time() < deadline:
         try:
             # Any HTTP response proves the process is accepting connections; /api/me
             # is expected to be 401 before login.
-            urllib.request.urlopen(f"{url}/api/me", timeout=0.5)
-            return
+            with urllib.request.urlopen(f"{url}/api/me", timeout=0.5):
+                return
         except urllib.error.HTTPError:
             return
-        except BaseException as exc:  # pragma: no cover - diagnostic path
+        except Exception as exc:  # pragma: no cover - diagnostic path
             last_error = exc
             time.sleep(0.1)
     raise RuntimeError(f"server did not become ready at {url}: {last_error}")

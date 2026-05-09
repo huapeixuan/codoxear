@@ -96,7 +96,7 @@ stakeholders: maintainer (huapeixuan)、所有 web 用户（仅观感影响：UI
 
 - ref 已采用同名 flag (`scripts/codoxear-local` 中可见)，照抄即可。
 - 单 flag 单 toggle，回滚粒度细。
-- Python 侧根据 flag 让出，能力同一时刻只在一个进程跑，不会 double-write `voice_ledger.json`。
+- Python 侧根据 flag 让出，能力同一时刻只在一个进程跑，不会 double-write `voice_delivery_ledger.json`。
 
 **替代方案**：通过 `pyproject.toml` 删除 entry point + 完全替换。**否决**理由：缺乏灰度，回滚需要回 git。
 
@@ -164,7 +164,7 @@ let host = env::var("CODEX_WEB_HOST").or_else(|_| env::var("CODOXEAR_BIND_HOST")
 ## Risks / Trade-offs
 
 - **[Risk] 11k LOC `server.py` 中藏的隐式行为没被 ref 完全覆盖**（huapeixuan 在 ref 之后加的功能：PR badge、image composer、per-session drafts、context usage 显示等）→ **Mitigation**：Phase 1 Tasks 第一项是写出**完整 endpoint inventory**（grep `path == "/api/...` + `path.startswith("/api/sessions/")`），逐一比对 ref 的 `routes.rs`，新增的部分作为 phase-specific tasks 显式列出。
-- **[Risk] Python 与 Rust 同时写 `voice_ledger.json` 等共享 JSON 文件造成竞态** → **Mitigation**：Phase 切换时遵循"先把 Python 那一面关停 → 再启 Rust 那一面"的 deploy 顺序，且在 design 中要求 worker 启动前用 `O_EXCL` 创建 `<file>.lock` advisory lock；启动失败立刻 abort，不"先 sleep 再 retry"。
+- **[Risk] Python 与 Rust 同时写 `voice_delivery_ledger.json` 等共享 JSON 文件造成竞态** → **Mitigation**：Phase 切换时遵循"先把 Python 那一面关停 → 再启 Rust 那一面"的 deploy 顺序，且在 design 中要求 worker 启动前用 `O_EXCL` 创建 `<file>.lock` advisory lock；启动失败立刻 abort，不"先 sleep 再 retry"。
 - **[Risk] macOS 上 PTY/lsof 行为差异** → **Mitigation**：Phase 4（broker cutover）的入收测试必须包含 macOS GitHub Actions runner，不能只 Linux 通过就 ship。
 - **[Risk] 用户的 `~/.zshrc` / `~/.bashrc` 已经写死了 `codoxear-broker --` 这个二进制名** → **Mitigation**：Rust broker 装出 `codoxear-broker-rs` 二进制，但同时在 `pyproject.toml` 保留 `codoxear-broker = codoxear.broker:main` 入口（直到 phase 6 才删），并在 README 显式说明用户什么时候应该把 alias 切到 `codoxear-broker-rs`。
 - **[Trade-off] Rust 编译时间** → 用户安装 codoxear 从 `pip install` 一步变成"装 rustup → cargo build --release"。可接受，因为 ref 已经做了同样的取舍；后续可考虑提供 GitHub Releases 预编译 artifact。
