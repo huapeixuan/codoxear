@@ -87,6 +87,24 @@ If you are running from a source checkout and want the latest frontend bundle, b
    - Harness runs in the server process (not the browser tab), so it continues even if you close the web page.
    - Settings are per session; each injection decrements the remaining count and harness turns itself off at zero. Enabled sessions show a `harness` badge in the sidebar.
 
+### Rust backend (Phase 1 preview)
+
+`backend-rs/` is the in-progress Rust port of the Codoxear backend. Phase 1 is a preview skeleton only: it serves `/api/health`, `/api/me`, and `/api/sessions/bootstrap` (plus canonical `/api/v1/*` aliases) and does not replace the Python backend.
+
+Build it with:
+
+```sh
+cd backend-rs && cargo build --release --bins
+```
+
+Run the HTTP server from the repository root with:
+
+```sh
+./backend-rs/target/release/codoxear-backend-rs
+```
+
+By default it binds to `[::]:8743`, matching the Python server. Rollback is simply not running the Rust binary (or reverting the additive Phase 1 files); the Python backend remains unchanged.
+
 ## Tailscale HTTPS
 
 If you want browser notifications or iOS Web Push, use HTTPS instead of plain `http://<host>:8743`.
