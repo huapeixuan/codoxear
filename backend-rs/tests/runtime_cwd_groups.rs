@@ -127,3 +127,14 @@ fn normalize_tilde_path_expands_home() {
         expected.to_string_lossy()
     );
 }
+
+#[test]
+fn unreadable_cwd_groups_returns_empty_map() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("cwd_groups.json");
+    fs::create_dir(&path).unwrap();
+
+    let groups = read_cwd_groups(&path).unwrap();
+
+    assert_eq!(groups, Map::new());
+}

@@ -293,7 +293,10 @@ fn read_optional_json_lenient(path: &Path, label: &str) -> Result<Option<Value>,
             }
         },
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(format!("read {}: {err}", path.display())),
+        Err(err) => {
+            tracing::warn!(path = %path.display(), error = %err, "invalid {label}: read failed");
+            Ok(None)
+        }
     }
 }
 

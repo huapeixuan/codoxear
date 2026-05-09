@@ -59,7 +59,13 @@ def shared_app_home() -> Iterator[Path]:
 def preseed_contract_state(
     shared_app_dir: Path, request: pytest.FixtureRequest
 ) -> None:
-    for name in ("recent_cwds.json", "cwd_groups.json"):
+    for name in (
+        "recent_cwds.json",
+        "cwd_groups.json",
+        "voice_settings.json",
+        "push_subscriptions.json",
+        "voice_delivery_ledger.json",
+    ):
         (shared_app_dir / name).unlink(missing_ok=True)
     scenario = getattr(request.node, "callspec", None)
     scenario_name = scenario.params.get("scenario") if scenario else None
@@ -86,6 +92,81 @@ def preseed_contract_state(
                         "label": "C",
                         "hidden": True,
                         "hidden_after_live_start_ts": 123.5,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    test_name = request.node.name
+    if "settings_voice_parity" in test_name:
+        (shared_app_dir / "voice_settings.json").write_text(
+            json.dumps(
+                {
+                    "tts_enabled_for_narration": True,
+                    "tts_enabled_for_final_response": True,
+                    "tts_base_url": "https://api.openai.com/v1/",
+                    "tts_api_key": "test-key",
+                    "summarization_model": "summary-model",
+                    "tts_model": "tts-model",
+                }
+            ),
+            encoding="utf-8",
+        )
+    if "notifications_subscription_parity" in test_name:
+        (shared_app_dir / "push_subscriptions.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "subscription": {
+                            "endpoint": "https://push.example/one",
+                            "keys": {"p256dh": "p1", "auth": "a1"},
+                        },
+                        "notifications_enabled": True,
+                        "created_ts": 1.0,
+                        "updated_ts": 2.0,
+                        "user_agent": "Mozilla Mobile",
+                        "device_label": "phone",
+                    },
+                    {
+                        "subscription": {
+                            "endpoint": "https://push.example/two",
+                            "keys": {"p256dh": "p2", "auth": "a2"},
+                        },
+                        "notifications_enabled": False,
+                        "created_ts": 3.0,
+                        "updated_ts": 4.0,
+                        "device_class": "desktop",
+                        "device_label": "desktop",
+                    },
+                ]
+            ),
+            encoding="utf-8",
+        )
+    if (
+        "notifications_message_parity" in test_name
+        or "notifications_feed_parity" in test_name
+    ):
+        (shared_app_dir / "voice_delivery_ledger.json").write_text(
+            json.dumps(
+                {
+                    "msg-1": {
+                        "session_id": "session-1",
+                        "session_display_name": "Alpha",
+                        "message_class": "final_response",
+                        "notification_text": "  hello   world ",
+                        "summary_status": "sent",
+                        "narrated_status": "pending",
+                        "push_status": "skipped",
+                        "updated_ts": 10.0,
+                    },
+                    "msg-2": {
+                        "session_id": "session-2",
+                        "message_class": "narration",
+                        "notification_text": "ignored",
+                        "summary_status": "sent",
+                        "push_status": "sent",
+                        "updated_ts": 11.0,
                     },
                 }
             ),
