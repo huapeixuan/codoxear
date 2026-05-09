@@ -10,6 +10,10 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub use crate::launch_defaults::{
+    read_codex_launch_defaults, read_new_session_defaults, read_pi_launch_defaults,
+};
+
 #[derive(Clone)]
 pub struct RuntimeConfig {
     pub app_dir: PathBuf,
@@ -233,9 +237,6 @@ pub fn read_cwd_groups(path: &Path) -> Result<Map<String, Value>, String> {
     Ok(cleaned)
 }
 
-pub use crate::launch_defaults::{
-    read_codex_launch_defaults, read_new_session_defaults, read_pi_launch_defaults,
-};
 pub fn tmux_available() -> bool {
     let Some(path) = env::var_os("PATH") else {
         return false;
@@ -293,7 +294,10 @@ fn read_optional_json_lenient(path: &Path, label: &str) -> Result<Option<Value>,
             }
         },
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(format!("read {}: {err}", path.display())),
+        Err(err) => {
+            tracing::warn!(path = %path.display(), error = %err, "invalid {label}: unreadable file");
+            Ok(None)
+        }
     }
 }
 

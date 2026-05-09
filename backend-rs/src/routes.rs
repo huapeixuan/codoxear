@@ -1,15 +1,12 @@
 use crate::app_state::AppState;
-use crate::models::{BootstrapResponse, MeResponse};
-use crate::runtime::{
-    cookie_name, load_or_create_hmac_secret, read_cwd_groups, read_new_session_defaults,
-    read_recent_cwds, tmux_available, verify_auth_cookie,
-};
+use crate::handlers::health_meta::{health, me, sessions_bootstrap};
+use crate::runtime::{cookie_name, load_or_create_hmac_secret, verify_auth_cookie};
 use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::header;
 use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
 use serde_json::{json, Value};
@@ -27,6 +24,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/health", get(health))
         .merge(protected_v1)
         .nest("/api", public_api_router(state.clone()))
+        .fallback(not_found)
         .with_state(state)
 }
 
@@ -40,36 +38,6 @@ fn public_api_router(state: AppState) -> Router<AppState> {
         ));
 
     Router::new().route("/health", get(health)).merge(protected)
-}
-
-async fn health() -> impl IntoResponse {
-    json_response(
-        StatusCode::OK,
-        json!({"ok": true, "service": "codoxear-backend-rs"}),
-    )
-}
-
-async fn me() -> Response {
-    json_response(StatusCode::OK, json!(MeResponse { ok: true }))
-}
-
-async fn sessions_bootstrap(State(state): State<AppState>) -> Response {
-    match bootstrap_response(&state) {
-        Ok(value) => json_response(StatusCode::OK, json!(value)),
-        Err(message) => internal_error(message),
-    }
-}
-
-fn bootstrap_response(state: &AppState) -> Result<BootstrapResponse, String> {
-    let recent_cwds = read_recent_cwds(&state.config.app_dir.join("recent_cwds.json"))?;
-    let cwd_groups = read_cwd_groups(&state.config.app_dir.join("cwd_groups.json"))?;
-    let new_session_defaults = read_new_session_defaults()?;
-    Ok(BootstrapResponse {
-        recent_cwds,
-        cwd_groups,
-        new_session_defaults,
-        tmux_available: tmux_available(),
-    })
 }
 
 pub async fn require_public_api_auth(
@@ -98,7 +66,17 @@ pub async fn require_public_api_auth(
     }
 }
 
-fn internal_error(message: String) -> Response {
+async fn not_found() -> Response {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::NOT_FOUND;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html;charset=utf-8"),
+    );
+    response
+}
+
+pub fn internal_error(message: String) -> Response {
     json_response(StatusCode::INTERNAL_SERVER_ERROR, json!({"error": message}))
 }
 

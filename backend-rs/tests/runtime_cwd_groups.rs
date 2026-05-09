@@ -1,12 +1,12 @@
+mod common;
+
 use codoxear_backend_rs::runtime::{normalize_cwd_group_key, read_cwd_groups};
+use common::ENV_LOCK;
 use serde_json::Map;
 use std::env;
 use std::fs;
-use std::sync::Mutex;
 use tempfile::TempDir;
 use tracing_test::traced_test;
-
-static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 struct HomeGuard(Option<String>);
 
@@ -53,6 +53,24 @@ fn non_object_cwd_groups_returns_empty_map_and_warns() {
     assert_eq!(groups, Map::new());
     // tracing-test confirms this path is captured at warn level; exact text is
     // intentionally not asserted because structured fields are subscriber-specific.
+}
+
+#[cfg(unix)]
+#[traced_test]
+#[test]
+fn unreadable_cwd_groups_returns_empty_map_and_warns() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("cwd_groups.json");
+    fs::write(&path, "{}").unwrap();
+    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    permissions.set_mode(0o000);
+    fs::set_permissions(&path, permissions).unwrap();
+
+    let groups = read_cwd_groups(&path).unwrap();
+
+    assert_eq!(groups, Map::new());
 }
 
 #[test]

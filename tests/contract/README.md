@@ -14,9 +14,9 @@ pytest tests/contract -q -k 'parity and not readonly'
 pytest tests/contract -q -k 'parity and readonly'
 ```
 
-Phase 2 readonly parity requires `gh` on `PATH` (macOS CI installs it with
-`brew install gh`) so git-context tests exercise the no-auth/no-PR paths instead
-of skipping due to a missing CLI.
+Phase 2 git-context readonly parity will require `gh` on `PATH` when Wave D
+lands. CI currently installs it on macOS ahead of those tests so future
+no-auth/no-PR paths can run without skipping due to a missing CLI.
 
 Current implementation status: Phase 1 retest covers `/api/me` and
 `/api/sessions/bootstrap` including populated bootstrap state; the broader
