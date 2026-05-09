@@ -92,25 +92,130 @@ def test_sessions_bootstrap_parity(
 ) -> None:
     path = "/api/sessions/bootstrap"
     if scenario == "tmux_available":
-        assert shutil.which("tmux") is not None or shutil.which("tmux") is None
+        assert "tmux" not in path
     elif scenario == "ref_bootstrap_404":
         path = "/api/v1/bootstrap"
 
     python_response = _get_response(python_server_url, path, signed_auth_cookie)
     rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
     assert python_response.status == rust_response.status
-    if python_response.status == 200:
+    if python_response.status != 404 or python_response.headers.get(
+        "content-type"
+    ) == rust_response.headers.get("content-type"):
         assert_content_type_equal(python_response, rust_response, path)
+    if python_response.status == 200:
         assert_json_equivalent(
             python_response.json(), rust_response.json(), ignore_keys={"app_version"}
         )
-        if scenario == "empty":
+        if scenario in {"empty", "recent_cwds", "cwd_groups", "tmux_available"}:
             assert python_response.body == rust_response.body
     else:
         assert python_response.status == rust_response.status == 404
 
 
-@pytest.mark.skip(reason="Phase 2 (rust-backend-readonly-routes)")
+@pytest.mark.readonly
+@pytest.mark.parametrize("scenario", ["empty", "voice_populated"])
+def test_settings_voice_parity(
+    python_server_url: str,
+    rust_server_url: str,
+    signed_auth_cookie: str,
+    scenario: str,
+) -> None:
+    path = "/api/settings/voice"
+    python_response = _get_response(python_server_url, path, signed_auth_cookie)
+    rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
+    assert python_response.status == rust_response.status == 200
+    assert_content_type_equal(python_response, rust_response, path)
+    assert_json_equivalent(
+        python_response.json(),
+        rust_response.json(),
+        ignore_keys={"vapid_public_key"},
+    )
+
+
+@pytest.mark.readonly
+@pytest.mark.parametrize("scenario", ["empty", "subscriptions_populated"])
+def test_notifications_subscription_parity(
+    python_server_url: str,
+    rust_server_url: str,
+    signed_auth_cookie: str,
+    scenario: str,
+) -> None:
+    path = "/api/notifications/subscription"
+    python_response = _get_response(python_server_url, path, signed_auth_cookie)
+    rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
+    assert python_response.status == rust_response.status == 200
+    assert_content_type_equal(python_response, rust_response, path)
+    assert_json_equivalent(
+        python_response.json(),
+        rust_response.json(),
+        ignore_keys={"vapid_public_key"},
+    )
+
+
+@pytest.mark.readonly
+@pytest.mark.parametrize(
+    ("scenario", "query", "expected_status"),
+    [
+        ("empty", "", 400),
+        ("empty", "?message_id=does-not-exist", 404),
+        ("message_known", "?message_id=m1", 200),
+    ],
+)
+def test_notifications_message_parity(
+    python_server_url: str,
+    rust_server_url: str,
+    signed_auth_cookie: str,
+    scenario: str,
+    query: str,
+    expected_status: int,
+) -> None:
+    path = f"/api/notifications/message{query}"
+    python_response = _get_response(python_server_url, path, signed_auth_cookie)
+    rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
+    assert python_response.status == rust_response.status == expected_status
+    assert_content_type_equal(python_response, rust_response, path)
+    assert_json_equivalent(python_response.json(), rust_response.json())
+
+
+@pytest.mark.readonly
+@pytest.mark.parametrize(
+    ("scenario", "query", "expected_status"),
+    [
+        ("empty", "?since=not-a-number", 400),
+        ("feed_populated", "?since=0", 200),
+    ],
+)
+def test_notifications_feed_parity(
+    python_server_url: str,
+    rust_server_url: str,
+    signed_auth_cookie: str,
+    scenario: str,
+    query: str,
+    expected_status: int,
+) -> None:
+    path = f"/api/notifications/feed{query}"
+    python_response = _get_response(python_server_url, path, signed_auth_cookie)
+    rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
+    assert python_response.status == rust_response.status == expected_status
+    assert_content_type_equal(python_response, rust_response, path)
+    assert_json_equivalent(python_response.json(), rust_response.json())
+
+
+@pytest.mark.readonly
+def test_metrics_parity(
+    python_server_url: str, rust_server_url: str, signed_auth_cookie: str
+) -> None:
+    path = "/api/metrics"
+    python_response = _get_response(python_server_url, path, signed_auth_cookie)
+    rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
+    assert python_response.status == rust_response.status == 200
+    assert_content_type_equal(python_response, rust_response, path)
+    assert_json_equivalent(python_response.json(), rust_response.json())
+    assert python_response.body == rust_response.body
+
+
+@pytest.mark.skip(reason="Phase 2 Wave B (rust-backend-readonly-routes)")
 def test_sessions_parity(python_server_url: str, rust_server_url: str) -> None:
     python_response: dict[str, Any] = {}
     rust_response: dict[str, Any] = {}

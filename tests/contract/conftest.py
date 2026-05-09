@@ -59,7 +59,13 @@ def shared_app_home() -> Iterator[Path]:
 def preseed_contract_state(
     shared_app_dir: Path, request: pytest.FixtureRequest
 ) -> None:
-    for name in ("recent_cwds.json", "cwd_groups.json"):
+    for name in (
+        "recent_cwds.json",
+        "cwd_groups.json",
+        "voice_settings.json",
+        "push_subscriptions.json",
+        "voice_delivery_ledger.json",
+    ):
         (shared_app_dir / name).unlink(missing_ok=True)
     scenario = getattr(request.node, "callspec", None)
     scenario_name = scenario.params.get("scenario") if scenario else None
@@ -86,6 +92,84 @@ def preseed_contract_state(
                         "label": "C",
                         "hidden": True,
                         "hidden_after_live_start_ts": 123.5,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+    elif scenario_name == "voice_populated":
+        (shared_app_dir / "voice_settings.json").write_text(
+            json.dumps(
+                {
+                    "tts_enabled_for_narration": True,
+                    "tts_enabled_for_final_response": True,
+                    "tts_base_url": " https://voice.example/v1 ",
+                    "tts_api_key": " secret ",
+                    "summarization_model": " gpt-x ",
+                    "tts_model": " voice-y ",
+                }
+            ),
+            encoding="utf-8",
+        )
+    elif scenario_name == "subscriptions_populated":
+        (shared_app_dir / "push_subscriptions.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "subscription": {
+                            "endpoint": "https://old.example",
+                            "keys": {"p256dh": "p", "auth": "a"},
+                        },
+                        "notifications_enabled": False,
+                        "created_ts": 1.0,
+                        "updated_ts": 2.0,
+                        "user_agent": "Desktop Browser",
+                        "device_label": "Desk",
+                    },
+                    {
+                        "subscription": {
+                            "endpoint": "https://new.example",
+                            "keys": {"p256dh": "p2", "auth": "a2"},
+                        },
+                        "notifications_enabled": True,
+                        "created_ts": 3.0,
+                        "updated_ts": 4.0,
+                        "user_agent": "Mobile Safari",
+                        "device_label": "Phone",
+                    },
+                ]
+            ),
+            encoding="utf-8",
+        )
+    elif scenario_name in {"message_known", "feed_populated"}:
+        (shared_app_dir / "voice_delivery_ledger.json").write_text(
+            json.dumps(
+                {
+                    "m1": {
+                        "session_id": "s1",
+                        "session_display_name": "Alpha",
+                        "message_class": "final_response",
+                        "notification_text": "hello world",
+                        "summary_status": "sent",
+                        "push_status": "pending",
+                        "created_ts": 1.0,
+                        "updated_ts": 10.0,
+                    },
+                    "m2": {
+                        "session_id": "s1",
+                        "message_class": "narration",
+                        "notification_text": "skip narration",
+                        "summary_status": "sent",
+                        "created_ts": 1.0,
+                        "updated_ts": 11.0,
+                    },
+                    "m3": {
+                        "session_id": "s2",
+                        "message_class": "final_response",
+                        "notification_text": "not ready",
+                        "summary_status": "pending",
+                        "created_ts": 1.0,
+                        "updated_ts": 12.0,
                     },
                 }
             ),
