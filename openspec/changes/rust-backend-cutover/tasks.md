@@ -23,7 +23,7 @@
 
 ## 4. Phase 2 — Read-only routes parity
 
-- [ ] 4.1 Open OpenSpec change `rust-backend-readonly-routes` (covers all GET endpoints from inventory § 1.1; updates spec scenarios for messages tail/history/live, queue read, harness GET, git diff/changed_files/file_versions, file read/search/blob, cwd_suggestions, settings/voice GET, notifications GET, metrics, sessions list, session_resume_candidates). Definition of Done: every GET row in `docs/cutover/endpoint-inventory.md` has a green parity contract test; 30 minutes of dual-server polling on a real workstation surfaces zero JSON diff (excluding documented ignore-keys).
+- [ ] 4.1 Phase 2 owner change is `rust-backend-readonly-routes` (covers all GET endpoints from inventory § 1.1; updates spec scenarios for messages tail/history/live, queue read, harness GET, git diff/changed_files/file_versions, file read/search/blob, settings/voice GET, notifications GET, metrics, sessions list, session_resume_candidates). Definition of Done: every GET row in `docs/cutover/endpoint-inventory.md` has a green parity contract test; 30 minutes of dual-server polling on a real workstation surfaces zero JSON diff (excluding documented ignore-keys).
 
 ## 5. Phase 3 — Write routes parity + worker handoff
 

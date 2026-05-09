@@ -30,6 +30,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend-rs
+      - name: install gh (macOS)
+        if: runner.os == 'macOS'
+        run: brew install gh
       - name: cargo fmt
         run: cargo fmt --all -- --check
         working-directory: backend-rs
@@ -42,10 +45,19 @@ jobs:
       - name: cargo build bins
         run: cargo build --release --bins
         working-directory: backend-rs
+      - name: source file line limit
+        run: |
+          oversized="$(find backend-rs/src -name '*.rs' -print0 | xargs -0 wc -l | awk '$2 != "total" && $1 > 800 {print}')"
+          if [ -n "$oversized" ]; then
+            echo "$oversized"
+            exit 1
+          fi
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: install pytest
         run: python -m pip install pytest
-      - name: contract parity
-        run: pytest tests/contract -q -k parity
+      - name: contract phase1 parity
+        run: pytest tests/contract -q -k 'parity and not readonly'
+      - name: contract readonly parity
+        run: pytest tests/contract -q -k 'parity and readonly'

@@ -4,18 +4,24 @@ This directory contains cross-backend parity tests for the Rust cutover. Phase 1
 runs the Python server and the new Rust backend against a shared temporary HOME
 so both processes see the same `~/.local/share/codoxear` state and `hmac_secret`.
 
-## Current Phase 1 parity check
+## Parity checks
 
 Build the Rust backend binaries first:
 
 ```bash
 (cd backend-rs && cargo build --release --bins)
-pytest tests/contract -q -k parity
+pytest tests/contract -q -k 'parity and not readonly'
+pytest tests/contract -q -k 'parity and readonly'
 ```
 
-Expected Phase 1 result: `test_me_parity` and
-`test_sessions_bootstrap_parity` pass; `test_sessions_parity` remains skipped
-pending Phase 2 (`rust-backend-readonly-routes`).
+Phase 2 readonly parity requires `gh` on `PATH` (macOS CI installs it with
+`brew install gh`) so git-context tests exercise the no-auth/no-PR paths instead
+of skipping due to a missing CLI.
+
+Current implementation status: Phase 1 retest covers `/api/me` and
+`/api/sessions/bootstrap` including populated bootstrap state; the broader
+readonly endpoint tests are unlocked wave-by-wave by
+`rust-backend-readonly-routes`.
 
 If you need to run Python-only contract collection without the Rust binary, set:
 

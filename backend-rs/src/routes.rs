@@ -11,7 +11,7 @@ use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::{Json, Router};
+use axum::Router;
 use serde_json::{json, Value};
 
 pub fn router(state: AppState) -> Router {
@@ -49,24 +49,27 @@ async fn health() -> impl IntoResponse {
     )
 }
 
-async fn me() -> impl IntoResponse {
-    Json(MeResponse { ok: true })
+async fn me() -> Response {
+    json_response(StatusCode::OK, json!(MeResponse { ok: true }))
 }
 
-async fn sessions_bootstrap(
-    State(state): State<AppState>,
-) -> Result<Json<BootstrapResponse>, (StatusCode, Json<Value>)> {
-    let recent_cwds =
-        read_recent_cwds(&state.config.app_dir.join("recent_cwds.json")).map_err(internal_error)?;
-    let cwd_groups =
-        read_cwd_groups(&state.config.app_dir.join("cwd_groups.json")).map_err(internal_error)?;
-    let new_session_defaults = read_new_session_defaults().map_err(internal_error)?;
-    Ok(Json(BootstrapResponse {
+async fn sessions_bootstrap(State(state): State<AppState>) -> Response {
+    match bootstrap_response(&state) {
+        Ok(value) => json_response(StatusCode::OK, json!(value)),
+        Err(message) => internal_error(message),
+    }
+}
+
+fn bootstrap_response(state: &AppState) -> Result<BootstrapResponse, String> {
+    let recent_cwds = read_recent_cwds(&state.config.app_dir.join("recent_cwds.json"))?;
+    let cwd_groups = read_cwd_groups(&state.config.app_dir.join("cwd_groups.json"))?;
+    let new_session_defaults = read_new_session_defaults()?;
+    Ok(BootstrapResponse {
         recent_cwds,
         cwd_groups,
         new_session_defaults,
         tmux_available: tmux_available(),
-    }))
+    })
 }
 
 pub async fn require_public_api_auth(
@@ -95,11 +98,8 @@ pub async fn require_public_api_auth(
     }
 }
 
-fn internal_error(message: String) -> (StatusCode, Json<Value>) {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({"error": message})),
-    )
+fn internal_error(message: String) -> Response {
+    json_response(StatusCode::INTERNAL_SERVER_ERROR, json!({"error": message}))
 }
 
 fn cookie_value(raw: &str, name: &str) -> Option<String> {
@@ -110,7 +110,7 @@ fn cookie_value(raw: &str, name: &str) -> Option<String> {
     })
 }
 
-fn json_response(status: StatusCode, value: Value) -> Response {
+pub fn json_response(status: StatusCode, value: Value) -> Response {
     let body = serde_json::to_vec(&value).unwrap_or_else(|_| b"{}".to_vec());
     let mut response = Response::new(Body::from(body));
     *response.status_mut() = status;

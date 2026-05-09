@@ -56,7 +56,47 @@ def shared_app_home() -> Iterator[Path]:
 
 
 @pytest.fixture
-def python_server_url(shared_app_home: Path) -> Iterator[str]:
+def preseed_contract_state(
+    shared_app_dir: Path, request: pytest.FixtureRequest
+) -> None:
+    for name in ("recent_cwds.json", "cwd_groups.json"):
+        (shared_app_dir / name).unlink(missing_ok=True)
+    scenario = getattr(request.node, "callspec", None)
+    scenario_name = scenario.params.get("scenario") if scenario else None
+    if scenario_name == "recent_cwds":
+        (shared_app_dir / "recent_cwds.json").write_text(
+            json.dumps(
+                {
+                    "/tmp/a": 10,
+                    "/tmp/b": 30,
+                    "/tmp/c": 20,
+                    "": 99,
+                    "/tmp/ignore-bool": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+    elif scenario_name == "cwd_groups":
+        (shared_app_dir / "cwd_groups.json").write_text(
+            json.dumps(
+                {
+                    "/tmp/project-a": {"label": "A", "collapsed": True},
+                    "/tmp/project-b": {"hidden": True},
+                    "/tmp/project-c": {
+                        "label": "C",
+                        "hidden": True,
+                        "hidden_after_live_start_ts": 123.5,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+
+@pytest.fixture
+def python_server_url(
+    shared_app_home: Path, preseed_contract_state: None
+) -> Iterator[str]:
     """Run the current Python server on a random local port."""
 
     port = _free_port()
@@ -92,7 +132,9 @@ def python_server_url(shared_app_home: Path) -> Iterator[str]:
 
 
 @pytest.fixture
-def rust_server_url(shared_app_home: Path) -> Iterator[str]:
+def rust_server_url(
+    shared_app_home: Path, preseed_contract_state: None
+) -> Iterator[str]:
     """Run the Phase 1 Rust backend binary on a random local port."""
 
     repo_root = Path(__file__).resolve().parents[2]
@@ -135,6 +177,13 @@ def rust_server_url(shared_app_home: Path) -> Iterator[str]:
         except subprocess.TimeoutExpired:  # pragma: no cover - cleanup fallback
             proc.kill()
             proc.wait(timeout=5)
+
+
+@pytest.fixture
+def shared_app_dir(shared_app_home: Path) -> Path:
+    app_dir = shared_app_home / ".local/share/codoxear"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    return app_dir
 
 
 @pytest.fixture

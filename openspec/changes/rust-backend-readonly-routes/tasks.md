@@ -2,20 +2,20 @@
 
 These tasks address `rust-backend-skeleton` review退回项 and unblock Phase 2 byte-level parity testing.
 
-- [ ] 0.1 Add a shared 200-path helper (`json_response(status, value) -> Response` in `backend-rs/src/routes.rs` or `backend-rs/src/json.rs`) that always writes `Content-Type: application/json; charset=utf-8`; refactor `me()` and `sessions_bootstrap()` to use it (remove the `axum::Json` 200 path); reference: code-reviewer #1 on PEI-53.
-- [ ] 0.2 Update `backend-rs/Cargo.toml`: add `serde_json = { version = "1", features = ["preserve_order"] }`; rebuild; rerun `cargo test --release` and `pytest tests/contract -k parity` to ensure Phase 1 retest stays green; reference: code-reviewer #2 on PEI-53.
+- [x] 0.1 Add a shared 200-path helper (`json_response(status, value) -> Response` in `backend-rs/src/routes.rs` or `backend-rs/src/json.rs`) that always writes `Content-Type: application/json; charset=utf-8`; refactor `me()` and `sessions_bootstrap()` to use it (remove the `axum::Json` 200 path); reference: code-reviewer #1 on PEI-53.
+- [x] 0.2 Update `backend-rs/Cargo.toml`: add `serde_json = { version = "1", features = ["preserve_order"] }`; rebuild; rerun `cargo test --release` and `pytest tests/contract -k parity` to ensure Phase 1 retest stays green; reference: code-reviewer #2 on PEI-53.
 - [ ] 0.3 In Phase 1 endpoints that build nested `Map<String, Value>` (notably `BootstrapResponse.new_session_defaults.backends.codex` / `.backends.pi`), insert keys in the same order Python's dict insertion order; verify via raw-bytes diff in a new contract test fixture.
 - [ ] 0.4 Rewrite `backend-rs/src/runtime.rs::read_cwd_groups`: on parse error or non-Object top level, emit `tracing::warn!` with the file path and underlying error and return an empty map; add a unit test reading a malformed `cwd_groups.json` and asserting `Map::new()` plus exactly one warn-level log line; reference: code-reviewer Phase 1 follow-up MEDIUM #2.
-- [ ] 0.5 Rewrite `backend-rs/src/runtime.rs::normalize_cwd_group_key`: implement progressive canonicalization equivalent to Python `Path.expanduser().resolve(strict=False)` (walk longest existing prefix, canonicalize, join remaining tail); add unit tests for: (a) symlinked parent + non-existent child, (b) all-existing path, (c) all-non-existent path, (d) `~`-expanded path; reference: code-reviewer Phase 1 follow-up MEDIUM #3.
-- [ ] 0.6 Add bootstrap populated-state contract tests in `tests/contract/test_endpoint_parity.py`: (b) populated `recent_cwds.json` parity, (c) populated `cwd_groups.json` round-trip parity, (d) `tmux_available` reflects `which tmux`; keep existing (a) empty-state and (e) `/api/v1/bootstrap` 404 tests; verify all five scenarios pass; reference: code-reviewer Phase 1 follow-up MEDIUM #4.
-- [ ] 0.7 Add a regression-guard integration test (`backend-rs/tests/json_response_helper.rs` or extension to `health_me_bootstrap.rs`) that issues every Phase 1 200 path and asserts `Content-Type` equals exactly `application/json; charset=utf-8`.
+- [x] 0.5 Rewrite `backend-rs/src/runtime.rs::normalize_cwd_group_key`: implement progressive canonicalization equivalent to Python `Path.expanduser().resolve(strict=False)` (walk longest existing prefix, canonicalize, join remaining tail); add unit tests for: (a) symlinked parent + non-existent child, (b) all-existing path, (c) all-non-existent path, (d) `~`-expanded path; reference: code-reviewer Phase 1 follow-up MEDIUM #3.
+- [x] 0.6 Add bootstrap populated-state contract tests in `tests/contract/test_endpoint_parity.py`: (b) populated `recent_cwds.json` parity, (c) populated `cwd_groups.json` round-trip parity, (d) `tmux_available` reflects `which tmux`; keep existing (a) empty-state and (e) `/api/v1/bootstrap` 404 tests; verify all five scenarios pass; reference: code-reviewer Phase 1 follow-up MEDIUM #4.
+- [x] 0.7 Add a regression-guard integration test (`backend-rs/tests/json_response_helper.rs` or extension to `health_me_bootstrap.rs`) that issues every Phase 1 200 path and asserts `Content-Type` equals exactly `application/json; charset=utf-8`.
 
 ## 1. Module split & shared infrastructure scaffolding
 
-- [ ] 1.1 Create empty modules `backend-rs/src/broker_client.rs`, `backend-rs/src/session_loader.rs`, `backend-rs/src/log_normalizer/mod.rs` (with `codex.rs` and `pi.rs` submodules), `backend-rs/src/git_context.rs`, `backend-rs/src/voice_state.rs`, plus a `backend-rs/src/handlers/` directory with empty `mod.rs` and per-wave files (`voice.rs`, `sessions_list.rs`, `session_meta.rs`, `git.rs`, `files.rs`, `messages.rs`, `metrics.rs`); register them in `lib.rs` and `main.rs`.
-- [ ] 1.2 Move existing Phase 1 code from `runtime.rs` into the appropriate new modules: `RuntimeConfig` and `load_or_create_hmac_secret` stay in `runtime.rs`; `read_recent_cwds` / `read_cwd_groups` / `normalize_cwd_group_key` / `read_new_session_defaults` / `tmux_available` move into `runtime.rs` or a sub-module; ensure `runtime.rs` line count drops below 500.
+- [x] 1.1 Create empty modules `backend-rs/src/broker_client.rs`, `backend-rs/src/session_loader.rs`, `backend-rs/src/log_normalizer/mod.rs` (with `codex.rs` and `pi.rs` submodules), `backend-rs/src/git_context.rs`, `backend-rs/src/voice_state.rs`, plus a `backend-rs/src/handlers/` directory with empty `mod.rs` and per-wave files (`voice.rs`, `sessions_list.rs`, `session_meta.rs`, `git.rs`, `files.rs`, `messages.rs`, `metrics.rs`); register them in `lib.rs` and `main.rs`.
+- [x] 1.2 Move existing Phase 1 code from `runtime.rs` into the appropriate new modules: `RuntimeConfig` and `load_or_create_hmac_secret` stay in `runtime.rs`; `read_recent_cwds` / `read_cwd_groups` / `normalize_cwd_group_key` / `read_new_session_defaults` / `tmux_available` move into `runtime.rs` or a sub-module; ensure `runtime.rs` line count drops below 500.
 - [ ] 1.3 Move existing Phase 1 handlers `health` / `me` / `sessions_bootstrap` into `handlers/health_meta.rs` (or equivalent); update `routes::router` accordingly; verify all Phase 1 tests still pass.
-- [ ] 1.4 Extend `.github/workflows/backend-rs.yml` (or the `wc -l` gate Phase 1 introduced) to enforce `<= 800` lines on **every** `backend-rs/src/**/*.rs` file, not just `runtime.rs`; CI fails fast if any file exceeds the limit.
+- [x] 1.4 Extend `.github/workflows/backend-rs.yml` (or the `wc -l` gate Phase 1 introduced) to enforce `<= 800` lines on **every** `backend-rs/src/**/*.rs` file, not just `runtime.rs`; CI fails fast if any file exceeds the limit.
 
 ## 2. Read-only broker IPC client
 
@@ -116,12 +116,12 @@ These tasks address `rust-backend-skeleton` review退回项 and unblock Phase 2 
 
 ## 13. CI, docs, inventory
 
-- [ ] 13.1 Update `.github/workflows/backend-rs.yml`: install `gh` on macOS (`brew install gh`); add a step running `pytest tests/contract -k 'parity and readonly'` (alongside the existing Phase 1 selector); ensure `wc -l` gate covers all `backend-rs/src/**/*.rs`.
-- [ ] 13.2 Update `tests/contract/README.md` with new readonly selector instructions and the required `gh` toolchain on macOS.
+- [x] 13.1 Update `.github/workflows/backend-rs.yml`: install `gh` on macOS (`brew install gh`); add a step running `pytest tests/contract -k 'parity and readonly'` (alongside the existing Phase 1 selector); ensure `wc -l` gate covers all `backend-rs/src/**/*.rs`.
+- [x] 13.2 Update `tests/contract/README.md` with new readonly selector instructions and the required `gh` toolchain on macOS.
 - [ ] 13.3 Update `README.md` with any new env vars used by `git_context` (already shared with Python: `CODEX_WEB_BRANCH_TIMEOUT_S`, `CODEX_WEB_PR_TIMEOUT_S`, `CODEX_WEB_GH_AUTH_TTL_S`) and confirm Phase 2 binary still runs on default `[::]:8743`.
 - [ ] 13.4 Update `docs/cutover/endpoint-inventory.md`: for every Phase 2 endpoint table row, change the "Ref comparison" annotation from "...Phase 2 port" to "implemented by `rust-backend-readonly-routes`"; preserve untouched rows for Phase 3 / Phase 4 / Phase 5 endpoints.
 - [ ] 13.5 Update inventory's "Must be ported in Phase 2 (GET/read-only parity)" section to link each bullet to its tasks section here (`Wave B`, `Wave C`, etc.).
-- [ ] 13.6 Update `openspec/changes/rust-backend-cutover/tasks.md` Phase 2 row(s) to reflect that the dedicated change `rust-backend-readonly-routes` is the Phase 2 owner.
+- [x] 13.6 Update `openspec/changes/rust-backend-cutover/tasks.md` Phase 2 row(s) to reflect that the dedicated change `rust-backend-readonly-routes` is the Phase 2 owner.
 
 ## 14. Definition of Done — verification gate (must all be green to ship)
 
