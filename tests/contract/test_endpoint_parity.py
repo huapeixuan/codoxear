@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -91,20 +90,18 @@ def test_sessions_bootstrap_parity(
     scenario: str,
 ) -> None:
     path = "/api/sessions/bootstrap"
-    if scenario == "tmux_available":
-        assert shutil.which("tmux") is not None or shutil.which("tmux") is None
-    elif scenario == "ref_bootstrap_404":
+    if scenario == "ref_bootstrap_404":
         path = "/api/v1/bootstrap"
 
     python_response = _get_response(python_server_url, path, signed_auth_cookie)
     rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
     assert python_response.status == rust_response.status
+    assert_content_type_equal(python_response, rust_response, path)
     if python_response.status == 200:
-        assert_content_type_equal(python_response, rust_response, path)
         assert_json_equivalent(
             python_response.json(), rust_response.json(), ignore_keys={"app_version"}
         )
-        if scenario == "empty":
+        if scenario in {"empty", "recent_cwds", "cwd_groups", "tmux_available"}:
             assert python_response.body == rust_response.body
     else:
         assert python_response.status == rust_response.status == 404

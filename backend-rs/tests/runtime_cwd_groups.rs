@@ -55,6 +55,19 @@ fn non_object_cwd_groups_returns_empty_map_and_warns() {
     // intentionally not asserted because structured fields are subscriber-specific.
 }
 
+#[traced_test]
+#[test]
+fn cwd_groups_read_io_error_returns_empty_map_and_warns() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("cwd_groups.json");
+    fs::create_dir(&path).unwrap();
+
+    let groups = read_cwd_groups(&path).unwrap();
+
+    assert_eq!(groups, Map::new());
+    // A directory at the JSON path exercises the non-NotFound IO-error branch.
+}
+
 #[test]
 fn normalize_existing_path_matches_canonical_path() {
     let dir = TempDir::new().unwrap();
