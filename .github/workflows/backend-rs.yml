@@ -1,0 +1,63 @@
+name: backend-rs
+
+on:
+  push:
+    paths:
+      - "backend-rs/**"
+      - "tests/contract/**"
+      - "pyproject.toml"
+      - ".github/workflows/backend-rs.yml"
+  pull_request:
+    paths:
+      - "backend-rs/**"
+      - "tests/contract/**"
+      - "pyproject.toml"
+      - ".github/workflows/backend-rs.yml"
+
+jobs:
+  backend-rs:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend-rs
+      - name: install gh (macOS)
+        if: runner.os == 'macOS'
+        run: brew install gh
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+        working-directory: backend-rs
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: backend-rs
+      - name: cargo test
+        run: cargo test --release
+        working-directory: backend-rs
+      - name: cargo build bins
+        run: cargo build --release --bins
+        working-directory: backend-rs
+      - name: source file line limit
+        run: |
+          oversized="$(find backend-rs/src -name '*.rs' -print0 | xargs -0 wc -l | awk '$2 != "total" && $1 > 800 {print}')"
+          if [ -n "$oversized" ]; then
+            echo "$oversized"
+            exit 1
+          fi
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install pytest
+        run: python -m pip install pytest
+      - name: contract phase1 parity
+        run: pytest tests/contract -q -k 'parity and not readonly'
+      - name: contract readonly parity
+        run: pytest tests/contract -q -k 'parity and readonly'
