@@ -1,50 +1,49 @@
 # Contract parity harness
 
-This directory contains cross-backend parity tests for the Rust cutover. Phase 0
-only adds the harness skeleton; endpoint tests are intentionally skipped until
-Phase 1 provides a Rust binary.
+This directory contains cross-backend parity tests for the Rust cutover. Phase 1
+runs the Python server and the new Rust backend against a shared temporary HOME
+so both processes see the same `~/.local/share/codoxear` state and `hmac_secret`.
 
-## Current Phase 0 smoke check
-
-```bash
-pytest tests/contract
-```
-
-Expected result in Phase 0: tests collect cleanly and skip because
-`rust_server_url` is not implemented yet.
-
-## Running once Rust is available
+## Current Phase 1 parity check
 
 Build the Rust backend binaries first:
 
 ```bash
-cargo build --release --bins -C backend-rs
-pytest tests/contract -k parity
+(cd backend-rs && cargo build --release --bins)
+pytest tests/contract -q -k parity
 ```
 
-If your Cargo version does not accept `-C`, run the equivalent from the crate
-directory:
+Expected Phase 1 result: `test_me_parity` and
+`test_sessions_bootstrap_parity` pass; `test_sessions_parity` remains skipped
+pending Phase 2 (`rust-backend-readonly-routes`).
+
+If you need to run Python-only contract collection without the Rust binary, set:
 
 ```bash
-(cd backend-rs && cargo build --release --bins)
-pytest tests/contract -k parity
+CODOXEAR_SKIP_RUST_FIXTURE=1 pytest tests/contract -q -k parity
 ```
 
-Expected environment:
+Without that escape hatch, a missing Rust binary is a fixture error with a hint to
+run `(cd backend-rs && cargo build --release --bins)`.
 
-- `CODEX_WEB_PASSWORD` is set by the fixtures.
-- `CODEX_WEB_HOST=127.0.0.1` and random `CODEX_WEB_PORT` are set by the fixtures.
-- The Python fixture isolates runtime state by setting `HOME` to a temporary
-  directory, yielding a temporary `~/.local/share/codoxear` tree.
-- Phase 1 should make the Rust fixture use an equivalent temporary app dir / home
-  and point it at `backend-rs/target/release/codoxear-backend-rs`.
+## Fixtures
+
+- `shared_app_home`: session-scoped temporary HOME shared by Python and Rust.
+- `python_server_url`: starts `python -m codoxear.server` on a random localhost
+  port with `CODEX_WEB_PASSWORD`, `CODEX_WEB_HOST=127.0.0.1`, and the shared HOME.
+- `rust_server_url`: starts `backend-rs/target/release/codoxear-backend-rs` on a
+  random localhost port with the same password and HOME.
+- `signed_auth_cookie`: lazily creates/loads
+  `<shared_app_home>/.local/share/codoxear/hmac_secret` and signs a
+  `codoxear_auth` cookie directly. Phase 1 does this because `/api/login` is out
+  of scope for the Rust skeleton.
 
 Common fail modes:
 
-- Collection error: the harness skeleton has drifted from pytest discovery.
 - Python fixture startup timeout: `CODEX_WEB_PASSWORD`, static asset mode, or port
   binding regressed.
-- Rust fixture skip: expected until Phase 1.
+- Rust fixture error: build the release binaries, or set
+  `CODOXEAR_SKIP_RUST_FIXTURE=1` for Python-only runs.
 - JSON diff: compare the failing key against `docs/cutover/endpoint-inventory.md`
   and `docs/cutover/disk-contracts.md`; add an ignore key only for documented
   volatile values such as `app_version`.

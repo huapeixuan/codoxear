@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from typing import Any
+import urllib.request
 
 import pytest
 
@@ -25,23 +27,33 @@ def assert_json_equivalent(
     assert scrub(python_response) == scrub(rust_response)
 
 
-@pytest.mark.skip(reason="Phase 1 will enable once rust_server_url launches Rust")
-def test_me_parity(python_server_url: str, rust_server_url: str) -> None:
-    python_response: dict[str, Any] = {}
-    rust_response: dict[str, Any] = {}
-    assert_json_equivalent(python_response, rust_response, ignore_keys={"app_version"})
+def _get_json(base_url: str, path: str, cookie: str) -> dict[str, Any]:
+    request = urllib.request.Request(f"{base_url}{path}", headers={"Cookie": cookie})
+    with urllib.request.urlopen(request, timeout=5) as response:
+        return json.loads(response.read().decode("utf-8"))
 
 
-@pytest.mark.skip(reason="Phase 1 will enable once rust_server_url launches Rust")
-def test_sessions_bootstrap_parity(
-    python_server_url: str, rust_server_url: str
+def test_me_parity(
+    python_server_url: str, rust_server_url: str, signed_auth_cookie: str
 ) -> None:
-    python_response: dict[str, Any] = {}
-    rust_response: dict[str, Any] = {}
+    python_response = _get_json(python_server_url, "/api/me", signed_auth_cookie)
+    rust_response = _get_json(rust_server_url, "/api/me", signed_auth_cookie)
     assert_json_equivalent(python_response, rust_response, ignore_keys={"app_version"})
 
 
-@pytest.mark.skip(reason="Phase 1 will enable once rust_server_url launches Rust")
+def test_sessions_bootstrap_parity(
+    python_server_url: str, rust_server_url: str, signed_auth_cookie: str
+) -> None:
+    python_response = _get_json(
+        python_server_url, "/api/sessions/bootstrap", signed_auth_cookie
+    )
+    rust_response = _get_json(
+        rust_server_url, "/api/sessions/bootstrap", signed_auth_cookie
+    )
+    assert_json_equivalent(python_response, rust_response, ignore_keys={"app_version"})
+
+
+@pytest.mark.skip(reason="Phase 2 (rust-backend-readonly-routes)")
 def test_sessions_parity(python_server_url: str, rust_server_url: str) -> None:
     python_response: dict[str, Any] = {}
     rust_response: dict[str, Any] = {}

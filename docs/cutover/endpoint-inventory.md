@@ -73,7 +73,7 @@ Ref comparison target: `san-tian/codoxear@san-tian-dev` (`backend-rs/src/routes.
 
 These are in `san-tian-dev:backend-rs/src/routes.rs` but do not exist in the current target `server.py`; they are not Phase 0 implementation work, but future phase specs should decide whether to add, alias, or omit them:
 
-- `GET /api/v1/health` and public `/api/health` — required by OpenSpec Phase 1 skeleton.
+- `GET /api/v1/health` and public `/api/health` — required by OpenSpec Phase 1 skeleton — implemented by `rust-backend-skeleton` Phase 1; no Python parity expected.
 - `GET /api/v1/bootstrap` and `/api/bootstrap` — ref bootstrap path; target currently uses `/api/sessions/bootstrap`.
 - `GET /api/v1/cwd_suggestions` / `/api/cwd_suggestions`.
 - `GET|POST /api/v1/settings/codex_config` / `/api/settings/codex_config`.

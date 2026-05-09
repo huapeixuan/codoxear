@@ -1,0 +1,51 @@
+name: backend-rs
+
+on:
+  push:
+    paths:
+      - "backend-rs/**"
+      - "tests/contract/**"
+      - "pyproject.toml"
+      - ".github/workflows/backend-rs.yml"
+  pull_request:
+    paths:
+      - "backend-rs/**"
+      - "tests/contract/**"
+      - "pyproject.toml"
+      - ".github/workflows/backend-rs.yml"
+
+jobs:
+  backend-rs:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend-rs
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+        working-directory: backend-rs
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: backend-rs
+      - name: cargo test
+        run: cargo test --release
+        working-directory: backend-rs
+      - name: cargo build bins
+        run: cargo build --release --bins
+        working-directory: backend-rs
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install pytest
+        run: python -m pip install pytest
+      - name: contract parity
+        run: pytest tests/contract -q -k parity

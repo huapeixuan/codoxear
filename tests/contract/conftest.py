@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import base64
 import contextlib
+import hashlib
+import hmac
+import json
 import os
+import secrets
 import socket
 import subprocess
 import sys
@@ -42,54 +47,121 @@ def _wait_for_http(url: str, *, timeout: float = 10.0) -> None:
     raise RuntimeError(f"server did not become ready at {url}: {last_error}")
 
 
-@pytest.fixture
-def python_server_url() -> Iterator[str]:
-    """Run the current Python server on a random local port.
+@pytest.fixture(scope="session")
+def shared_app_home() -> Iterator[Path]:
+    """Shared HOME for Python and Rust contract servers."""
 
-    The production code currently derives its app dir from HOME, so the fixture
-    gives the subprocess an isolated HOME and therefore an isolated
-    ~/.local/share/codoxear tree.
-    """
+    with tempfile.TemporaryDirectory(prefix="codoxear-contract-home-") as home:
+        yield Path(home)
+
+
+@pytest.fixture
+def python_server_url(shared_app_home: Path) -> Iterator[str]:
+    """Run the current Python server on a random local port."""
 
     port = _free_port()
-    with tempfile.TemporaryDirectory(prefix="codoxear-contract-home-") as home:
-        env = os.environ.copy()
-        env.update(
-            {
-                "HOME": home,
-                "CODEX_WEB_PASSWORD": CONTRACT_PASSWORD,
-                "CODEX_WEB_HOST": "127.0.0.1",
-                "CODEX_WEB_PORT": str(port),
-                "CODOXEAR_USE_LEGACY_WEB": "1",
-            }
-        )
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "codoxear.server"],
-            cwd=str(Path(__file__).resolve().parents[2]),
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        url = f"http://127.0.0.1:{port}"
+    env = os.environ.copy()
+    env.update(
+        {
+            "HOME": str(shared_app_home),
+            "CODEX_WEB_PASSWORD": CONTRACT_PASSWORD,
+            "CODEX_WEB_HOST": "127.0.0.1",
+            "CODEX_WEB_PORT": str(port),
+            "CODOXEAR_USE_LEGACY_WEB": "1",
+        }
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "codoxear.server"],
+        cwd=str(Path(__file__).resolve().parents[2]),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    url = f"http://127.0.0.1:{port}"
+    try:
+        _wait_for_http(url)
+        yield url
+    finally:
+        proc.terminate()
         try:
-            _wait_for_http(url)
-            yield url
-        finally:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:  # pragma: no cover - cleanup fallback
-                proc.kill()
-                proc.wait(timeout=5)
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:  # pragma: no cover - cleanup fallback
+            proc.kill()
+            proc.wait(timeout=5)
 
 
 @pytest.fixture
-def rust_server_url() -> str:
-    """Final Rust server fixture signature.
+def rust_server_url(shared_app_home: Path) -> Iterator[str]:
+    """Run the Phase 1 Rust backend binary on a random local port."""
 
-    Phase 1 will replace this skip with a subprocess launch of
-    backend-rs/target/release/codoxear-backend-rs on a random local port.
-    """
+    repo_root = Path(__file__).resolve().parents[2]
+    bin_path = repo_root / "backend-rs/target/release/codoxear-backend-rs"
+    if not bin_path.exists():
+        message = (
+            f"backend-rs binary not found at {bin_path}; "
+            "run (cd backend-rs && cargo build --release --bins) first"
+        )
+        if os.environ.get("CODOXEAR_SKIP_RUST_FIXTURE") == "1":
+            pytest.skip(message)
+        raise RuntimeError(message)
 
-    pytest.skip("Rust backend is not available until Phase 1 (rust-backend-skeleton)")
+    port = _free_port()
+    env = os.environ.copy()
+    env.update(
+        {
+            "HOME": str(shared_app_home),
+            "CODEX_WEB_PASSWORD": CONTRACT_PASSWORD,
+            "CODEX_WEB_HOST": "127.0.0.1",
+            "CODEX_WEB_PORT": str(port),
+        }
+    )
+    proc = subprocess.Popen(
+        [str(bin_path)],
+        cwd=str(repo_root),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    url = f"http://127.0.0.1:{port}"
+    try:
+        _wait_for_http(url)
+        yield url
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:  # pragma: no cover - cleanup fallback
+            proc.kill()
+            proc.wait(timeout=5)
+
+
+@pytest.fixture
+def signed_auth_cookie(shared_app_home: Path) -> str:
+    secret = _load_or_create_hmac_secret(shared_app_home)
+    payload = json.dumps(
+        {"exp": int(time.time()) + 3600}, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    sig = hmac.new(secret, payload, hashlib.sha256).digest()
+    token = f"{_b64u(payload)}.{_b64u(sig)}"
+    return f"codoxear_auth={token}"
+
+
+def _load_or_create_hmac_secret(home: Path) -> bytes:
+    app_dir = home / ".local/share/codoxear"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    path = app_dir / "hmac_secret"
+    if path.exists():
+        raw = path.read_bytes()
+        if len(raw) < 32:
+            raise ValueError(f"invalid hmac secret (too short): {path}")
+        return raw[:64]
+    secret = secrets.token_bytes(64)
+    path.write_bytes(secret)
+    os.chmod(path, 0o600)
+    return secret
+
+
+def _b64u(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
