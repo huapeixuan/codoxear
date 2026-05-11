@@ -45,11 +45,11 @@ These tasks address `rust-backend-skeleton` review退回项 and unblock Phase 2 
 
 ## 5. Git context
 
-- [ ] 5.1 Port `codoxear/git_context.py` (334 lines) into `backend-rs/src/git_context.rs`: `RepoContext { availability, git_branch, pr_summary }`, `resolve_repo_context(cwd: &Path, refresh: bool) -> RepoContext`, plus `to_detail_dict() -> serde_json::Value` matching Python's response shape.
-- [ ] 5.2 Implement per-cwd lock + TTL cache: use `parking_lot::Mutex<HashMap<PathBuf, CachedContext>>` with `BRANCH_TTL_S = 30s`, `PR_TTL_S = 120s`, `GH_AUTH_TTL_S = 300s`; honor `CODEX_WEB_*` env overrides matching Python.
-- [ ] 5.3 Implement `git_branch` resolution via `git rev-parse --abbrev-ref HEAD` with timeout 2.0s; PR resolution via `gh pr view --json number,title,state,url,isDraft,baseRefName,headRefName` with timeout 4.0s; downgrade to `availability="no-gh" | "no-pr" | "not-a-repo" | "error"` mirroring Python.
-- [ ] 5.4 Add `backend-rs/tests/git_context_parity.rs`: in `tempfile::tempdir()` create a real git repo via `git init` + commit; assert `current_git_branch` matches Python's; on a directory that is not a git repo, assert both Rust and Python return `availability="not-a-repo"`.
-- [ ] 5.5 Update `.github/workflows/backend-rs.yml` macOS job to run `brew install gh`; document in `tests/contract/README.md` that the parity selector requires `gh` on PATH.
+- [x] 5.1 Port `codoxear/git_context.py` (334 lines) into `backend-rs/src/git_context.rs`: `RepoContext { availability, git_branch, pr_summary }`, `resolve_repo_context(cwd: &Path, refresh: bool) -> RepoContext`, plus `to_detail_dict() -> serde_json::Value` matching Python's response shape.
+- [x] 5.2 Implement per-cwd lock + TTL cache: use `parking_lot::Mutex<HashMap<PathBuf, CachedContext>>` with `BRANCH_TTL_S = 30s`, `PR_TTL_S = 120s`, `GH_AUTH_TTL_S = 300s`; honor `CODEX_WEB_*` env overrides matching Python.
+- [x] 5.3 Implement `git_branch` resolution via `git rev-parse --abbrev-ref HEAD` with timeout 2.0s; PR resolution via `gh pr view --json number,title,state,url,isDraft,baseRefName,headRefName` with timeout 4.0s; downgrade to `availability="no-gh" | "no-pr" | "not-a-repo" | "error"` mirroring Python.
+- [x] 5.4 Add `backend-rs/tests/git_context_parity.rs`: in `tempfile::tempdir()` create a real git repo via `git init` + commit; assert `current_git_branch` matches Python's`; on a directory that is not a git repo, assert both Rust and Python return `availability="not-a-repo"`.
+- [x] 5.5 Update `.github/workflows/backend-rs.yml` macOS job to run `brew install gh`; document in `tests/contract/README.md` that the parity selector requires `gh` on PATH.
 
 ## 6. Voice / notification state snapshot
 
