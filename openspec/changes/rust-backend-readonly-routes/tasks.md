@@ -53,11 +53,11 @@ These tasks address `rust-backend-skeleton` review退回项 and unblock Phase 2 
 
 ## 6. Voice / notification state snapshot
 
-- [ ] 6.1 Implement `backend-rs/src/voice_state.rs::load_voice_settings_snapshot(app_dir) -> serde_json::Value` reading `voice_settings.json` (creating no file, no worker), returning the Python `_voice_push.settings_snapshot()` keyset with default values when the file is absent or malformed.
-- [ ] 6.2 Implement `load_subscriptions_snapshot(app_dir) -> serde_json::Value` reading `push_subscriptions.json`; mirror Python `_voice_push.subscriptions_snapshot()`.
-- [ ] 6.3 Implement `notification_state_for_message(app_dir, message_id) -> Option<serde_json::Value>` reading `voice_delivery_ledger.json` and indexing by message id.
-- [ ] 6.4 Implement `notification_feed_since(app_dir, since: f64) -> Vec<serde_json::Value>` reading the ledger and emitting events with `ts >= since` in the same order Python uses.
-- [ ] 6.5 Add unit tests for each of 6.1–6.4 with both empty and populated fixtures (place files in `tests/fixtures/voice/` and read into `tempfile::tempdir()`).
+- [x] 6.1 Implement `backend-rs/src/voice_state.rs::load_voice_settings_snapshot(app_dir) -> serde_json::Value` reading `voice_settings.json` (creating no file, no worker), returning the Python `_voice_push.settings_snapshot()` keyset with default values when the file is absent or malformed.
+- [x] 6.2 Implement `load_subscriptions_snapshot(app_dir) -> serde_json::Value` reading `push_subscriptions.json`; mirror Python `_voice_push.subscriptions_snapshot()`.
+- [x] 6.3 Implement `notification_state_for_message(app_dir, message_id) -> Option<serde_json::Value>` reading `voice_delivery_ledger.json` and indexing by message id.
+- [x] 6.4 Implement `notification_feed_since(app_dir, since: f64) -> Vec<serde_json::Value>` reading the ledger and emitting events with `ts >= since` in the same order Python uses.
+- [x] 6.5 Add unit tests for each of 6.1–6.4 with both empty and populated fixtures (place files in `tests/fixtures/voice/` and read into `tempfile::tempdir()`).
 
 ## 7. Wave A handlers — voice / notification / metrics
 
