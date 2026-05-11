@@ -1,5 +1,9 @@
 use crate::app_state::AppState;
 use crate::handlers::health_meta::{health, me, sessions_bootstrap};
+use crate::handlers::metrics::metrics;
+use crate::handlers::voice::{
+    notification_feed, notification_message, notification_subscriptions, settings_voice,
+};
 use crate::runtime::{cookie_name, load_or_create_hmac_secret, verify_auth_cookie};
 use axum::body::Body;
 use axum::extract::{Request, State};
@@ -15,6 +19,14 @@ pub fn router(state: AppState) -> Router {
     let protected_v1 = Router::new()
         .route("/api/v1/me", get(me))
         .route("/api/v1/sessions/bootstrap", get(sessions_bootstrap))
+        .route("/api/v1/settings/voice", get(settings_voice))
+        .route(
+            "/api/v1/notifications/subscription",
+            get(notification_subscriptions),
+        )
+        .route("/api/v1/notifications/message", get(notification_message))
+        .route("/api/v1/notifications/feed", get(notification_feed))
+        .route("/api/v1/metrics", get(metrics))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_public_api_auth,
@@ -32,6 +44,14 @@ fn public_api_router(state: AppState) -> Router<AppState> {
     let protected = Router::new()
         .route("/me", get(me))
         .route("/sessions/bootstrap", get(sessions_bootstrap))
+        .route("/settings/voice", get(settings_voice))
+        .route(
+            "/notifications/subscription",
+            get(notification_subscriptions),
+        )
+        .route("/notifications/message", get(notification_message))
+        .route("/notifications/feed", get(notification_feed))
+        .route("/metrics", get(metrics))
         .route_layer(middleware::from_fn_with_state(
             state,
             require_public_api_auth,

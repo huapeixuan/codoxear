@@ -7,6 +7,7 @@ import hmac
 import json
 import os
 import secrets
+import shutil
 import socket
 import subprocess
 import sys
@@ -59,7 +60,13 @@ def shared_app_home() -> Iterator[Path]:
 def preseed_contract_state(
     shared_app_dir: Path, request: pytest.FixtureRequest
 ) -> None:
-    for name in ("recent_cwds.json", "cwd_groups.json"):
+    for name in (
+        "recent_cwds.json",
+        "cwd_groups.json",
+        "voice_settings.json",
+        "push_subscriptions.json",
+        "voice_delivery_ledger.json",
+    ):
         (shared_app_dir / name).unlink(missing_ok=True)
     scenario = getattr(request.node, "callspec", None)
     scenario_name = scenario.params.get("scenario") if scenario else None
@@ -91,6 +98,40 @@ def preseed_contract_state(
             ),
             encoding="utf-8",
         )
+
+    node_name = request.node.name
+    if node_name.startswith("test_settings_voice_parity"):
+        _copy_voice_fixture(
+            shared_app_dir, "voice_settings_populated.json", "voice_settings.json"
+        )
+        _copy_voice_fixture(
+            shared_app_dir,
+            "push_subscriptions_populated.json",
+            "push_subscriptions.json",
+        )
+    elif node_name.startswith("test_notifications_subscription_parity"):
+        _copy_voice_fixture(
+            shared_app_dir,
+            "push_subscriptions_populated.json",
+            "push_subscriptions.json",
+        )
+    elif node_name.startswith(
+        ("test_notifications_message_parity", "test_notifications_feed_parity")
+    ):
+        if scenario_name != "missing":
+            _copy_voice_fixture(
+                shared_app_dir,
+                "voice_delivery_ledger_populated.json",
+                "voice_delivery_ledger.json",
+            )
+
+
+def _copy_voice_fixture(
+    shared_app_dir: Path, fixture_name: str, dest_name: str
+) -> None:
+    fixture = Path(__file__).resolve().parents[1] / "fixtures" / "voice" / fixture_name
+    shared_app_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(fixture, shared_app_dir / dest_name)
 
 
 @pytest.fixture

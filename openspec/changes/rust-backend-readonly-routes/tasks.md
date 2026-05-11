@@ -61,12 +61,12 @@ These tasks address `rust-backend-skeleton` review退回项 and unblock Phase 2 
 
 ## 7. Wave A handlers — voice / notification / metrics
 
-- [ ] 7.1 Implement `handlers::voice::settings_voice` for `GET /api/settings/voice` and `/api/v1/...` using `voice_state::load_voice_settings_snapshot`; register in `routes::router` behind auth; emit `application/json; charset=utf-8`.
-- [ ] 7.2 Implement `handlers::voice::notification_subscriptions` for `GET /api/notifications/subscription` (+ v1).
-- [ ] 7.3 Implement `handlers::voice::notification_message` for `GET /api/notifications/message?message_id=` (+ v1) with 400 / 404 / 200 paths matching Python.
-- [ ] 7.4 Implement `handlers::voice::notification_feed` for `GET /api/notifications/feed?since=` (+ v1) with 400 / 200 paths.
-- [ ] 7.5 Implement `handlers::metrics::metrics` for `GET /api/metrics` (+ v1); Phase 2 may emit zero / empty histories but key set must match Python.
-- [ ] 7.6 Update `tests/contract/test_endpoint_parity.py`: add `test_settings_voice_parity`, `test_notifications_subscription_parity`, `test_notifications_message_parity` (covering 400 / 404 / 200), `test_notifications_feed_parity` (covering 400 / 200), `test_metrics_parity`. All assert status, Content-Type header, and dict-eq body; deterministic empty-state cases also assert byte-eq.
+- [x] 7.1 Implement `handlers::voice::settings_voice` for `GET /api/settings/voice` and `/api/v1/...` using `voice_state::load_voice_settings_snapshot`; register in `routes::router` behind auth; emit `application/json; charset=utf-8`.
+- [x] 7.2 Implement `handlers::voice::notification_subscriptions` for `GET /api/notifications/subscription` (+ v1).
+- [x] 7.3 Implement `handlers::voice::notification_message` for `GET /api/notifications/message?message_id=` (+ v1) with 400 / 404 / 200 paths matching Python.
+- [x] 7.4 Implement `handlers::voice::notification_feed` for `GET /api/notifications/feed?since=` (+ v1) with 400 / 200 paths.
+- [x] 7.5 Implement `handlers::metrics::metrics` for `GET /api/metrics` (+ v1); Phase 2 may emit zero / empty histories but key set must match Python.
+- [x] 7.6 Update `tests/contract/test_endpoint_parity.py`: add `test_settings_voice_parity`, `test_notifications_subscription_parity`, `test_notifications_message_parity` (covering 400 / 404 / 200), `test_notifications_feed_parity` (covering 400 / 200), `test_metrics_parity`. All assert status, Content-Type header, and dict-eq body; deterministic empty-state cases also assert byte-eq.
 
 ## 8. Wave B handlers — session list & resume candidates
 

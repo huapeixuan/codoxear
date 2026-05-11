@@ -107,6 +107,112 @@ def test_sessions_bootstrap_parity(
         assert python_response.status == rust_response.status == 404
 
 
+@pytest.mark.readonly
+def test_settings_voice_parity(
+    python_server_url: str,
+    rust_server_url: str,
+    signed_auth_cookie: str,
+    shared_app_dir: Path,
+) -> None:
+    path = "/api/settings/voice"
+
+    python_response = _get_response(python_server_url, path, signed_auth_cookie)
+    rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
+
+    assert python_response.status == rust_response.status == 200
+    assert_content_type_equal(python_response, rust_response, path)
+    assert_json_equivalent(
+        python_response.json(), rust_response.json(), ignore_keys={"vapid_public_key"}
+    )
+
+
+@pytest.mark.readonly
+def test_notifications_subscription_parity(
+    python_server_url: str,
+    rust_server_url: str,
+    signed_auth_cookie: str,
+    shared_app_dir: Path,
+) -> None:
+    path = "/api/notifications/subscription"
+
+    python_response = _get_response(python_server_url, path, signed_auth_cookie)
+    rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
+
+    assert python_response.status == rust_response.status == 200
+    assert_content_type_equal(python_response, rust_response, path)
+    assert_json_equivalent(
+        python_response.json(), rust_response.json(), ignore_keys={"vapid_public_key"}
+    )
+
+
+@pytest.mark.readonly
+@pytest.mark.parametrize("scenario", ["missing", "unknown", "known"])
+def test_notifications_message_parity(
+    python_server_url: str,
+    rust_server_url: str,
+    signed_auth_cookie: str,
+    shared_app_dir: Path,
+    scenario: str,
+) -> None:
+    query = {
+        "missing": "",
+        "unknown": "?message_id=unknown",
+        "known": "?message_id=m-final",
+    }[scenario]
+    path = f"/api/notifications/message{query}"
+
+    python_response = _get_response(python_server_url, path, signed_auth_cookie)
+    rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
+
+    assert python_response.status == rust_response.status
+    assert_content_type_equal(python_response, rust_response, path)
+    assert_json_equivalent(python_response.json(), rust_response.json())
+
+
+@pytest.mark.readonly
+@pytest.mark.parametrize("scenario", ["invalid", "valid"])
+def test_notifications_feed_parity(
+    python_server_url: str,
+    rust_server_url: str,
+    signed_auth_cookie: str,
+    shared_app_dir: Path,
+    scenario: str,
+) -> None:
+    query = "?since=invalid" if scenario == "invalid" else "?since=10.0"
+    path = f"/api/notifications/feed{query}"
+
+    python_response = _get_response(python_server_url, path, signed_auth_cookie)
+    rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
+
+    assert python_response.status == rust_response.status
+    assert_content_type_equal(python_response, rust_response, path)
+    assert_json_equivalent(python_response.json(), rust_response.json())
+
+
+@pytest.mark.readonly
+def test_metrics_parity(
+    python_server_url: str, rust_server_url: str, signed_auth_cookie: str
+) -> None:
+    path = "/api/metrics"
+    python_response = _get_response(python_server_url, path, signed_auth_cookie)
+    rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
+
+    assert python_response.status == rust_response.status == 200
+    assert_content_type_equal(python_response, rust_response, path)
+    assert_json_equivalent(python_response.json(), rust_response.json())
+    assert python_response.body == rust_response.body
+
+
+@pytest.mark.readonly
+@pytest.mark.parametrize("path", ["/api/settings/voice", "/api/v1/settings/voice"])
+def test_voice_aliases_are_byte_identical(
+    rust_server_url: str, signed_auth_cookie: str, path: str
+) -> None:
+    response = _get_response(rust_server_url, path, signed_auth_cookie)
+    assert response.status == 200
+    assert response.headers.get("content-type") == "application/json; charset=utf-8"
+
+
 @pytest.mark.skip(reason="Phase 2 (rust-backend-readonly-routes)")
 def test_sessions_parity(python_server_url: str, rust_server_url: str) -> None:
     python_response: dict[str, Any] = {}
