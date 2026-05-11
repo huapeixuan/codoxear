@@ -1,4 +1,5 @@
 use crate::app_state::AppState;
+use crate::handlers::git::{changed_files, diff, file_versions};
 use crate::handlers::health_meta::{health, me, sessions_bootstrap};
 use crate::handlers::metrics::metrics;
 use crate::handlers::session_meta::{
@@ -37,6 +38,15 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/sessions/:session_id/commands", get(commands))
         .route("/api/v1/sessions/:session_id/takeover", get(takeover))
         .route("/api/v1/sessions/:session_id/repo", get(repo))
+        .route(
+            "/api/v1/sessions/:session_id/git/changed_files",
+            get(changed_files),
+        )
+        .route("/api/v1/sessions/:session_id/git/diff", get(diff))
+        .route(
+            "/api/v1/sessions/:session_id/git/file_versions",
+            get(file_versions),
+        )
         .route("/api/v1/settings/voice", get(settings_voice))
         .route(
             "/api/v1/notifications/subscription",
@@ -73,6 +83,15 @@ fn public_api_router(state: AppState) -> Router<AppState> {
         .route("/sessions/:session_id/commands", get(commands))
         .route("/sessions/:session_id/takeover", get(takeover))
         .route("/sessions/:session_id/repo", get(repo))
+        .route(
+            "/sessions/:session_id/git/changed_files",
+            get(changed_files),
+        )
+        .route("/sessions/:session_id/git/diff", get(diff))
+        .route(
+            "/sessions/:session_id/git/file_versions",
+            get(file_versions),
+        )
         .route("/settings/voice", get(settings_voice))
         .route(
             "/notifications/subscription",

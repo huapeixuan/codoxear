@@ -89,10 +89,10 @@ These tasks address `rust-backend-skeleton` review退回项 and unblock Phase 2 
 
 ## 10. Wave D handlers — git endpoints
 
-- [ ] 10.1 Implement `handlers::git::changed_files` for `GET /api/sessions/{id}/git/changed_files` (+ v1); port Python git subprocess invocations with same args, timeouts, byte limits (`GIT_DIFF_TIMEOUT_SECONDS`, `64KB` / `128KB` caps); produce `ok/cwd/files/entries/staged/unstaged` shape.
-- [ ] 10.2 Implement `handlers::git::diff` for `GET /api/sessions/{id}/git/diff?path=&staged=` (+ v1).
-- [ ] 10.3 Implement `handlers::git::file_versions` for `GET /api/sessions/{id}/git/file_versions?path=` (+ v1) emitting `ok/cwd/path/abs_path/base_exists/base_text/current_exists/current_text/current_size`.
-- [ ] 10.4 Add `_run_git` helper in `git_context.rs` (or a `git_subprocess.rs`) shared between `git_context::resolve_repo_context` and Wave D handlers; honor timeout + byte cap.
+- [x] 10.1 Implement `handlers::git::changed_files` for `GET /api/sessions/{id}/git/changed_files` (+ v1); port Python git subprocess invocations with same args, timeouts, byte limits (`GIT_DIFF_TIMEOUT_SECONDS`, `64KB` / `128KB` caps); produce `ok/cwd/files/entries/staged/unstaged` shape.
+- [x] 10.2 Implement `handlers::git::diff` for `GET /api/sessions/{id}/git/diff?path=&staged=` (+ v1).
+- [x] 10.3 Implement `handlers::git::file_versions` for `GET /api/sessions/{id}/git/file_versions?path=` (+ v1) emitting `ok/cwd/path/abs_path/base_exists/base_text/current_exists/current_text/current_size`.
+- [x] 10.4 Add `_run_git` helper in `git_context.rs` (or a `git_subprocess.rs`) shared between `git_context::resolve_repo_context` and Wave D handlers; honor timeout + byte cap.
 - [ ] 10.5 Add `tests/contract/test_endpoint_parity.py::test_git_changed_files_parity`, `test_git_diff_parity`, `test_git_file_versions_parity` using a shared `tempfile`-managed git repo fixture (`fixtures/git_repo` with seeded commits + dirty tree).
 
 ## 11. Wave E handlers — file viewer
