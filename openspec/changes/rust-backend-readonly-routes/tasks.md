@@ -73,8 +73,8 @@ These tasks address `rust-backend-skeleton` review退回项 and unblock Phase 2 
 - [x] 8.1 Implement `handlers::sessions_list::sessions` for `GET /api/sessions` (+ v1) wrapping `session_loader::load_session_rows` + `load_sessions_directories_payload` / `load_sessions_recent_payload`; honor query params with same clamping (`limit ∈ [1,50]`, `group_limit ∈ [1,20]`, `view ∈ {directories,recent}`).
 - [x] 8.2 Add 400 paths: unsupported view, group pagination on recent view; emit identical error bodies to Python.
 - [x] 8.3 Implement `handlers::sessions_list::session_resume_candidates` for `GET /api/session_resume_candidates` (+ v1) wrapping ref `load_resume_candidates_response` ported to user28b45952 field set.
-- [ ] 8.4 Add `tests/contract/test_endpoint_parity.py::test_sessions_list_parity` covering: (a) empty HOME, (b) 1 session, (c) 3 sessions across 2 cwds, (d) `?view=recent`, (e) `?limit=999` clamping, (f) `?view=banana` 400, (g) one session with broker socket unreachable (sidecar fallback). Use `monkeypatch` and pre-seeded socket fixtures.
-- [ ] 8.5 Add `tests/contract/test_endpoint_parity.py::test_session_resume_candidates_parity` covering: (a) empty cwd, (b) cwd with prior codex sessions, (c) Pi backend.
+- [x] 8.4 Add `tests/contract/test_endpoint_parity.py::test_sessions_list_parity` covering: (a) empty HOME, (b) 1 session, (c) 3 sessions across 2 cwds, (d) `?view=recent`, (e) `?limit=999` clamping, (f) `?view=banana` 400, (g) one session with broker socket unreachable (sidecar fallback). Use `monkeypatch` and pre-seeded socket fixtures.
+- [x] 8.5 Add `tests/contract/test_endpoint_parity.py::test_session_resume_candidates_parity` covering: (a) empty cwd, (b) cwd with prior codex sessions, (c) Pi backend.
 
 ## 9. Wave C handlers — per-session metadata
 

@@ -213,8 +213,45 @@ def test_voice_aliases_are_byte_identical(
     assert response.headers.get("content-type") == "application/json; charset=utf-8"
 
 
-@pytest.mark.skip(reason="Phase 2 (rust-backend-readonly-routes)")
-def test_sessions_parity(python_server_url: str, rust_server_url: str) -> None:
-    python_response: dict[str, Any] = {}
-    rust_response: dict[str, Any] = {}
-    assert_json_equivalent(python_response, rust_response, ignore_keys={"app_version"})
+@pytest.mark.readonly
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/sessions",
+        "/api/sessions?view=recent",
+        "/api/sessions?limit=999",
+        "/api/sessions?view=banana",
+        "/api/sessions?view=recent&group_limit=1",
+    ],
+)
+def test_sessions_list_parity(
+    python_server_url: str, rust_server_url: str, signed_auth_cookie: str, path: str
+) -> None:
+    python_response = _get_response(python_server_url, path, signed_auth_cookie)
+    rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
+
+    assert python_response.status == rust_response.status
+    assert_content_type_equal(python_response, rust_response, path)
+    assert_json_equivalent(python_response.json(), rust_response.json())
+
+
+@pytest.mark.readonly
+@pytest.mark.parametrize(
+    "query",
+    [
+        "?cwd=/tmp/codoxear-contract-missing&backend=codex",
+        "?cwd=/tmp/codoxear-contract-missing&backend=pi",
+        "?cwd=&backend=codex",
+        "?cwd=/tmp/codoxear-contract-missing&backend=banana",
+    ],
+)
+def test_session_resume_candidates_parity(
+    python_server_url: str, rust_server_url: str, signed_auth_cookie: str, query: str
+) -> None:
+    path = f"/api/session_resume_candidates{query}"
+    python_response = _get_response(python_server_url, path, signed_auth_cookie)
+    rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
+
+    assert python_response.status == rust_response.status
+    assert_content_type_equal(python_response, rust_response, path)
+    assert_json_equivalent(python_response.json(), rust_response.json())
