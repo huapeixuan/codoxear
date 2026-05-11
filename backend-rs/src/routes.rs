@@ -1,6 +1,9 @@
 use crate::app_state::AppState;
 use crate::handlers::health_meta::{health, me, sessions_bootstrap};
 use crate::handlers::metrics::metrics;
+use crate::handlers::session_meta::{
+    commands, details, diagnostics, harness_get, queue, repo, takeover, ui_state, workspace,
+};
 use crate::handlers::sessions_list::{session_resume_candidates, sessions};
 use crate::handlers::voice::{
     notification_feed, notification_message, notification_subscriptions, settings_voice,
@@ -25,6 +28,15 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/session_resume_candidates",
             get(session_resume_candidates),
         )
+        .route("/api/v1/sessions/:session_id/diagnostics", get(diagnostics))
+        .route("/api/v1/sessions/:session_id/queue", get(queue))
+        .route("/api/v1/sessions/:session_id/harness", get(harness_get))
+        .route("/api/v1/sessions/:session_id/workspace", get(workspace))
+        .route("/api/v1/sessions/:session_id/details", get(details))
+        .route("/api/v1/sessions/:session_id/ui_state", get(ui_state))
+        .route("/api/v1/sessions/:session_id/commands", get(commands))
+        .route("/api/v1/sessions/:session_id/takeover", get(takeover))
+        .route("/api/v1/sessions/:session_id/repo", get(repo))
         .route("/api/v1/settings/voice", get(settings_voice))
         .route(
             "/api/v1/notifications/subscription",
@@ -52,6 +64,15 @@ fn public_api_router(state: AppState) -> Router<AppState> {
         .route("/sessions/bootstrap", get(sessions_bootstrap))
         .route("/sessions", get(sessions))
         .route("/session_resume_candidates", get(session_resume_candidates))
+        .route("/sessions/:session_id/diagnostics", get(diagnostics))
+        .route("/sessions/:session_id/queue", get(queue))
+        .route("/sessions/:session_id/harness", get(harness_get))
+        .route("/sessions/:session_id/workspace", get(workspace))
+        .route("/sessions/:session_id/details", get(details))
+        .route("/sessions/:session_id/ui_state", get(ui_state))
+        .route("/sessions/:session_id/commands", get(commands))
+        .route("/sessions/:session_id/takeover", get(takeover))
+        .route("/sessions/:session_id/repo", get(repo))
         .route("/settings/voice", get(settings_voice))
         .route(
             "/notifications/subscription",

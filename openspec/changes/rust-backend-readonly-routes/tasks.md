@@ -78,13 +78,13 @@ These tasks address `rust-backend-skeleton` review退回项 and unblock Phase 2 
 
 ## 9. Wave C handlers — per-session metadata
 
-- [ ] 9.1 Implement `handlers::session_meta::diagnostics` for `GET /api/sessions/{id}/diagnostics` (+ v1) producing the full Python field set including `git_branch` / `pr_summary` / `todo_snapshot` / `time_priority` / `base_priority` / `final_priority`.
-- [ ] 9.2 Implement `handlers::session_meta::queue` for `GET /api/sessions/{id}/queue` (+ v1) reading from `session_queues.json` only — verify with grep that no broker call is made.
-- [ ] 9.3 Implement `handlers::session_meta::harness_get` for `GET /api/sessions/{id}/harness` (+ v1) reading `harness.json` and applying Python defaults for missing fields.
-- [ ] 9.4 Implement `handlers::session_meta::workspace`, `details`, `takeover` for the corresponding endpoints; port Python helpers `_session_workspace_payload`, `_session_details_payload`, `_session_takeover_payload`.
-- [ ] 9.5 Implement `handlers::session_meta::ui_state` for `GET /api/sessions/{id}/ui_state` (+ v1): for Pi sessions call `broker_client::broker_ui_state`; for non-Pi return sidebar fields (`priority_offset`, `snooze_until`, `dependency_session_id`).
-- [ ] 9.6 Implement `handlers::session_meta::commands` for `GET /api/sessions/{id}/commands` (+ v1) calling `broker_client::broker_commands` for Pi; non-Pi may return `404` or empty list (mirror Python behavior precisely after re-reading `MANAGER.get_session_commands`).
-- [ ] 9.7 Implement `handlers::session_meta::repo` for `GET /api/sessions/{id}/repo` (+ v1) wrapping `git_context::resolve_repo_context(cwd, refresh=qs.refresh==1)` and emitting `to_detail_dict()`.
+- [x] 9.1 Implement `handlers::session_meta::diagnostics` for `GET /api/sessions/{id}/diagnostics` (+ v1) producing the full Python field set including `git_branch` / `pr_summary` / `todo_snapshot` / `time_priority` / `base_priority` / `final_priority`.
+- [x] 9.2 Implement `handlers::session_meta::queue` for `GET /api/sessions/{id}/queue` (+ v1) reading from `session_queues.json` only — verify with grep that no broker call is made.
+- [x] 9.3 Implement `handlers::session_meta::harness_get` for `GET /api/sessions/{id}/harness` (+ v1) reading `harness.json` and applying Python defaults for missing fields.
+- [x] 9.4 Implement `handlers::session_meta::workspace`, `details`, `takeover` for the corresponding endpoints; port Python helpers `_session_workspace_payload`, `_session_details_payload`, `_session_takeover_payload`.
+- [x] 9.5 Implement `handlers::session_meta::ui_state` for `GET /api/sessions/{id}/ui_state` (+ v1): for Pi sessions call `broker_client::broker_ui_state`; for non-Pi return sidebar fields (`priority_offset`, `snooze_until`, `dependency_session_id`).
+- [x] 9.6 Implement `handlers::session_meta::commands` for `GET /api/sessions/{id}/commands` (+ v1) calling `broker_client::broker_commands` for Pi; non-Pi may return `404` or empty list (mirror Python behavior precisely after re-reading `MANAGER.get_session_commands`).
+- [x] 9.7 Implement `handlers::session_meta::repo` for `GET /api/sessions/{id}/repo` (+ v1) wrapping `git_context::resolve_repo_context(cwd, refresh=qs.refresh==1)` and emitting `to_detail_dict()`.
 - [ ] 9.8 Add `tests/contract/test_endpoint_parity.py::test_diagnostics_parity` (live broker fixture vs broker-down fallback), `test_queue_parity`, `test_harness_get_parity`, `test_workspace_parity`, `test_details_parity`, `test_ui_state_parity` (Pi + non-Pi cases), `test_commands_parity`, `test_takeover_parity`, `test_repo_parity`. Use a `pytest` plugin to spin up a stub broker on `nc -lU` for live-state cases.
 
 ## 10. Wave D handlers — git endpoints
