@@ -1,6 +1,7 @@
 use crate::app_state::AppState;
 use crate::handlers::health_meta::{health, me, sessions_bootstrap};
 use crate::handlers::metrics::metrics;
+use crate::handlers::sessions_list::{session_resume_candidates, sessions};
 use crate::handlers::voice::{
     notification_feed, notification_message, notification_subscriptions, settings_voice,
 };
@@ -19,6 +20,11 @@ pub fn router(state: AppState) -> Router {
     let protected_v1 = Router::new()
         .route("/api/v1/me", get(me))
         .route("/api/v1/sessions/bootstrap", get(sessions_bootstrap))
+        .route("/api/v1/sessions", get(sessions))
+        .route(
+            "/api/v1/session_resume_candidates",
+            get(session_resume_candidates),
+        )
         .route("/api/v1/settings/voice", get(settings_voice))
         .route(
             "/api/v1/notifications/subscription",
@@ -44,6 +50,8 @@ fn public_api_router(state: AppState) -> Router<AppState> {
     let protected = Router::new()
         .route("/me", get(me))
         .route("/sessions/bootstrap", get(sessions_bootstrap))
+        .route("/sessions", get(sessions))
+        .route("/session_resume_candidates", get(session_resume_candidates))
         .route("/settings/voice", get(settings_voice))
         .route(
             "/notifications/subscription",
