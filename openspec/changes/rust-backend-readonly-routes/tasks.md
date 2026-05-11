@@ -36,12 +36,12 @@ These tasks address `rust-backend-skeleton` review退回项 and unblock Phase 2 
 
 ## 4. Log normalizer
 
-- [ ] 4.1 Port `codoxear/rollout_log.py::_messages_from_codex_log` into `backend-rs/src/log_normalizer/codex.rs::messages_from_codex_log(log_path: &Path, offset, limit, init, before) -> CodexMessagesPage`; preserve event types, delivery messages, idle markers, token snapshots; carry over Python's branch order and short-circuit conditions.
-- [ ] 4.2 Port `codoxear/rollout_log.py::_idle_from_log`, `_token_snapshot_from_log`, `_run_settings_from_log`, `_todo_snapshot_payload_for_session` to corresponding Rust functions.
-- [ ] 4.3 Port `codoxear/pi_log.py` 309 lines into `backend-rs/src/log_normalizer/pi.rs`: `messages_from_pi_log`, `pi_session_header`, `pi_user_text`, `pi_assistant_text`, `pi_final_turn`, `pi_run_settings`, `pi_context_usage`. Read `~/.pi/agent/models.json` for token deltas.
-- [ ] 4.4 Add fixture files under `tests/fixtures/rollout/*.jsonl` (codex sample sessions: short, paginated, mixed events) and `tests/fixtures/pi/*.jsonl` (pi short, with model-cache, with AskUser flow); commit them.
-- [ ] 4.5 Add `backend-rs/tests/log_normalizer_parity.rs`: for each fixture, assert Rust output matches Python output produced via `python3 -c "from codoxear.rollout_log import _messages_from_codex_log; ..."` (drive Python via subprocess inside the test or via a small `tools/dump_log_normalizer.py` helper that materializes JSON to a file).
-- [ ] 4.6 Verify file size: `wc -l backend-rs/src/log_normalizer/codex.rs backend-rs/src/log_normalizer/pi.rs` each `<= 800`; if approaching, split further (e.g. `pi/header.rs`, `pi/usage.rs`).
+- [x] 4.1 Port `codoxear/rollout_log.py::_messages_from_codex_log` into `backend-rs/src/log_normalizer/codex.rs::messages_from_codex_log(log_path: &Path, offset, limit, init, before) -> CodexMessagesPage`; preserve event types, delivery messages, idle markers, token snapshots; carry over Python's branch order and short-circuit conditions.
+- [x] 4.2 Port `codoxear/rollout_log.py::_idle_from_log`, `_token_snapshot_from_log`, `_run_settings_from_log`, `_todo_snapshot_payload_for_session` to corresponding Rust functions.
+- [x] 4.3 Port `codoxear/pi_log.py` 309 lines into `backend-rs/src/log_normalizer/pi.rs`: `messages_from_pi_log`, `pi_session_header`, `pi_user_text`, `pi_assistant_text`, `pi_final_turn`, `pi_run_settings`, `pi_context_usage`. Read `~/.pi/agent/models.json` for token deltas.
+- [x] 4.4 Add fixture files under `tests/fixtures/rollout/*.jsonl` (codex sample sessions: short, paginated, mixed events) and `tests/fixtures/pi/*.jsonl` (pi short, with model-cache, with AskUser flow); commit them.
+- [x] 4.5 Add `backend-rs/tests/log_normalizer_parity.rs`: for each fixture, assert Rust output matches Python output produced via `python3 -c "from codoxear.rollout_log import _messages_from_codex_log; ..."` (drive Python via subprocess inside the test or via a small `tools/dump_log_normalizer.py` helper that materializes JSON to a file).
+- [x] 4.6 Verify file size: `wc -l backend-rs/src/log_normalizer/codex.rs backend-rs/src/log_normalizer/pi.rs` each `<= 800`; if approaching, split further (e.g. `pi/header.rs`, `pi/usage.rs`).
 
 ## 5. Git context
 
