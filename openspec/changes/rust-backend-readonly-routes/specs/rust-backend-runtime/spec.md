@@ -254,7 +254,7 @@ The Rust backend SHALL expose the following GET endpoints (each on canonical `/a
 - `/api/sessions/{id}/harness` — return `200 {"ok": true, "enabled": ..., "cooldown_minutes": ..., "remaining_injections": ..., "request": ...}` from `harness.json`, with Python defaults for missing fields.
 - `/api/sessions/{id}/workspace` — port `_session_workspace_payload`; return `200 <workspace descriptor>` or `404 {"error": "unknown session"}`.
 - `/api/sessions/{id}/details` — port `_session_details_payload`; return `200 <details>` or `404 {"error": "unknown session"}`.
-- `/api/sessions/{id}/ui_state` — for Pi sessions call `broker_ui_state`; for other backends return `200 {"priority_offset": ..., "snooze_until": ..., "dependency_session_id": ...}` from sidebar; `404` on unknown session, `502` on broker error.
+- `/api/sessions/{id}/ui_state` — mirror Python behavior: for Pi sessions call `broker_ui_state`; for other backends return `502 {"error": "ui interactions are only supported for pi sessions"}`; `404` on unknown session, `502` on broker error.
 - `/api/sessions/{id}/commands` — port `MANAGER.get_session_commands`; for Pi sessions call `broker_commands`; return `200 <commands snapshot>` or `404`.
 - `/api/sessions/{id}/takeover` — port `_session_takeover_payload`; return `200 <takeover descriptor>` or `404`.
 - `/api/sessions/{id}/repo` — parse `?refresh=1` flag, call `git_context::resolve_repo_context(cwd, refresh)`, return `200 <to_detail_dict()>` or `404 {"error": "session not found"}`.
@@ -272,7 +272,7 @@ The Rust backend SHALL expose the following GET endpoints (each on canonical `/a
 #### Scenario: Pi ui_state via broker
 
 - **WHEN** a Pi session is running and `GET /api/sessions/<id>/ui_state` is issued
-- **THEN** the Rust handler calls `broker_ui_state` and returns the broker's payload directly; non-Pi sessions skip the broker and return sidebar-only fields
+- **THEN** the Rust handler calls `broker_ui_state` and returns the broker's payload directly; non-Pi sessions skip the broker and return Python-parity `502` with the Pi-only UI interaction error
 
 #### Scenario: Broker error on ui_state surfaces as 502
 
@@ -385,7 +385,7 @@ The Rust implementation SHALL **not** introduce ref's `/messages/{tail,history,l
 #### Scenario: live with live_offset parity
 
 - **WHEN** `GET /api/sessions/<id>/live?offset=120&live_offset=8&requests_version=v1` is issued
-- **THEN** both servers return `_session_live_payload` with identical `messages`, `live_messages`, `requests_version`, and idle/busy fields
+- **THEN** both servers return `_session_live_payload` with identical `events`, `requests_version`, optional `requests`, `live_offset`, and busy fields
 
 #### Scenario: legacy paths return same body as canonical
 

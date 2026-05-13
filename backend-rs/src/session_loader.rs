@@ -9,7 +9,7 @@ use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const HARNESS_DEFAULT_IDLE_MINUTES: f64 = 5.0;
-const HARNESS_DEFAULT_MAX_INJECTIONS: i64 = 3;
+const HARNESS_DEFAULT_MAX_INJECTIONS: i64 = 10;
 const SIDEBAR_PRIORITY_HALF_LIFE_SECONDS: f64 = 8.0 * 3600.0;
 const SESSION_LIST_FALLBACK_GROUP_KEY: &str = "__no_working_directory__";
 const SESSION_LIST_GROUP_PAGE_SIZE: usize = 5;
@@ -31,6 +31,10 @@ struct SessionMeta {
     owner: Option<String>,
     #[serde(default)]
     transport: Option<String>,
+    #[serde(default)]
+    supports_live_ui: Option<bool>,
+    #[serde(default)]
+    ui_protocol_version: Option<i64>,
     #[serde(default)]
     cwd: Option<String>,
     #[serde(default)]
@@ -309,7 +313,11 @@ fn session_from_meta(
     let updated_ts = meta.updated_ts.unwrap_or(start_ts);
     let agent_backend = normalize_backend(meta.agent_backend.or(meta.backend));
     let queue_values = context.queues.get(session_id).cloned().unwrap_or_default();
-    let sidecar_queue_len = meta.queue_len.unwrap_or(queue_values.len());
+    let queue_items = queue_values
+        .iter()
+        .filter_map(queue_item_display_text)
+        .collect::<Vec<_>>();
+    let sidecar_queue_len = meta.queue_len.unwrap_or(queue_items.len());
     let sidecar_busy = meta.busy.unwrap_or(false);
     let (busy, broker_busy, queue_len, token) = match broker_state(
         sock_path,
@@ -350,6 +358,8 @@ fn session_from_meta(
         owner: meta.owner.clone(),
         owned: meta.owner.as_deref() == Some("web"),
         transport: clean_optional(meta.transport),
+        supports_live_ui: meta.supports_live_ui.unwrap_or(false),
+        ui_protocol_version: meta.ui_protocol_version,
         cwd,
         workspace_cwd: clean_optional(meta.workspace_cwd),
         log_path: clean_optional(meta.log_path),
@@ -361,6 +371,7 @@ fn session_from_meta(
         busy,
         broker_busy,
         queue_len,
+        queue_items,
         token,
         harness_enabled: object_bool(harness_entry, "enabled").unwrap_or(false),
         harness_cooldown_minutes: object_number(harness_entry, "cooldown_minutes")
@@ -480,6 +491,27 @@ fn read_array_map(path: &Path) -> Result<HashMap<String, Vec<Value>>, String> {
         .into_iter()
         .filter_map(|(key, value)| value.as_array().cloned().map(|items| (key, items)))
         .collect())
+}
+
+fn queue_item_display_text(item: &Value) -> Option<Value> {
+    let text = match item {
+        Value::String(value) => value.trim().to_string(),
+        Value::Object(object) => object.get("text")?.as_str()?.trim().to_string(),
+        _ => return None,
+    };
+    if text.is_empty() {
+        return None;
+    }
+    let image_count = item
+        .get("images")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter(|item| item.is_object()).count())
+        .unwrap_or(0);
+    if image_count == 0 {
+        return Some(Value::String(text));
+    }
+    let suffix = if image_count == 1 { "image" } else { "images" };
+    Some(Value::String(format!("{text} [{image_count} {suffix}]")))
 }
 
 fn read_string_array_map(path: &Path) -> Result<HashMap<String, Vec<String>>, String> {

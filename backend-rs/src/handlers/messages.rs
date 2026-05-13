@@ -1,14 +1,18 @@
 use crate::app_state::AppState;
+use crate::broker_client::broker_ui_state;
 use crate::log_normalizer::{codex, pi};
 use crate::routes::{internal_error, json_response};
 use crate::session_loader::find_session;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Response;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path as FsPath;
+use std::time::Duration;
 
 #[derive(Deserialize)]
 pub struct MessagesQuery {
@@ -78,25 +82,64 @@ pub async fn live(
     };
     let offset = parse_nonnegative(query.offset.as_deref(), "offset", 0);
     let live_offset = parse_nonnegative(query.live_offset.as_deref(), "live_offset", offset);
-    let requests_version = query.requests_version.unwrap_or_default();
+    let client_requests_version = query.requests_version.as_deref();
     match messages_payload(&row, offset, 80, 0, false) {
         Ok(payload) => json_response(
             StatusCode::OK,
-            json!({
-                "ok": true,
-                "session_id": row.session_id,
-                "messages": payload.get("events").cloned().unwrap_or_else(|| json!([])),
-                "live_messages": payload.get("events").cloned().unwrap_or_else(|| json!([])),
-                "offset": payload.get("offset").cloned().unwrap_or_else(|| json!(offset)),
-                "live_offset": live_offset,
-                "requests_version": requests_version,
-                "busy": payload.get("busy").cloned().unwrap_or_else(|| json!(row.busy)),
-                "queue_len": payload.get("queue_len").cloned().unwrap_or_else(|| json!(row.queue_len)),
-                "token": payload.get("token").cloned().unwrap_or(Value::Null),
-            }),
+            live_payload(
+                &row,
+                &state.config.app_dir,
+                payload,
+                offset,
+                live_offset,
+                client_requests_version,
+            ),
         ),
         Err(message) => json_response(StatusCode::BAD_GATEWAY, json!({"error": message})),
     }
+}
+
+fn live_payload(
+    row: &crate::models::SessionRow,
+    app_dir: &FsPath,
+    page: Value,
+    offset: usize,
+    live_offset: usize,
+    client_requests_version: Option<&str>,
+) -> Value {
+    let mut requests = Vec::new();
+    if row.backend == "pi" {
+        let sock_path = default_sock_path(row, app_dir);
+        if let Ok(ui) = broker_ui_state(&sock_path, Duration::from_millis(1500)) {
+            requests = ui
+                .raw
+                .get("requests")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter(|item| item.is_object())
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+        }
+    }
+    let requests_version = ui_requests_version(&requests);
+    let merged_events = page.get("events").cloned().unwrap_or_else(|| json!([]));
+    let mut payload = json!({
+        "ok": true,
+        "session_id": row.session_id,
+        "offset": page.get("offset").cloned().unwrap_or_else(|| json!(offset)),
+        "live_offset": live_offset,
+        "busy": page.get("busy").cloned().unwrap_or_else(|| json!(row.busy)),
+        "events": merged_events,
+        "requests_version": requests_version,
+    });
+    if client_requests_version != payload.get("requests_version").and_then(Value::as_str) {
+        payload["requests"] = Value::Array(requests);
+    }
+    payload
 }
 
 fn messages_payload(
@@ -194,6 +237,18 @@ fn pending_log_payload(
 
 fn state_for_row(row: &crate::models::SessionRow) -> Option<Value> {
     row.token.is_object().then(|| row.token.clone())
+}
+
+fn default_sock_path(row: &crate::models::SessionRow, app_dir: &FsPath) -> std::path::PathBuf {
+    app_dir
+        .join("socks")
+        .join(format!("{}.sock", row.session_id))
+}
+
+fn ui_requests_version(requests: &[Value]) -> String {
+    let canonical = serde_json::to_vec(requests).unwrap_or_default();
+    let digest = Sha256::digest(canonical);
+    URL_SAFE_NO_PAD.encode(&digest[..12])
 }
 
 fn parse_nonnegative(raw: Option<&str>, _field: &str, default: usize) -> usize {

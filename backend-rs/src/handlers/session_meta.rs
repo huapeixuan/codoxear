@@ -28,7 +28,7 @@ pub async fn queue(State(state): State<AppState>, Path(session_id): Path<String>
     match find_session(&state.config, &session_id) {
         Ok(row) => json_response(
             StatusCode::OK,
-            json!({"ok": true, "queue": row.queue_len_items()}),
+            json!({"ok": true, "queue": row.queue_items}),
         ),
         Err(message) if message.contains("unknown session") => {
             json_response(StatusCode::NOT_FOUND, json!({"error": "unknown session"}))
@@ -46,6 +46,7 @@ pub async fn harness_get(
             StatusCode::OK,
             json!({
                 "enabled": row.harness_enabled,
+                "ok": true,
                 "cooldown_minutes": row.harness_cooldown_minutes,
                 "remaining_injections": row.harness_remaining_injections,
                 "request": row.harness_request,
@@ -66,7 +67,7 @@ pub async fn workspace(State(state): State<AppState>, Path(session_id): Path<Str
                 "ok": true,
                 "session_id": row.session_id,
                 "diagnostics": diagnostics_payload(&row),
-                "queue": {"items": row.queue_len_items()},
+                "queue": {"items": row.queue_items},
             }),
         ),
         Err(message) if message.contains("unknown session") => {
@@ -270,15 +271,10 @@ fn takeover_descriptor(row: &SessionRow) -> Value {
 }
 
 trait SessionRowExt {
-    fn queue_len_items(&self) -> Vec<Value>;
     fn sock_path(&self, app_dir: &std::path::Path) -> Option<std::path::PathBuf>;
 }
 
 impl SessionRowExt for SessionRow {
-    fn queue_len_items(&self) -> Vec<Value> {
-        Vec::new()
-    }
-
     fn sock_path(&self, app_dir: &std::path::Path) -> Option<std::path::PathBuf> {
         Some(
             app_dir

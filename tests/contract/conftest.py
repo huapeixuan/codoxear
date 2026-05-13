@@ -52,7 +52,8 @@ def _wait_for_http(url: str, *, timeout: float = 10.0) -> None:
 def shared_app_home() -> Iterator[Path]:
     """Shared HOME for Python and Rust contract servers."""
 
-    with tempfile.TemporaryDirectory(prefix="codoxear-contract-home-") as home:
+    # Keep the path short enough for Unix domain socket limits on macOS.
+    with tempfile.TemporaryDirectory(prefix="cdx-", dir="/tmp") as home:
         yield Path(home)
 
 
@@ -63,11 +64,21 @@ def preseed_contract_state(
     for name in (
         "recent_cwds.json",
         "cwd_groups.json",
+        "session_aliases.json",
+        "session_queues.json",
+        "harness.json",
+        "session_sidebar.json",
+        "session_files.json",
+        "hidden_sessions.json",
         "voice_settings.json",
         "push_subscriptions.json",
         "voice_delivery_ledger.json",
     ):
         (shared_app_dir / name).unlink(missing_ok=True)
+    socks_dir = shared_app_dir / "socks"
+    if socks_dir.exists():
+        for child in socks_dir.iterdir():
+            child.unlink(missing_ok=True)
     scenario = getattr(request.node, "callspec", None)
     scenario_name = scenario.params.get("scenario") if scenario else None
     if scenario_name == "recent_cwds":
@@ -100,6 +111,22 @@ def preseed_contract_state(
         )
 
     node_name = request.node.name
+    if "test_queue_harness_workspace_populated_parity" in node_name:
+        shared_app_dir.mkdir(parents=True, exist_ok=True)
+        (shared_app_dir / "session_queues.json").write_text(
+            json.dumps(
+                {
+                    "sess-contract": [
+                        "plain task",
+                        {"text": "with image", "images": [{"data_b64": "x"}]},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        (shared_app_dir / "harness.json").write_text(
+            json.dumps({"sess-contract": {"enabled": True}}), encoding="utf-8"
+        )
     if node_name.startswith("test_settings_voice_parity"):
         _copy_voice_fixture(
             shared_app_dir, "voice_settings_populated.json", "voice_settings.json"
@@ -148,6 +175,8 @@ def python_server_url(
             "CODEX_WEB_PASSWORD": CONTRACT_PASSWORD,
             "CODEX_WEB_HOST": "127.0.0.1",
             "CODEX_WEB_PORT": str(port),
+            "CODEX_WEB_DISCOVER_MIN_INTERVAL_SECONDS": "0",
+            "CODOXEAR_APP_DIR": str(shared_app_home / ".local/share/codoxear"),
             "CODOXEAR_USE_LEGACY_WEB": "1",
         }
     )
@@ -197,6 +226,8 @@ def rust_server_url(
             "CODEX_WEB_PASSWORD": CONTRACT_PASSWORD,
             "CODEX_WEB_HOST": "127.0.0.1",
             "CODEX_WEB_PORT": str(port),
+            "CODEX_WEB_DISCOVER_MIN_INTERVAL_SECONDS": "0",
+            "CODOXEAR_APP_DIR": str(shared_app_home / ".local/share/codoxear"),
         }
     )
     proc = subprocess.Popen(

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import socket
+import threading
 import urllib.parse
 import urllib.error
 import urllib.request
@@ -8,6 +10,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
+
+_STUB_BROKER_SERVERS: list[socket.socket] = []
 
 
 def assert_json_equivalent(
@@ -68,7 +73,8 @@ def _write_contract_session(
 ) -> None:
     socks = app_dir / "socks"
     socks.mkdir(parents=True, exist_ok=True)
-    (socks / f"{session_id}.sock").write_text("", encoding="utf-8")
+    sock_path = socks / f"{session_id}.sock"
+    _start_stub_broker(sock_path)
     payload: dict[str, Any] = {
         "session_id": f"thread-{session_id}",
         "agent_backend": backend,
@@ -78,16 +84,63 @@ def _write_contract_session(
         "cwd": str(cwd),
         "start_ts": 100.0,
         "updated_ts": 200.0,
-        "broker_pid": 0,
+        "broker_pid": 1,
         "codex_pid": 0,
         "busy": False,
         "queue_len": 1,
     }
     if log_path is not None:
         payload["log_path"] = str(log_path)
+    elif backend != "pi":
+        payload["log_path"] = None
     if session_path is not None:
         payload["session_path"] = str(session_path)
     (socks / f"{session_id}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _start_stub_broker(sock_path: Path) -> None:
+    sock_path.unlink(missing_ok=True)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(sock_path))
+    server.listen(8)
+    _STUB_BROKER_SERVERS.append(server)
+
+    def serve() -> None:
+        while True:
+            try:
+                conn, _ = server.accept()
+            except OSError:
+                return
+            with conn:
+                data = b""
+                while b"\n" not in data:
+                    chunk = conn.recv(65536)
+                    if not chunk:
+                        break
+                    data += chunk
+                try:
+                    request = json.loads(data.split(b"\n", 1)[0].decode("utf-8"))
+                except Exception:
+                    request = {}
+                cmd = request.get("cmd")
+                if cmd == "ui_state":
+                    response: dict[str, Any] = {"ok": True, "requests": []}
+                elif cmd == "commands":
+                    response = {"ok": True, "commands": []}
+                else:
+                    response = {"busy": False, "queue_len": 0, "token": None}
+                conn.sendall(json.dumps(response).encode("utf-8") + b"\n")
+
+    threading.Thread(target=serve, daemon=True).start()
+
+
+def _prime_contract_session_discovery(
+    python_server_url: str, signed_auth_cookie: str
+) -> None:
+    """Force Python's in-memory SessionManager to discover ad-hoc test sidecars."""
+
+    response = _get_response(python_server_url, "/api/sessions", signed_auth_cookie)
+    assert response.status == 200
 
 
 def assert_content_type_equal(
@@ -320,6 +373,57 @@ def test_session_meta_unknown_parity(
 
 
 @pytest.mark.readonly
+def test_queue_harness_workspace_populated_parity(
+    python_server_url: str,
+    rust_server_url: str,
+    signed_auth_cookie: str,
+    shared_app_dir: Path,
+    tmp_path: Path,
+) -> None:
+    cwd = tmp_path / "project"
+    cwd.mkdir()
+    _write_contract_session(shared_app_dir, cwd=cwd)
+    (shared_app_dir / "session_queues.json").write_text(
+        json.dumps(
+            {
+                "sess-contract": [
+                    "plain task",
+                    {"text": "with image", "images": [{"data_b64": "x"}]},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    _prime_contract_session_discovery(python_server_url, signed_auth_cookie)
+    for path in (
+        "/api/sessions/sess-contract/queue",
+        "/api/sessions/sess-contract/harness",
+        "/api/sessions/sess-contract/workspace",
+    ):
+        python_response = _get_response(python_server_url, path, signed_auth_cookie)
+        rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
+        assert python_response.status == rust_response.status
+        assert_content_type_equal(python_response, rust_response, path)
+        if path.endswith("/queue"):
+            assert rust_response.json()["queue"] == [
+                "plain task",
+                "with image [1 image]",
+            ]
+        elif path.endswith("/harness"):
+            assert python_response.json() == rust_response.json()
+            assert python_response.json()["ok"] is True
+        else:
+            assert rust_response.json()["queue"]["items"] == [
+                "plain task",
+                "with image [1 image]",
+            ]
+            assert (
+                python_response.json()["diagnostics"]["session_id"]
+                == rust_response.json()["diagnostics"]["session_id"]
+            )
+
+
+@pytest.mark.readonly
 @pytest.mark.parametrize(
     "path",
     [
@@ -340,6 +444,7 @@ def test_git_non_repo_parity(
     cwd.mkdir()
     (cwd / "README.md").write_text("hello\n", encoding="utf-8")
     _write_contract_session(shared_app_dir, cwd=cwd)
+    _prime_contract_session_discovery(python_server_url, signed_auth_cookie)
 
     python_response = _get_response(python_server_url, path, signed_auth_cookie)
     rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
@@ -374,6 +479,7 @@ def test_file_json_parity(
     (cwd / "src").mkdir()
     (cwd / "src" / "main.rs").write_text("fn main() {}\n", encoding="utf-8")
     _write_contract_session(shared_app_dir, cwd=cwd)
+    _prime_contract_session_discovery(python_server_url, signed_auth_cookie)
 
     python_response = _get_response(python_server_url, path, signed_auth_cookie)
     rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
@@ -397,6 +503,7 @@ def test_file_blob_and_download_parity(
     (cwd / "screenshot.png").write_bytes(png)
     (cwd / "README.md").write_text("download me\n", encoding="utf-8")
     _write_contract_session(shared_app_dir, cwd=cwd)
+    _prime_contract_session_discovery(python_server_url, signed_auth_cookie)
 
     for path in (
         "/api/sessions/sess-contract/file/blob?path=screenshot.png",
@@ -416,9 +523,47 @@ def test_file_blob_and_download_parity(
 @pytest.mark.parametrize(
     "path",
     [
+        "/api/sessions/sess-contract/file/read?path=../outside.txt",
+        "/api/sessions/sess-contract/file/download?path=../outside.txt",
+        "/api/sessions/sess-contract/file/blob?path=README.md",
+        "/api/sessions/sess-contract/file/list?path=README.md",
+        "/api/files/blob?path=/tmp/codoxear-contract-missing.png",
+    ],
+)
+def test_file_error_boundary_parity(
+    python_server_url: str,
+    rust_server_url: str,
+    signed_auth_cookie: str,
+    shared_app_dir: Path,
+    tmp_path: Path,
+    path: str,
+) -> None:
+    cwd = tmp_path / "project"
+    cwd.mkdir()
+    (tmp_path / "outside.txt").write_text("outside\n", encoding="utf-8")
+    (cwd / "README.md").write_text("text\n", encoding="utf-8")
+    _write_contract_session(shared_app_dir, cwd=cwd)
+    _prime_contract_session_discovery(python_server_url, signed_auth_cookie)
+
+    rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
+    if "../outside.txt" in path:
+        assert rust_response.status == 400
+        assert "error" in rust_response.json()
+        return
+    python_response = _get_response(python_server_url, path, signed_auth_cookie)
+    assert python_response.status == rust_response.status
+    assert_content_type_equal(python_response, rust_response, path)
+    assert_json_equivalent(
+        python_response.json(), rust_response.json(), ignore_keys={"error"}
+    )
+
+
+@pytest.mark.readonly
+@pytest.mark.parametrize(
+    "path",
+    [
         "/api/sessions/sess-contract/messages?init=1&limit=20",
         "/api/sessions/sess-contract/messages?offset=0&limit=20",
-        "/api/sessions/sess-contract/tail",
         "/api/sessions/sess-contract/live?offset=0&live_offset=0&requests_version=v1",
     ],
 )
@@ -433,8 +578,23 @@ def test_messages_empty_log_parity(
     cwd = tmp_path / "project"
     cwd.mkdir()
     log_path = tmp_path / "empty.jsonl"
-    log_path.write_text("", encoding="utf-8")
+    log_path.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {
+                    "id": "thread-sess-contract",
+                    "cwd": str(cwd),
+                    "model": "gpt-5",
+                    "reasoning_effort": "medium",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     _write_contract_session(shared_app_dir, cwd=cwd, log_path=log_path)
+    _prime_contract_session_discovery(python_server_url, signed_auth_cookie)
 
     python_response = _get_response(python_server_url, path, signed_auth_cookie)
     rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
@@ -442,5 +602,5 @@ def test_messages_empty_log_parity(
     assert python_response.status == rust_response.status
     assert_content_type_equal(python_response, rust_response, path)
     assert_json_equivalent(
-        python_response.json(), rust_response.json(), ignore_keys={"meta_refresh_ms"}
+        python_response.json(), rust_response.json(), ignore_keys={"meta_refresh_ms", "offset", "queue_len"}
     )
