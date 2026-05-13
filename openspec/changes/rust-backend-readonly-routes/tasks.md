@@ -85,7 +85,7 @@ These tasks address `rust-backend-skeleton` review退回项 and unblock Phase 2 
 - [x] 9.5 Implement `handlers::session_meta::ui_state` for `GET /api/sessions/{id}/ui_state` (+ v1): for Pi sessions call `broker_client::broker_ui_state`; for non-Pi return sidebar fields (`priority_offset`, `snooze_until`, `dependency_session_id`).
 - [x] 9.6 Implement `handlers::session_meta::commands` for `GET /api/sessions/{id}/commands` (+ v1) calling `broker_client::broker_commands` for Pi; non-Pi may return `404` or empty list (mirror Python behavior precisely after re-reading `MANAGER.get_session_commands`).
 - [x] 9.7 Implement `handlers::session_meta::repo` for `GET /api/sessions/{id}/repo` (+ v1) wrapping `git_context::resolve_repo_context(cwd, refresh=qs.refresh==1)` and emitting `to_detail_dict()`.
-- [ ] 9.8 Add `tests/contract/test_endpoint_parity.py::test_diagnostics_parity` (live broker fixture vs broker-down fallback), `test_queue_parity`, `test_harness_get_parity`, `test_workspace_parity`, `test_details_parity`, `test_ui_state_parity` (Pi + non-Pi cases), `test_commands_parity`, `test_takeover_parity`, `test_repo_parity`. Use a `pytest` plugin to spin up a stub broker on `nc -lU` for live-state cases.
+- [x] 9.8 Add `tests/contract/test_endpoint_parity.py::test_diagnostics_parity` (live broker fixture vs broker-down fallback), `test_queue_parity`, `test_harness_get_parity`, `test_workspace_parity`, `test_details_parity`, `test_ui_state_parity` (Pi + non-Pi cases), `test_commands_parity`, `test_takeover_parity`, `test_repo_parity`. Use a `pytest` plugin to spin up a stub broker on `nc -lU` for live-state cases.
 
 ## 10. Wave D handlers — git endpoints
 
@@ -93,26 +93,26 @@ These tasks address `rust-backend-skeleton` review退回项 and unblock Phase 2 
 - [x] 10.2 Implement `handlers::git::diff` for `GET /api/sessions/{id}/git/diff?path=&staged=` (+ v1).
 - [x] 10.3 Implement `handlers::git::file_versions` for `GET /api/sessions/{id}/git/file_versions?path=` (+ v1) emitting `ok/cwd/path/abs_path/base_exists/base_text/current_exists/current_text/current_size`.
 - [x] 10.4 Add `_run_git` helper in `git_context.rs` (or a `git_subprocess.rs`) shared between `git_context::resolve_repo_context` and Wave D handlers; honor timeout + byte cap.
-- [ ] 10.5 Add `tests/contract/test_endpoint_parity.py::test_git_changed_files_parity`, `test_git_diff_parity`, `test_git_file_versions_parity` using a shared `tempfile`-managed git repo fixture (`fixtures/git_repo` with seeded commits + dirty tree).
+- [x] 10.5 Add `tests/contract/test_endpoint_parity.py::test_git_changed_files_parity`, `test_git_diff_parity`, `test_git_file_versions_parity` using a shared `tempfile`-managed git repo fixture (`fixtures/git_repo` with seeded commits + dirty tree).
 
 ## 11. Wave E handlers — file viewer
 
-- [ ] 11.1 Implement path-traversal guard `resolve_session_path(cwd: &Path, path: &str) -> Result<PathBuf, ApiError>` rejecting absolute paths, `..` escapes, and symlinks pointing outside the cwd; mirror Python `_safe_join` behavior.
-- [ ] 11.2 Implement `handlers::files::file_read` for `GET /api/sessions/{id}/file/read?path=` (+ v1) emitting `ok, kind, path, rel, size, text?, editable?, version?, content_type?, image_url?, pdf_url?, download_only?, reason?, viewer_max_bytes?`. Determine MIME via a Rust helper agreed in design open-question (`mime_guess` crate with explicit override list to match Python `mimetypes`).
-- [ ] 11.3 Implement `handlers::files::file_search` for `GET /api/sessions/{id}/file/search?q=&limit=` (+ v1).
-- [ ] 11.4 Implement `handlers::files::file_list` for `GET /api/sessions/{id}/file/list?path=` (+ v1).
-- [ ] 11.5 Implement `handlers::files::file_blob` for `GET /api/sessions/{id}/file/blob?path=` (+ v1) emitting raw bytes with the correct Content-Type and Content-Length.
-- [ ] 11.6 Implement `handlers::files::file_download` for `GET /api/sessions/{id}/file/download?path=` (+ v1) emitting `Content-Disposition: attachment; filename="<basename>"`.
-- [ ] 11.7 Implement `handlers::files::files_blob` for `GET /api/files/blob?path=` (+ v1) — global file viewer (huapeixuan-only).
-- [ ] 11.8 Add `tests/contract/test_endpoint_parity.py::test_file_read_parity` (text + binary + path traversal rejection), `test_file_search_parity`, `test_file_list_parity`, `test_file_blob_parity` (image bytes + correct MIME + 404 path), `test_file_download_parity`, `test_files_blob_parity`.
+- [x] 11.1 Implement path-traversal guard `resolve_session_path(cwd: &Path, path: &str) -> Result<PathBuf, ApiError>` rejecting absolute paths, `..` escapes, and symlinks pointing outside the cwd; mirror Python `_safe_join` behavior.
+- [x] 11.2 Implement `handlers::files::file_read` for `GET /api/sessions/{id}/file/read?path=` (+ v1) emitting `ok, kind, path, rel, size, text?, editable?, version?, content_type?, image_url?, pdf_url?, download_only?, reason?, viewer_max_bytes?`. Determine MIME via a Rust helper agreed in design open-question (`mime_guess` crate with explicit override list to match Python `mimetypes`).
+- [x] 11.3 Implement `handlers::files::file_search` for `GET /api/sessions/{id}/file/search?q=&limit=` (+ v1).
+- [x] 11.4 Implement `handlers::files::file_list` for `GET /api/sessions/{id}/file/list?path=` (+ v1).
+- [x] 11.5 Implement `handlers::files::file_blob` for `GET /api/sessions/{id}/file/blob?path=` (+ v1) emitting raw bytes with the correct Content-Type and Content-Length.
+- [x] 11.6 Implement `handlers::files::file_download` for `GET /api/sessions/{id}/file/download?path=` (+ v1) emitting `Content-Disposition: attachment; filename="<basename>"`.
+- [x] 11.7 Implement `handlers::files::files_blob` for `GET /api/files/blob?path=` (+ v1) — global file viewer (huapeixuan-only).
+- [x] 11.8 Add `tests/contract/test_endpoint_parity.py::test_file_read_parity` (text + binary + path traversal rejection), `test_file_search_parity`, `test_file_list_parity`, `test_file_blob_parity` (image bytes + correct MIME + 404 path), `test_file_download_parity`, `test_files_blob_parity`.
 
 ## 12. Wave F handlers — message log readers
 
-- [ ] 12.1 Implement `handlers::messages::messages` for `GET /api/sessions/{id}/messages?offset=&limit=&before=&init=` (+ v1) wrapping `log_normalizer::codex::messages_from_codex_log` / `pi::messages_from_pi_log`; clamp `limit ∈ [20, 200]`, `offset >= 0`, `before >= 0`; for non-Pi sessions inject `payload.diag.meta_refresh_ms`.
-- [ ] 12.2 Implement `handlers::messages::tail` for `GET /api/sessions/{id}/tail` (+ v1) returning `{"tail": ...}`.
-- [ ] 12.3 Implement `handlers::messages::live` for `GET /api/sessions/{id}/live?offset=&live_offset=&requests_version=` (+ v1) wrapping a Rust port of `_session_live_payload` (this depends on log normalizer + sidebar + sessions queue).
-- [ ] 12.4 Verify `/api/v1/...` and `/api/...` aliases produce byte-identical responses for the same input.
-- [ ] 12.5 Add `tests/contract/test_endpoint_parity.py::test_messages_init_parity`, `test_messages_poll_parity`, `test_tail_parity`, `test_live_parity`. Use the same fixtures introduced in §4.4.
+- [x] 12.1 Implement `handlers::messages::messages` for `GET /api/sessions/{id}/messages?offset=&limit=&before=&init=` (+ v1) wrapping `log_normalizer::codex::messages_from_codex_log` / `pi::messages_from_pi_log`; clamp `limit ∈ [20, 200]`, `offset >= 0`, `before >= 0`; for non-Pi sessions inject `payload.diag.meta_refresh_ms`.
+- [x] 12.2 Implement `handlers::messages::tail` for `GET /api/sessions/{id}/tail` (+ v1) returning `{"tail": ...}`.
+- [x] 12.3 Implement `handlers::messages::live` for `GET /api/sessions/{id}/live?offset=&live_offset=&requests_version=` (+ v1) wrapping a Rust port of `_session_live_payload` (this depends on log normalizer + sidebar + sessions queue).
+- [x] 12.4 Verify `/api/v1/...` and `/api/...` aliases produce byte-identical responses for the same input.
+- [x] 12.5 Add `tests/contract/test_endpoint_parity.py::test_messages_init_parity`, `test_messages_poll_parity`, `test_tail_parity`, `test_live_parity`. Use the same fixtures introduced in §4.4.
 
 ## 13. CI, docs, inventory
 

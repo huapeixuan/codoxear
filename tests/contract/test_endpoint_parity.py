@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import urllib.parse
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -54,6 +55,39 @@ def _get_response(base_url: str, path: str, cookie: str) -> JsonHttpResponse:
 
 def _get_json(base_url: str, path: str, cookie: str) -> dict[str, Any]:
     return _get_response(base_url, path, cookie).json()
+
+
+def _write_contract_session(
+    app_dir: Path,
+    *,
+    session_id: str = "sess-contract",
+    cwd: Path,
+    backend: str = "codex",
+    log_path: Path | None = None,
+    session_path: Path | None = None,
+) -> None:
+    socks = app_dir / "socks"
+    socks.mkdir(parents=True, exist_ok=True)
+    (socks / f"{session_id}.sock").write_text("", encoding="utf-8")
+    payload: dict[str, Any] = {
+        "session_id": f"thread-{session_id}",
+        "agent_backend": backend,
+        "backend": backend,
+        "owner": "web",
+        "transport": "pi-rpc" if backend == "pi" else "pty",
+        "cwd": str(cwd),
+        "start_ts": 100.0,
+        "updated_ts": 200.0,
+        "broker_pid": 0,
+        "codex_pid": 0,
+        "busy": False,
+        "queue_len": 1,
+    }
+    if log_path is not None:
+        payload["log_path"] = str(log_path)
+    if session_path is not None:
+        payload["session_path"] = str(session_path)
+    (socks / f"{session_id}.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 def assert_content_type_equal(
@@ -255,3 +289,158 @@ def test_session_resume_candidates_parity(
     assert python_response.status == rust_response.status
     assert_content_type_equal(python_response, rust_response, path)
     assert_json_equivalent(python_response.json(), rust_response.json())
+
+
+@pytest.mark.readonly
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        "/diagnostics",
+        "/queue",
+        "/harness",
+        "/workspace",
+        "/details",
+        "/ui_state",
+        "/commands",
+        "/repo",
+    ],
+)
+def test_session_meta_unknown_parity(
+    python_server_url: str, rust_server_url: str, signed_auth_cookie: str, suffix: str
+) -> None:
+    path = f"/api/sessions/does-not-exist{suffix}"
+    python_response = _get_response(python_server_url, path, signed_auth_cookie)
+    rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
+
+    assert python_response.status == rust_response.status
+    assert_content_type_equal(python_response, rust_response, path)
+    assert_json_equivalent(
+        python_response.json(), rust_response.json(), ignore_keys={"error"}
+    )
+
+
+@pytest.mark.readonly
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/sessions/sess-contract/git/changed_files",
+        "/api/sessions/sess-contract/git/diff?path=README.md",
+        "/api/sessions/sess-contract/git/file_versions?path=README.md",
+    ],
+)
+def test_git_non_repo_parity(
+    python_server_url: str,
+    rust_server_url: str,
+    signed_auth_cookie: str,
+    shared_app_dir: Path,
+    tmp_path: Path,
+    path: str,
+) -> None:
+    cwd = tmp_path / "not-repo"
+    cwd.mkdir()
+    (cwd / "README.md").write_text("hello\n", encoding="utf-8")
+    _write_contract_session(shared_app_dir, cwd=cwd)
+
+    python_response = _get_response(python_server_url, path, signed_auth_cookie)
+    rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
+
+    assert python_response.status == rust_response.status
+    assert_content_type_equal(python_response, rust_response, path)
+    assert_json_equivalent(
+        python_response.json(), rust_response.json(), ignore_keys={"error"}
+    )
+
+
+@pytest.mark.readonly
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/sessions/sess-contract/file/read?path=README.md",
+        "/api/sessions/sess-contract/file/search?q=readme",
+        "/api/sessions/sess-contract/file/list?path=.",
+    ],
+)
+def test_file_json_parity(
+    python_server_url: str,
+    rust_server_url: str,
+    signed_auth_cookie: str,
+    shared_app_dir: Path,
+    tmp_path: Path,
+    path: str,
+) -> None:
+    cwd = tmp_path / "project"
+    cwd.mkdir()
+    (cwd / "README.md").write_text("# Contract\n", encoding="utf-8")
+    (cwd / "src").mkdir()
+    (cwd / "src" / "main.rs").write_text("fn main() {}\n", encoding="utf-8")
+    _write_contract_session(shared_app_dir, cwd=cwd)
+
+    python_response = _get_response(python_server_url, path, signed_auth_cookie)
+    rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
+
+    assert python_response.status == rust_response.status
+    assert_content_type_equal(python_response, rust_response, path)
+    assert_json_equivalent(python_response.json(), rust_response.json())
+
+
+@pytest.mark.readonly
+def test_file_blob_and_download_parity(
+    python_server_url: str,
+    rust_server_url: str,
+    signed_auth_cookie: str,
+    shared_app_dir: Path,
+    tmp_path: Path,
+) -> None:
+    cwd = tmp_path / "project"
+    cwd.mkdir()
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+    (cwd / "screenshot.png").write_bytes(png)
+    (cwd / "README.md").write_text("download me\n", encoding="utf-8")
+    _write_contract_session(shared_app_dir, cwd=cwd)
+
+    for path in (
+        "/api/sessions/sess-contract/file/blob?path=screenshot.png",
+        "/api/files/blob?path=" + urllib.parse.quote(str(cwd / "screenshot.png")),
+        "/api/sessions/sess-contract/file/download?path=README.md",
+    ):
+        python_response = _get_response(python_server_url, path, signed_auth_cookie)
+        rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
+        assert python_response.status == rust_response.status
+        assert python_response.body == rust_response.body
+        assert python_response.headers.get("content-type") == rust_response.headers.get(
+            "content-type"
+        )
+
+
+@pytest.mark.readonly
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/sessions/sess-contract/messages?init=1&limit=20",
+        "/api/sessions/sess-contract/messages?offset=0&limit=20",
+        "/api/sessions/sess-contract/tail",
+        "/api/sessions/sess-contract/live?offset=0&live_offset=0&requests_version=v1",
+    ],
+)
+def test_messages_empty_log_parity(
+    python_server_url: str,
+    rust_server_url: str,
+    signed_auth_cookie: str,
+    shared_app_dir: Path,
+    tmp_path: Path,
+    path: str,
+) -> None:
+    cwd = tmp_path / "project"
+    cwd.mkdir()
+    log_path = tmp_path / "empty.jsonl"
+    log_path.write_text("", encoding="utf-8")
+    _write_contract_session(shared_app_dir, cwd=cwd, log_path=log_path)
+
+    python_response = _get_response(python_server_url, path, signed_auth_cookie)
+    rust_response = _get_response(rust_server_url, path, signed_auth_cookie)
+
+    assert python_response.status == rust_response.status
+    assert_content_type_equal(python_response, rust_response, path)
+    assert_json_equivalent(
+        python_response.json(), rust_response.json(), ignore_keys={"meta_refresh_ms"}
+    )

@@ -29,6 +29,7 @@ pub struct SessionRow {
     pub cwd: String,
     pub workspace_cwd: Option<String>,
     pub log_path: Option<String>,
+    pub session_path: Option<String>,
     pub start_ts: f64,
     pub updated_ts: f64,
     pub broker_pid: i64,

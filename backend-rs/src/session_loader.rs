@@ -38,6 +38,8 @@ struct SessionMeta {
     #[serde(default)]
     log_path: Option<String>,
     #[serde(default)]
+    session_path: Option<String>,
+    #[serde(default)]
     start_ts: Option<f64>,
     #[serde(default)]
     updated_ts: Option<f64>,
@@ -351,6 +353,7 @@ fn session_from_meta(
         cwd,
         workspace_cwd: clean_optional(meta.workspace_cwd),
         log_path: clean_optional(meta.log_path),
+        session_path: clean_optional(meta.session_path),
         start_ts,
         updated_ts,
         broker_pid,

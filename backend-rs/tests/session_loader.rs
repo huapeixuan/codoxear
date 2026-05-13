@@ -216,6 +216,7 @@ fn row(id: &str, cwd: &str, busy: bool, updated_ts: f64) -> SessionRow {
         cwd: cwd.to_string(),
         workspace_cwd: None,
         log_path: None,
+        session_path: None,
         start_ts: updated_ts - 1.0,
         updated_ts,
         broker_pid: 0,

@@ -1,6 +1,10 @@
 use crate::app_state::AppState;
+use crate::handlers::files::{
+    file_blob, file_download, file_list, file_read, file_search, files_blob,
+};
 use crate::handlers::git::{changed_files, diff, file_versions};
 use crate::handlers::health_meta::{health, me, sessions_bootstrap};
+use crate::handlers::messages::{live, messages, tail};
 use crate::handlers::metrics::metrics;
 use crate::handlers::session_meta::{
     commands, details, diagnostics, harness_get, queue, repo, takeover, ui_state, workspace,
@@ -38,6 +42,18 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/sessions/:session_id/commands", get(commands))
         .route("/api/v1/sessions/:session_id/takeover", get(takeover))
         .route("/api/v1/sessions/:session_id/repo", get(repo))
+        .route("/api/v1/sessions/:session_id/messages", get(messages))
+        .route("/api/v1/sessions/:session_id/tail", get(tail))
+        .route("/api/v1/sessions/:session_id/live", get(live))
+        .route("/api/v1/sessions/:session_id/file/read", get(file_read))
+        .route("/api/v1/sessions/:session_id/file/search", get(file_search))
+        .route("/api/v1/sessions/:session_id/file/list", get(file_list))
+        .route("/api/v1/sessions/:session_id/file/blob", get(file_blob))
+        .route(
+            "/api/v1/sessions/:session_id/file/download",
+            get(file_download),
+        )
+        .route("/api/v1/files/blob", get(files_blob))
         .route(
             "/api/v1/sessions/:session_id/git/changed_files",
             get(changed_files),
@@ -83,6 +99,15 @@ fn public_api_router(state: AppState) -> Router<AppState> {
         .route("/sessions/:session_id/commands", get(commands))
         .route("/sessions/:session_id/takeover", get(takeover))
         .route("/sessions/:session_id/repo", get(repo))
+        .route("/sessions/:session_id/messages", get(messages))
+        .route("/sessions/:session_id/tail", get(tail))
+        .route("/sessions/:session_id/live", get(live))
+        .route("/sessions/:session_id/file/read", get(file_read))
+        .route("/sessions/:session_id/file/search", get(file_search))
+        .route("/sessions/:session_id/file/list", get(file_list))
+        .route("/sessions/:session_id/file/blob", get(file_blob))
+        .route("/sessions/:session_id/file/download", get(file_download))
+        .route("/files/blob", get(files_blob))
         .route(
             "/sessions/:session_id/git/changed_files",
             get(changed_files),
