@@ -153,6 +153,29 @@ def preseed_contract_state(
             )
 
 
+def _contract_server_env(shared_app_home: Path, port: int) -> dict[str, str]:
+    """Return an isolated environment for Python/Rust contract servers."""
+
+    codex_home = shared_app_home / ".codex"
+    pi_home = shared_app_home / ".pi"
+    codex_home.mkdir(parents=True, exist_ok=True)
+    pi_home.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env.update(
+        {
+            "HOME": str(shared_app_home),
+            "CODEX_HOME": str(codex_home),
+            "PI_HOME": str(pi_home),
+            "CODEX_WEB_PASSWORD": CONTRACT_PASSWORD,
+            "CODEX_WEB_HOST": "127.0.0.1",
+            "CODEX_WEB_PORT": str(port),
+            "CODEX_WEB_DISCOVER_MIN_INTERVAL_SECONDS": "0",
+            "CODOXEAR_APP_DIR": str(shared_app_home / ".local/share/codoxear"),
+        }
+    )
+    return env
+
+
 def _copy_voice_fixture(
     shared_app_dir: Path, fixture_name: str, dest_name: str
 ) -> None:
@@ -168,18 +191,8 @@ def python_server_url(
     """Run the current Python server on a random local port."""
 
     port = _free_port()
-    env = os.environ.copy()
-    env.update(
-        {
-            "HOME": str(shared_app_home),
-            "CODEX_WEB_PASSWORD": CONTRACT_PASSWORD,
-            "CODEX_WEB_HOST": "127.0.0.1",
-            "CODEX_WEB_PORT": str(port),
-            "CODEX_WEB_DISCOVER_MIN_INTERVAL_SECONDS": "0",
-            "CODOXEAR_APP_DIR": str(shared_app_home / ".local/share/codoxear"),
-            "CODOXEAR_USE_LEGACY_WEB": "1",
-        }
-    )
+    env = _contract_server_env(shared_app_home, port)
+    env["CODOXEAR_USE_LEGACY_WEB"] = "1"
     proc = subprocess.Popen(
         [sys.executable, "-m", "codoxear.server"],
         cwd=str(Path(__file__).resolve().parents[2]),
@@ -219,17 +232,7 @@ def rust_server_url(
         raise RuntimeError(message)
 
     port = _free_port()
-    env = os.environ.copy()
-    env.update(
-        {
-            "HOME": str(shared_app_home),
-            "CODEX_WEB_PASSWORD": CONTRACT_PASSWORD,
-            "CODEX_WEB_HOST": "127.0.0.1",
-            "CODEX_WEB_PORT": str(port),
-            "CODEX_WEB_DISCOVER_MIN_INTERVAL_SECONDS": "0",
-            "CODOXEAR_APP_DIR": str(shared_app_home / ".local/share/codoxear"),
-        }
-    )
+    env = _contract_server_env(shared_app_home, port)
     proc = subprocess.Popen(
         [str(bin_path)],
         cwd=str(repo_root),

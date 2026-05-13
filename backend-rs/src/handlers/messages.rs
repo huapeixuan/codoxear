@@ -10,6 +10,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path as FsPath;
 use std::time::Duration;
@@ -246,9 +247,39 @@ fn default_sock_path(row: &crate::models::SessionRow, app_dir: &FsPath) -> std::
 }
 
 fn ui_requests_version(requests: &[Value]) -> String {
-    let canonical = serde_json::to_vec(requests).unwrap_or_default();
+    let sorted: Vec<_> = requests.iter().map(SortedJson::from).collect();
+    let canonical = serde_json::to_vec(&sorted).unwrap_or_default();
     let digest = Sha256::digest(canonical);
     URL_SAFE_NO_PAD.encode(&digest[..12])
+}
+
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum SortedJson<'a> {
+    Null,
+    Bool(bool),
+    Number(&'a serde_json::Number),
+    String(&'a str),
+    Array(Vec<SortedJson<'a>>),
+    Object(BTreeMap<&'a str, SortedJson<'a>>),
+}
+
+impl<'a> From<&'a Value> for SortedJson<'a> {
+    fn from(value: &'a Value) -> Self {
+        match value {
+            Value::Null => SortedJson::Null,
+            Value::Bool(value) => SortedJson::Bool(*value),
+            Value::Number(value) => SortedJson::Number(value),
+            Value::String(value) => SortedJson::String(value),
+            Value::Array(items) => SortedJson::Array(items.iter().map(SortedJson::from).collect()),
+            Value::Object(object) => SortedJson::Object(
+                object
+                    .iter()
+                    .map(|(key, value)| (key.as_str(), SortedJson::from(value)))
+                    .collect(),
+            ),
+        }
+    }
 }
 
 fn parse_nonnegative(raw: Option<&str>, _field: &str, default: usize) -> usize {
@@ -267,4 +298,22 @@ fn read_tail(path: &FsPath, max_bytes: usize) -> Result<String, String> {
     let raw = fs::read(path).map_err(|err| err.to_string())?;
     let start = raw.len().saturating_sub(max_bytes);
     Ok(String::from_utf8_lossy(&raw[start..]).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ui_requests_version;
+    use serde_json::json;
+
+    #[test]
+    fn ui_requests_version_uses_python_sorted_key_canonical_json() {
+        let requests = vec![json!({
+            "z": 1,
+            "a": {"b": 2, "a": 1},
+            "method": "update_plan",
+            "text": "嗨"
+        })];
+
+        assert_eq!(ui_requests_version(&requests), "Kt4bMxFAZ8m3UacQ");
+    }
 }
