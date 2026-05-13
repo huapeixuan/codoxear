@@ -125,12 +125,12 @@ These tasks address `rust-backend-skeleton` review退回项 and unblock Phase 2 
 
 ## 14. Definition of Done — verification gate (must all be green to ship)
 
-- [ ] 14.1 `cd backend-rs && cargo fmt --all -- --check` passes.
-- [ ] 14.2 `cd backend-rs && cargo clippy --all-targets -- -D warnings` passes.
-- [ ] 14.3 `cd backend-rs && cargo test --release` passes; coverage includes new unit tests for `broker_client`, `session_loader`, `log_normalizer/{codex,pi}`, `git_context`, `voice_state`, `json_response`, `normalize_cwd_group_key`, `read_cwd_groups`.
-- [ ] 14.4 `cd backend-rs && cargo build --release --bins` produces both `codoxear-backend-rs` and `codoxear-broker-rs` (Phase 1 stub still exits non-zero).
-- [ ] 14.5 `find backend-rs/src -name '*.rs' -print0 | xargs -0 wc -l | awk '$1 > 800'` returns no lines (every source file ≤ 800 lines).
-- [ ] 14.6 `pytest tests/contract -q -k 'parity and readonly'` passes on Linux and macOS; no Phase 2 endpoint test is skipped or xfailed.
-- [ ] 14.7 `pytest tests/contract -q -k 'parity and not readonly'` (Phase 1 retest) still passes — no regression on `/api/me`, `/api/sessions/bootstrap`, `/api/health`.
-- [ ] 14.8 `openspec validate rust-backend-readonly-routes --strict` returns "Change 'rust-backend-readonly-routes' is valid"; `openspec validate rust-backend-cutover --strict` still returns valid.
+- [x] 14.1 `cd backend-rs && cargo fmt --all -- --check` passes.
+- [x] 14.2 `cd backend-rs && cargo clippy --all-targets -- -D warnings` passes.
+- [x] 14.3 `cd backend-rs && cargo test --release` passes; coverage includes new unit tests for `broker_client`, `session_loader`, `log_normalizer/{codex,pi}`, `git_context`, `voice_state`, `json_response`, `normalize_cwd_group_key`, `read_cwd_groups`.
+- [x] 14.4 `cd backend-rs && cargo build --release --bins` produces both `codoxear-backend-rs` and `codoxear-broker-rs` (Phase 1 stub still exits non-zero).
+- [x] 14.5 `find backend-rs/src -name '*.rs' -print0 | xargs -0 wc -l | awk '$1 > 800'` returns no lines (every source file ≤ 800 lines).
+- [x] 14.6 `pytest tests/contract -q -k 'parity and readonly'` passes on Linux and macOS; no Phase 2 endpoint test is skipped or xfailed.
+- [x] 14.7 `pytest tests/contract -q -k 'parity and not readonly'` (Phase 1 retest) still passes — no regression on `/api/me`, `/api/sessions/bootstrap`, `/api/health`.
+- [x] 14.8 `openspec validate rust-backend-readonly-routes --strict` returns "Change 'rust-backend-readonly-routes' is valid"; `openspec validate rust-backend-cutover --strict` still returns valid.
 - [ ] 14.9 Independent code review by `code-reviewer` produces PASS or WARNING-with-mergeable-fixes; any HIGH must be addressed before declaring Phase 2 done.
