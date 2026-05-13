@@ -216,6 +216,9 @@ Set these in `.env` (or in the process environment):
 - `CODEX_WEB_GIT_DIFF_MAX_BYTES` (default `819200`)
 - `CODEX_WEB_GIT_DIFF_TIMEOUT_SECONDS` (default `4.0`)
 - `CODEX_WEB_GIT_CHANGED_FILES_MAX` (default `400`)
+- `CODEX_WEB_BRANCH_TIMEOUT_S` (default `2.0`) - git branch subprocess timeout for session repo badges
+- `CODEX_WEB_PR_TIMEOUT_S` (default `4.0`) - `gh pr view` subprocess timeout for session repo badges
+- `CODEX_WEB_GH_AUTH_TTL_S` (default `300`) - GitHub CLI auth/error cache TTL used by repo summary resolution
 - `CODEX_WEB_FD_POLL_SECONDS` (default `1.0`) - how often the broker scans `/proc` to detect the active `rollout-*.jsonl`
 
 Runtime state is stored under `~/.local/share/codoxear` (legacy `~/.local/share/codex-web` is no longer used).

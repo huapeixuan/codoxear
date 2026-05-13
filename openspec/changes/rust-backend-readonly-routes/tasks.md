@@ -118,9 +118,9 @@ These tasks address `rust-backend-skeleton` review退回项 and unblock Phase 2 
 
 - [x] 13.1 Update `.github/workflows/backend-rs.yml`: install `gh` on macOS (`brew install gh`); add a step running `pytest tests/contract -k 'parity and readonly'` (alongside the existing Phase 1 selector); ensure `wc -l` gate covers all `backend-rs/src/**/*.rs`.
 - [x] 13.2 Update `tests/contract/README.md` with new readonly selector instructions and the required `gh` toolchain on macOS.
-- [ ] 13.3 Update `README.md` with any new env vars used by `git_context` (already shared with Python: `CODEX_WEB_BRANCH_TIMEOUT_S`, `CODEX_WEB_PR_TIMEOUT_S`, `CODEX_WEB_GH_AUTH_TTL_S`) and confirm Phase 2 binary still runs on default `[::]:8743`.
-- [ ] 13.4 Update `docs/cutover/endpoint-inventory.md`: for every Phase 2 endpoint table row, change the "Ref comparison" annotation from "...Phase 2 port" to "implemented by `rust-backend-readonly-routes`"; preserve untouched rows for Phase 3 / Phase 4 / Phase 5 endpoints.
-- [ ] 13.5 Update inventory's "Must be ported in Phase 2 (GET/read-only parity)" section to link each bullet to its tasks section here (`Wave B`, `Wave C`, etc.).
+- [x] 13.3 Update `README.md` with any new env vars used by `git_context` (already shared with Python: `CODEX_WEB_BRANCH_TIMEOUT_S`, `CODEX_WEB_PR_TIMEOUT_S`, `CODEX_WEB_GH_AUTH_TTL_S`) and confirm Phase 2 binary still runs on default `[::]:8743`.
+- [x] 13.4 Update `docs/cutover/endpoint-inventory.md`: for every Phase 2 endpoint table row, change the "Ref comparison" annotation from "...Phase 2 port" to "implemented by `rust-backend-readonly-routes`"; preserve untouched rows for Phase 3 / Phase 4 / Phase 5 endpoints.
+- [x] 13.5 Update inventory's "Must be ported in Phase 2 (GET/read-only parity)" section to link each bullet to its tasks section here (`Wave B`, `Wave C`, etc.).
 - [x] 13.6 Update `openspec/changes/rust-backend-cutover/tasks.md` Phase 2 row(s) to reflect that the dedicated change `rust-backend-readonly-routes` is the Phase 2 owner.
 
 ## 14. Definition of Done — verification gate (must all be green to ship)
