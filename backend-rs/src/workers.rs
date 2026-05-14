@@ -171,6 +171,12 @@ pub fn harness_sweep_once(state: &AppState) -> Result<bool, String> {
     harness_sweep_once_at(state, now_seconds())
 }
 
+pub fn worker_state_reset_for_tests() {
+    queue_idle_map().lock().unwrap().clear();
+    last_injected_map().lock().unwrap().clear();
+    scope_injected_map().lock().unwrap().clear();
+}
+
 pub fn harness_sweep_once_at(state: &AppState, now: f64) -> Result<bool, String> {
     let harness_path = state.config.app_dir.join("harness.json");
     let harness =

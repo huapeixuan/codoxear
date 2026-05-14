@@ -764,7 +764,8 @@ async fn inject_file_rejects_decoded_payload_above_python_default_limit() {
 
 #[test]
 fn queue_worker_requires_idle_grace_before_popping_queue_item() {
-    use codoxear_backend_rs::workers::queue_sweep_once_at;
+    use codoxear_backend_rs::workers::{queue_sweep_once_at, worker_state_reset_for_tests};
+    worker_state_reset_for_tests();
     let (home, _app) = test_app();
     write_session(&home, "sid-a", "codex");
     let app_dir = app_dir(&home);
@@ -810,9 +811,33 @@ fn queue_worker_requires_idle_grace_before_popping_queue_item() {
 }
 
 #[test]
+fn queue_worker_prunes_missing_session_without_broker_side_effects() {
+    use codoxear_backend_rs::workers::{queue_sweep_once_at, worker_state_reset_for_tests};
+    worker_state_reset_for_tests();
+    let (home, _app) = test_app();
+    let app_dir = app_dir(&home);
+    fs::write(
+        app_dir.join("session_queues.json"),
+        serde_json::to_vec(&json!({"missing": [{"text": "drop me"}]})).unwrap(),
+    )
+    .unwrap();
+    let state = AppState {
+        config: RuntimeConfig {
+            app_dir: app_dir.clone(),
+        },
+    };
+
+    assert!(!queue_sweep_once_at(&state, 100.0).unwrap());
+    let queues: Value =
+        serde_json::from_slice(&fs::read(app_dir.join("session_queues.json")).unwrap()).unwrap();
+    assert_eq!(queues, json!({}));
+}
+
+#[test]
 fn harness_worker_requires_assistant_tail_and_cooldown_before_injecting() {
     use codoxear_backend_rs::log_normalizer::codex::last_chat_role_ts_from_log;
-    use codoxear_backend_rs::workers::harness_sweep_once_at;
+    use codoxear_backend_rs::workers::{harness_sweep_once_at, worker_state_reset_for_tests};
+    worker_state_reset_for_tests();
     let (home, _app) = test_app();
     write_session(&home, "sid-a", "codex");
     let app_dir = app_dir(&home);
@@ -872,6 +897,31 @@ fn harness_worker_requires_assistant_tail_and_cooldown_before_injecting() {
         serde_json::from_slice(&fs::read(app_dir.join("harness.json")).unwrap()).unwrap();
     assert_eq!(harness["sid-a"]["remaining_injections"], 1);
     server.join().unwrap();
+}
+
+#[test]
+fn harness_worker_disables_zero_remaining_without_broker_side_effects() {
+    use codoxear_backend_rs::workers::{harness_sweep_once_at, worker_state_reset_for_tests};
+    worker_state_reset_for_tests();
+    let (home, _app) = test_app();
+    write_session(&home, "sid-a", "codex");
+    let app_dir = app_dir(&home);
+    fs::write(
+        app_dir.join("harness.json"),
+        serde_json::to_vec(&json!({"sid-a": {"enabled": true, "cooldown_minutes": 1, "remaining_injections": 0, "request": ""}})).unwrap(),
+    )
+    .unwrap();
+    let state = AppState {
+        config: RuntimeConfig {
+            app_dir: app_dir.clone(),
+        },
+    };
+
+    assert!(!harness_sweep_once_at(&state, 100.0).unwrap());
+    let harness: Value =
+        serde_json::from_slice(&fs::read(app_dir.join("harness.json")).unwrap()).unwrap();
+    assert_eq!(harness["sid-a"]["enabled"], false);
+    assert_eq!(harness["sid-a"]["remaining_injections"], 0);
 }
 
 #[tokio::test]
