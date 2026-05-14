@@ -21,6 +21,7 @@ use crate::post_handlers::{
     session_ui_response,
 };
 use crate::runtime::{cookie_name, load_or_create_hmac_secret, verify_auth_cookie};
+use crate::takeover_post::takeover_open;
 use crate::voice_post::{
     audio_listener, notification_subscription_toggle, notification_subscription_upsert,
     settings_voice_save,
@@ -83,6 +84,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/sessions/:session_id/ui_state", get(ui_state))
         .route("/api/v1/sessions/:session_id/commands", get(commands))
         .route("/api/v1/sessions/:session_id/takeover", get(takeover))
+        .route(
+            "/api/v1/sessions/:session_id/takeover/open",
+            post(takeover_open),
+        )
         .route("/api/v1/sessions/:session_id/repo", get(repo))
         .route("/api/v1/sessions/:session_id/messages", get(messages))
         .route("/api/v1/sessions/:session_id/tail", get(tail))
@@ -174,6 +179,7 @@ fn public_api_router(state: AppState) -> Router<AppState> {
         .route("/sessions/:session_id/ui_state", get(ui_state))
         .route("/sessions/:session_id/commands", get(commands))
         .route("/sessions/:session_id/takeover", get(takeover))
+        .route("/sessions/:session_id/takeover/open", post(takeover_open))
         .route("/sessions/:session_id/repo", get(repo))
         .route("/sessions/:session_id/messages", get(messages))
         .route("/sessions/:session_id/tail", get(tail))

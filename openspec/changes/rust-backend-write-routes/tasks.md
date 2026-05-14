@@ -74,8 +74,8 @@
 - [ ] 9.4 Implement worktree branch creation parity for codex or explicitly gate unsupported cases with the same error until covered; add tests for `worktree_branch` with resume rejection.
 - [ ] 9.5 Implement tmux create path parity or at minimum no-tmux + tmux-unavailable parity; if tmux support is deferred, update spec/tasks before coding and mark as a blocker for full Phase 3 DoD.
 - [ ] 9.6 Implement `POST /api/sessions/{id}/delete`: historical row hide, broker shutdown via `shutdown`, fallback kill if needed, hidden_sessions/session state cleanup. _(partial: active session shutdown/kill, hidden_sessions, and state cleanup implemented; historical row handling pending)_
-- [ ] 9.7 Implement `POST /api/sessions/{id}/takeover/open`: descriptor eligibility check and terminal open behavior; if platform-specific open cannot run in CI, cover descriptor-not-eligible and mock open command.
-- [ ] 9.8 Add contract tests for create codex/pi happy path with stub/fake broker command where possible, cwd required/creation errors, resume not found, delete unknown/success cleanup, and takeover not eligible.
+- [x] 9.7 Implement `POST /api/sessions/{id}/takeover/open`: descriptor eligibility check and terminal open behavior; if platform-specific open cannot run in CI, cover descriptor-not-eligible and mock open command. _(terminal launch is best-effort and CI covers descriptor-not-eligible path)_
+- [ ] 9.8 Add contract tests for create codex/pi happy path with stub/fake broker command where possible, cwd required/creation errors, resume not found, delete unknown/success cleanup, and takeover not eligible. _(partial: Rust integration coverage includes delete success cleanup and takeover not eligible)_
 
 ## 10. Lightweight voice/subscription writes and hooks
 

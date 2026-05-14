@@ -516,3 +516,21 @@ async fn audio_listener_heartbeat_validates_payload_and_tracks_memory_state() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, json!({"ok": true, "active_listener_count": 0}));
 }
+
+#[tokio::test]
+async fn takeover_open_returns_descriptor_without_side_effect_when_not_eligible() {
+    let (home, app) = test_app();
+    write_session(&home, "sid-a", "codex");
+    let cookie = signed_cookie(&home);
+
+    let (status, body) =
+        post_json(app, "/api/sessions/sid-a/takeover/open", &cookie, json!({})).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["eligible"], false);
+    assert_eq!(
+        body["reason"],
+        "takeover is only available for web-owned Pi sessions"
+    );
+}
