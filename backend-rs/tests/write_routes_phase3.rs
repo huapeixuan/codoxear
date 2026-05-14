@@ -1,5 +1,6 @@
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
+use base64::Engine;
 use codoxear_backend_rs::app_state::AppState;
 use codoxear_backend_rs::routes::router;
 use codoxear_backend_rs::runtime::{
@@ -9,10 +10,13 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use sha2::Digest;
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::os::unix::net::UnixListener;
+use std::path::{Path, PathBuf};
 use std::process;
+use std::thread;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -66,6 +70,55 @@ fn assert_same_path(value: &Value, expected: &Path) {
     let actual = fs::canonicalize(value.as_str().expect("json path")).unwrap();
     let expected = fs::canonicalize(expected).unwrap();
     assert_eq!(actual, expected);
+}
+
+fn patch_session_sidecar(home: &TempDir, session_id: &str, patch: Value) {
+    let path = app_dir(home)
+        .join("socks")
+        .join(format!("{session_id}.json"));
+    let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    for (key, patch_value) in patch.as_object().unwrap() {
+        value[key] = patch_value.clone();
+    }
+    fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+}
+
+fn queue_len_on_disk(app_dir: &Path, session_id: &str) -> usize {
+    let value: Value =
+        serde_json::from_slice(&fs::read(app_dir.join("session_queues.json")).unwrap()).unwrap();
+    value
+        .get(session_id)
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0)
+}
+
+fn spawn_broker_server<F>(
+    sock_path: PathBuf,
+    request_count: usize,
+    handler: F,
+) -> thread::JoinHandle<()>
+where
+    F: Fn(Value) -> Value + Send + Sync + 'static,
+{
+    let _ = fs::remove_file(&sock_path);
+    let listener = UnixListener::bind(&sock_path).expect("bind broker socket");
+    let handler = std::sync::Arc::new(handler);
+    thread::spawn(move || {
+        for _ in 0..request_count {
+            let (stream, _) = listener.accept().expect("accept broker request");
+            let mut line = String::new();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            reader.read_line(&mut line).unwrap();
+            let request: Value = serde_json::from_str(line.trim_end()).unwrap();
+            let response = handler(request);
+            let mut stream = stream;
+            stream
+                .write_all(serde_json::to_string(&response).unwrap().as_bytes())
+                .unwrap();
+            stream.write_all(b"\n").unwrap();
+        }
+    })
 }
 
 async fn post_json(
@@ -599,4 +652,164 @@ fn worker_flag_parser_matches_python_truthy_semantics() {
     assert!(env_flag_truthy_value(Some("1")));
     assert!(env_flag_truthy_value(Some("true")));
     assert!(env_flag_truthy_value(Some("yes")));
+}
+
+#[tokio::test]
+async fn inject_file_accepts_python_default_body_above_axum_json_default_limit() {
+    let (home, app) = test_app();
+    write_session(&home, "sid-a", "codex");
+    let socks = app_dir(&home).join("socks");
+    let sock_path = socks.join("sid-a.sock");
+    let server = spawn_broker_server(sock_path, 2, |request| {
+        match request["cmd"].as_str().unwrap() {
+            "state" => json!({"busy": false, "queue_len": 0}),
+            "keys" => {
+                assert!(request["seq"].as_str().unwrap().contains("Attachment 1:"));
+                json!({"ok": true})
+            }
+            other => panic!("unexpected broker cmd {other}"),
+        }
+    });
+    let cookie = signed_cookie(&home);
+    let raw = vec![b'a'; 3 * 1024 * 1024];
+    let data_b64 = base64::engine::general_purpose::STANDARD.encode(raw);
+
+    let (status, body) = post_json(
+        app,
+        "/api/sessions/sid-a/inject_file",
+        &cookie,
+        json!({"data_b64": data_b64, "filename": "big.txt", "attachment_index": 1}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let out = std::path::PathBuf::from(body["path"].as_str().unwrap());
+    assert_eq!(fs::metadata(out).unwrap().len(), 3 * 1024 * 1024);
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn inject_file_rejects_decoded_payload_above_python_default_limit() {
+    let (home, app) = test_app();
+    write_session(&home, "sid-a", "codex");
+    let cookie = signed_cookie(&home);
+    let data_b64 =
+        base64::engine::general_purpose::STANDARD.encode(vec![0_u8; (16 * 1024 * 1024) + 1]);
+
+    let (status, body) = post_json(
+        app,
+        "/api/sessions/sid-a/inject_file",
+        &cookie,
+        json!({"data_b64": data_b64, "filename": "too-big.bin", "attachment_index": 1}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(body["error"].as_str().unwrap().contains("16777216"));
+}
+
+#[test]
+fn queue_worker_requires_idle_grace_before_popping_queue_item() {
+    use codoxear_backend_rs::workers::queue_sweep_once_at;
+    let (home, _app) = test_app();
+    write_session(&home, "sid-a", "codex");
+    let app_dir = app_dir(&home);
+    let log_path = app_dir.join("sid-a.jsonl");
+    fs::write(
+        &log_path,
+        r#"{"type":"response_item","timestamp":"2026-05-14T00:00:00Z","payload":{"type":"message","role":"assistant","end_turn":true,"content":[{"type":"output_text","text":"done"}]}}
+"#,
+    )
+    .unwrap();
+    patch_session_sidecar(
+        &home,
+        "sid-a",
+        json!({"log_path": log_path.to_string_lossy()}),
+    );
+    fs::write(
+        app_dir.join("session_queues.json"),
+        serde_json::to_vec(&json!({"sid-a": [{"text": "next"}]})).unwrap(),
+    )
+    .unwrap();
+    let state = AppState {
+        config: RuntimeConfig {
+            app_dir: app_dir.clone(),
+        },
+    };
+    let server = spawn_broker_server(app_dir.join("socks/sid-a.sock"), 4, |request| match request
+        ["cmd"]
+        .as_str()
+        .unwrap()
+    {
+        "state" => json!({"busy": false, "queue_len": 0}),
+        "send" => json!({"ok": true}),
+        other => panic!("unexpected broker cmd {other}"),
+    });
+
+    assert!(!queue_sweep_once_at(&state, 100.0).unwrap());
+    assert_eq!(queue_len_on_disk(&app_dir, "sid-a"), 1);
+    assert!(!queue_sweep_once_at(&state, 105.0).unwrap());
+    assert_eq!(queue_len_on_disk(&app_dir, "sid-a"), 1);
+    assert!(queue_sweep_once_at(&state, 111.0).unwrap());
+    assert_eq!(queue_len_on_disk(&app_dir, "sid-a"), 0);
+    server.join().unwrap();
+}
+
+#[test]
+fn harness_worker_requires_assistant_tail_and_cooldown_before_injecting() {
+    use codoxear_backend_rs::workers::harness_sweep_once_at;
+    let (home, _app) = test_app();
+    write_session(&home, "sid-a", "codex");
+    let app_dir = app_dir(&home);
+    let log_path = app_dir.join("sid-a.jsonl");
+    fs::write(
+        &log_path,
+        r#"{"type":"response_item","timestamp":"2026-05-14T00:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}
+"#,
+    )
+    .unwrap();
+    patch_session_sidecar(
+        &home,
+        "sid-a",
+        json!({"log_path": log_path.to_string_lossy(), "session_id": "thread-a"}),
+    );
+    fs::write(
+        app_dir.join("harness.json"),
+        serde_json::to_vec(&json!({"sid-a": {"enabled": true, "cooldown_minutes": 1, "remaining_injections": 2, "request": "ship it"}})).unwrap(),
+    )
+    .unwrap();
+    let state = AppState {
+        config: RuntimeConfig {
+            app_dir: app_dir.clone(),
+        },
+    };
+
+    assert!(!harness_sweep_once_at(&state, 100.0).unwrap());
+    fs::write(
+        &log_path,
+        r#"{"type":"response_item","timestamp":"1970-01-01T00:01:00Z","payload":{"type":"message","role":"assistant","end_turn":true,"content":[{"type":"output_text","text":"done"}]}}
+"#,
+    )
+    .unwrap();
+    assert!(!harness_sweep_once_at(&state, 100.0).unwrap());
+    let server = spawn_broker_server(app_dir.join("socks/sid-a.sock"), 2, |request| match request
+        ["cmd"]
+        .as_str()
+        .unwrap()
+    {
+        "state" => json!({"busy": false, "queue_len": 0}),
+        "send" => {
+            let text = request["text"].as_str().unwrap();
+            assert!(text.starts_with("Unattended-mode instructions"));
+            assert!(text.contains("Additional request from user: ship it"));
+            json!({"ok": true})
+        }
+        other => panic!("unexpected broker cmd {other}"),
+    });
+    assert!(harness_sweep_once_at(&state, 121.0).unwrap());
+    assert!(!harness_sweep_once_at(&state, 150.0).unwrap());
+    let harness: Value =
+        serde_json::from_slice(&fs::read(app_dir.join("harness.json")).unwrap()).unwrap();
+    assert_eq!(harness["sid-a"]["remaining_injections"], 1);
+    server.join().unwrap();
 }

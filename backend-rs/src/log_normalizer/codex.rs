@@ -54,6 +54,24 @@ pub fn idle_from_log(path: &Path, max_scan_bytes: usize) -> Result<Option<bool>,
     idle_from_objects(&objects)
 }
 
+pub fn last_chat_role_ts_from_log(
+    path: &Path,
+    max_scan_bytes: usize,
+) -> Result<Option<(String, f64)>, String> {
+    let mut scan = 256 * 1024;
+    while scan <= max_scan_bytes {
+        let objects = read_jsonl_objects(path, scan)?;
+        if let Some(value) = last_chat_role_ts_from_objects(&objects)? {
+            return Ok(Some(value));
+        }
+        scan = scan.saturating_mul(2);
+        if scan == 0 {
+            break;
+        }
+    }
+    Ok(None)
+}
+
 pub fn token_snapshot_from_log(
     path: &Path,
     max_scan_bytes: usize,
@@ -342,6 +360,58 @@ fn idle_from_objects(objects: &[Value]) -> Result<Option<bool>, String> {
         }
     }
     Ok(Some(if saw_terminal_signal { idle } else { true }))
+}
+
+fn last_chat_role_ts_from_objects(objects: &[Value]) -> Result<Option<(String, f64)>, String> {
+    let mut last_user: Option<(usize, Option<f64>)> = None;
+    let mut last_assistant: Option<(usize, Option<f64>)> = None;
+    for (idx, obj) in objects.iter().enumerate() {
+        match obj.get("type").and_then(Value::as_str) {
+            Some("message") => {
+                if pi::pi_user_text(obj).is_some() {
+                    last_user = Some((idx, event_ts(obj)));
+                } else if pi::pi_assistant_text(obj).is_some() || pi_message_keeps_turn_busy(obj) {
+                    last_assistant = Some((idx, event_ts(obj)));
+                }
+            }
+            Some("event_msg") => {
+                let payload = obj
+                    .get("payload")
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| "invalid event_msg payload".to_string())?;
+                match payload.get("type").and_then(Value::as_str) {
+                    Some("user_message")
+                        if payload.get("message").and_then(Value::as_str).is_some() =>
+                    {
+                        last_user = Some((idx, event_ts(obj)));
+                    }
+                    Some("agent_message")
+                        if payload
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .is_some_and(|message| !message.trim().is_empty()) =>
+                    {
+                        last_assistant = Some((idx, event_ts(obj)));
+                    }
+                    _ => {}
+                }
+            }
+            Some("response_item") if has_assistant_output_text(obj)? => {
+                last_assistant = Some((idx, event_ts(obj)));
+            }
+            _ => {}
+        }
+    }
+    let best = match (last_user, last_assistant) {
+        (Some(user), Some(assistant)) if assistant.0 > user.0 => Some(("assistant", assistant)),
+        (Some(user), _) => Some(("user", user)),
+        (None, Some(assistant)) => Some(("assistant", assistant)),
+        (None, None) => None,
+    };
+    let Some((role, (_idx, Some(ts)))) = best else {
+        return Ok(None);
+    };
+    Ok(Some((role.to_string(), ts)))
 }
 
 fn extract_token_update(objects: &[Value]) -> Option<Value> {

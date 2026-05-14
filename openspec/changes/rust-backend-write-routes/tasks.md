@@ -63,8 +63,8 @@
 - [x] 8.2 Implement `POST /api/sessions/{id}/file/write` create/update paths: text validation, version required, conflict responses, atomic UTF-8 write, `session_files.json` history update, response `ok/path/rel/size/version/editable`.
 - [x] 8.3 Implement `POST /api/files/read` and `/api/files/inspect` using Phase 2 file view helper and add file history when `session_id` is valid.
 - [x] 8.4 Implement `POST /api/files/blob` alias behavior, including query `path`, inline image/pdf bytes, Content-Disposition, Cache-Control, and errors.
-- [x] 8.5 Implement `POST /api/sessions/{id}/inject_file` and `/inject_image`: body size cap, base64 validation, filename sanitization, decoded byte limit, upload mode `0600`, Pi 409 rejection, bracketed paste broker `keys` command. _(body size cap relies on Axum/global body limit in this slice; handler covers decoded limit, filename sanitization, 0600 upload mode, Pi 409, and bracketed paste broker command)_
-- [ ] 8.6 Add contract tests for file update success, stale version conflict, create success/conflict, path traversal, non-editable file, global read/inspect/blob, file history round-trip, upload too large, invalid base64, Pi injection rejection, and successful non-Pi injection command. _(partial: Rust integration coverage added for global read/inspect history, file update success, stale conflict, history round-trip, and Pi injection rejection)_
+- [x] 8.5 Implement `POST /api/sessions/{id}/inject_file` and `/inject_image`: body size cap, base64 validation, filename sanitization, decoded byte limit, upload mode `0600`, Pi 409 rejection, bracketed paste broker `keys` command.
+- [ ] 8.6 Add contract tests for file update success, stale version conflict, create success/conflict, path traversal, non-editable file, global read/inspect/blob, file history round-trip, upload too large, invalid base64, Pi injection rejection, and successful non-Pi injection command. _(partial: Rust integration coverage added for global read/inspect history, file update success, stale conflict, history round-trip, Pi injection rejection, non-Pi >2MiB upload success, and decoded upload too large)_
 
 ## 9. Session create/delete/takeover lifecycle
 
@@ -89,10 +89,10 @@
 
 ## 11. Rust queue and harness workers
 
-- [ ] 11.1 Add `queue_worker.rs`: gated by `CODOXEAR_ENABLE_QUEUE_SWEEP`, periodically discovers sessions, prunes missing queues, checks broker busy/queue_len and log idle state, waits `QUEUE_IDLE_GRACE_SECONDS`, sends one queued item, then pops it from `session_queues.json`. _(partial: gated Rust worker loop added; prunes missing queues, checks broker/session busy, sends one item and pops it; log idle grace remains pending)_
-- [ ] 11.2 Add `harness_worker.rs`: gated by `CODOXEAR_ENABLE_HARNESS_SWEEP`, implements Python `_harness_sweep` cooldown, remaining injection, assistant-last-message, broker idle, local queue empty, and rendered prompt send behavior. _(partial: gated Rust worker loop added; checks broker/local queue idle, sends rendered prompt, decrements remaining; cooldown and assistant-last-message gating remain pending)_
+- [ ] 11.1 Add `queue_worker.rs`: gated by `CODOXEAR_ENABLE_QUEUE_SWEEP`, periodically discovers sessions, prunes missing queues, checks broker busy/queue_len and log idle state, waits `QUEUE_IDLE_GRACE_SECONDS`, sends one queued item, then pops it from `session_queues.json`. _(partial: gated Rust worker loop added; prunes missing queues, checks broker/session busy and log idle, waits idle grace, sends one item and pops it)_
+- [ ] 11.2 Add `harness_worker.rs`: gated by `CODOXEAR_ENABLE_HARNESS_SWEEP`, implements Python `_harness_sweep` cooldown, remaining injection, assistant-last-message, broker idle, local queue empty, and rendered prompt send behavior. _(partial: gated Rust worker loop added; checks broker/local queue idle, cooldown, scope cooldown, assistant-last-message gate, sends Python-parity prompt, and decrements remaining)_
 - [x] 11.3 Wire workers in `backend-rs/src/main.rs` after state build; default off; truthy/falsy parsing matches Python helper.
-- [ ] 11.4 Add worker unit/integration tests with temp app dir, log fixtures, and stub broker: disabled no side effects, enabled sends once, cooldown prevents duplicate, remaining reaches zero disables harness, queue drain pops exactly one item. _(partial: truthy/falsy parser coverage added; worker behavior stub tests pending)_
+- [ ] 11.4 Add worker unit/integration tests with temp app dir, log fixtures, and stub broker: disabled no side effects, enabled sends once, cooldown prevents duplicate, remaining reaches zero disables harness, queue drain pops exactly one item. _(partial: truthy/falsy parser, queue idle grace/pop exactly one, harness assistant/cooldown/prompt/decrement behavior covered; disabled/no-side-effect and remaining-zero-disable cases still pending)_
 
 ## 12. Python worker handoff
 

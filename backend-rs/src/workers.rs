@@ -1,11 +1,55 @@
 use crate::app_state::AppState;
 use crate::broker_client::{broker_send, BrokerError};
+use crate::log_normalizer::codex::{idle_from_log, last_chat_role_ts_from_log};
 use crate::state_files::{read_array_file, with_state_file_lock, write_array_file};
 use crate::write_cleaners::clean_queue_items;
 use serde_json::{json, Value};
-use std::collections::HashSet;
-use std::time::Duration;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
+
+const QUEUE_IDLE_GRACE_SECONDS: f64 = 10.0;
+const LOG_IDLE_SCAN_BYTES: usize = 8 * 1024 * 1024;
+const HARNESS_SCAN_BYTES: usize = 8 * 1024 * 1024;
+const HARNESS_PROMPT_PREFIX: &str = r#"Unattended-mode instructions (optimize for 8+ hours, minimal turns, minimal repetition, maximal progress)
+
+- Maintain four internal sections:
+  1. Deliverables
+     - The concrete outputs the agent owes the user by the end of the task.
+     - Stable unless the user changes the request.
+  2. Completed
+     - Verified facts already established while producing the Deliverables.
+  3. Next actions
+     - Ordered concrete steps from the current state toward the Deliverables.
+  4. Parked user decisions
+     - Decisions or inputs that only the user can provide.
+
+- Working rules:
+  - Keep these sections internal. Surface them only when yielding is necessary.
+  - Default to continuing in the same turn.
+  - Before each action, reason until the approach, failure modes, and verification path are clear.
+  - Exploration should happen through reading, tracing, inspection, and reasoning.
+  - Avoid trial and error.
+  - Resolve crashes, bugs, and design mistakes yourself unless a true user decision is required.
+  - Use the strongest available verification.
+  - Do not repeat the same command, edit, or analysis without a concrete new reason.
+
+- Yield only when:
+  - all Deliverables are finished and supported by Completed;
+  - the only remaining gap is a Parked user decision;
+  - or the next step is irreversible or high-risk and needs explicit user confirmation.
+
+- End-of-turn gate (only when yielding is necessary):
+  - Run a clean-room adversarial review via a dedicated subagent.
+  - Give it: user intent, Deliverables, Completed, remaining Next actions, Parked user decisions, constraints, and changed artifacts.
+  - Apply findings before yielding, or surface the exact remaining user decision or risk.
+"#;
+
+static QUEUE_IDLE_SINCE: OnceLock<Mutex<HashMap<String, f64>>> = OnceLock::new();
+static HARNESS_LAST_INJECTED: OnceLock<Mutex<HashMap<String, f64>>> = OnceLock::new();
+static HARNESS_SCOPE_LAST_INJECTED: OnceLock<Mutex<HashMap<String, f64>>> = OnceLock::new();
 
 pub fn env_flag_truthy(name: &str) -> bool {
     env_flag_truthy_value(std::env::var(name).ok().as_deref())
@@ -51,6 +95,10 @@ async fn harness_worker_loop(state: AppState) {
 }
 
 pub fn queue_sweep_once(state: &AppState) -> Result<bool, String> {
+    queue_sweep_once_at(state, now_seconds())
+}
+
+pub fn queue_sweep_once_at(state: &AppState, now: f64) -> Result<bool, String> {
     let sessions = crate::session_loader::load_session_rows(&state.config)?;
     let known = sessions
         .iter()
@@ -70,10 +118,20 @@ pub fn queue_sweep_once(state: &AppState) -> Result<bool, String> {
     .map_err(|(_, message)| message)?;
 
     for row in sessions {
+        let key = queue_state_key(&state.config.app_dir, &row.session_id);
         let Some(item) = next_queue_item(state, &row.session_id)? else {
+            clear_queue_idle(&key);
             continue;
         };
         if row.busy || row.queue_len > 0 || row.broker_busy {
+            clear_queue_idle(&key);
+            continue;
+        }
+        if !queue_log_idle(&row.log_path)? {
+            clear_queue_idle(&key);
+            continue;
+        }
+        if !idle_grace_elapsed(&key, now) {
             continue;
         }
         let text = queue_item_text(&item).ok_or_else(|| "invalid queue item".to_string())?;
@@ -99,15 +157,21 @@ pub fn queue_sweep_once(state: &AppState) -> Result<bool, String> {
         )
         .map_err(map_broker_error)?;
         if let Some(error) = broker.get("error").and_then(Value::as_str) {
+            clear_queue_idle(&key);
             return Err(error.to_string());
         }
         pop_queue_item(state, &row.session_id, &item)?;
+        clear_queue_idle(&key);
         return Ok(true);
     }
     Ok(false)
 }
 
 pub fn harness_sweep_once(state: &AppState) -> Result<bool, String> {
+    harness_sweep_once_at(state, now_seconds())
+}
+
+pub fn harness_sweep_once_at(state: &AppState, now: f64) -> Result<bool, String> {
     let harness_path = state.config.app_dir.join("harness.json");
     let harness =
         crate::state_files::read_object_file(&harness_path).map_err(|(_, message)| message)?;
@@ -118,6 +182,40 @@ pub fn harness_sweep_once(state: &AppState) -> Result<bool, String> {
         if config.get("enabled").and_then(Value::as_bool) != Some(true) {
             continue;
         }
+        let cooldown_seconds = config
+            .get("cooldown_minutes")
+            .and_then(Value::as_f64)
+            .unwrap_or(5.0)
+            .max(1.0)
+            * 60.0;
+        let remaining = config
+            .get("remaining_injections")
+            .and_then(Value::as_i64)
+            .unwrap_or(10);
+        if remaining <= 0 {
+            disable_harness(state, &row.session_id)?;
+            continue;
+        }
+        let session_key = queue_state_key(&state.config.app_dir, &row.session_id);
+        if !cooldown_elapsed(last_injected_map(), &session_key, now, cooldown_seconds) {
+            continue;
+        }
+        let Some(log_path) = row
+            .log_path
+            .as_deref()
+            .filter(|path| Path::new(path).exists())
+        else {
+            continue;
+        };
+        let scope_key =
+            if let Some(thread_id) = row.thread_id.as_deref().filter(|value| !value.is_empty()) {
+                format!("thread:{thread_id}")
+            } else {
+                format!("log:{log_path}")
+            };
+        if !cooldown_elapsed(scope_injected_map(), &scope_key, now, cooldown_seconds) {
+            continue;
+        }
         if row.busy
             || row.queue_len > 0
             || row.broker_busy
@@ -125,12 +223,14 @@ pub fn harness_sweep_once(state: &AppState) -> Result<bool, String> {
         {
             continue;
         }
-        let remaining = config
-            .get("remaining_injections")
-            .and_then(Value::as_i64)
-            .unwrap_or(10);
-        if remaining <= 0 {
-            disable_harness(state, &row.session_id)?;
+        let Some((role, ts)) = last_chat_role_ts_from_log(Path::new(log_path), HARNESS_SCAN_BYTES)?
+        else {
+            continue;
+        };
+        if role != "assistant" || (now - ts) < cooldown_seconds {
+            continue;
+        }
+        if !cooldown_elapsed(scope_injected_map(), &scope_key, now, cooldown_seconds) {
             continue;
         }
         let request = config.get("request").and_then(Value::as_str).unwrap_or("");
@@ -145,6 +245,8 @@ pub fn harness_sweep_once(state: &AppState) -> Result<bool, String> {
         if let Some(error) = broker.get("error").and_then(Value::as_str) {
             return Err(error.to_string());
         }
+        set_cooldown(last_injected_map(), session_key, now);
+        set_cooldown(scope_injected_map(), scope_key, now);
         decrement_harness_remaining(state, &row.session_id, remaining)?;
         return Ok(true);
     }
@@ -232,12 +334,69 @@ fn queue_item_text(item: &Value) -> Option<String> {
 }
 
 fn render_harness_prompt(request: &str) -> String {
+    let base = HARNESS_PROMPT_PREFIX.trim_end();
     let request = request.trim();
     if request.is_empty() {
-        "Continue working autonomously. Inspect the current context, make useful progress, run relevant verification, and report concise results.".to_string()
+        format!("{base}\n")
     } else {
-        format!("Continue working autonomously. User request: {request}")
+        format!("{base}\n\n---\n\nAdditional request from user: {request}\n")
     }
+}
+
+fn queue_log_idle(log_path: &Option<String>) -> Result<bool, String> {
+    let Some(path) = log_path.as_deref().filter(|path| Path::new(path).exists()) else {
+        return Ok(true);
+    };
+    Ok(idle_from_log(Path::new(path), LOG_IDLE_SCAN_BYTES)?.unwrap_or(true))
+}
+
+fn queue_state_key(app_dir: &Path, session_id: &str) -> String {
+    format!("{}::{session_id}", app_dir.display())
+}
+
+fn queue_idle_map() -> &'static Mutex<HashMap<String, f64>> {
+    QUEUE_IDLE_SINCE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn last_injected_map() -> &'static Mutex<HashMap<String, f64>> {
+    HARNESS_LAST_INJECTED.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn scope_injected_map() -> &'static Mutex<HashMap<String, f64>> {
+    HARNESS_SCOPE_LAST_INJECTED.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn clear_queue_idle(key: &str) {
+    queue_idle_map().lock().unwrap().remove(key);
+}
+
+fn idle_grace_elapsed(key: &str, now: f64) -> bool {
+    let grace = seconds_env(
+        "CODEX_WEB_QUEUE_IDLE_GRACE_SECONDS",
+        QUEUE_IDLE_GRACE_SECONDS,
+    );
+    let mut map = queue_idle_map().lock().unwrap();
+    let Some(since) = map.get(key).copied() else {
+        map.insert(key.to_string(), now);
+        return false;
+    };
+    (now - since) >= grace
+}
+
+fn cooldown_elapsed(
+    map: &'static Mutex<HashMap<String, f64>>,
+    key: &str,
+    now: f64,
+    cooldown_seconds: f64,
+) -> bool {
+    let map = map.lock().unwrap();
+    map.get(key)
+        .map(|last| (now - *last) >= cooldown_seconds)
+        .unwrap_or(true)
+}
+
+fn set_cooldown(map: &'static Mutex<HashMap<String, f64>>, key: String, now: f64) {
+    map.lock().unwrap().insert(key, now);
 }
 
 fn seconds_env(name: &str, default: f64) -> f64 {
@@ -246,6 +405,13 @@ fn seconds_env(name: &str, default: f64) -> f64 {
         .and_then(|value| value.parse::<f64>().ok())
         .filter(|value| value.is_finite() && *value > 0.0)
         .unwrap_or(default)
+}
+
+fn now_seconds() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs_f64())
+        .unwrap_or(0.0)
 }
 
 fn map_broker_error(error: BrokerError) -> String {

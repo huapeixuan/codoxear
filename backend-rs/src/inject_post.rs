@@ -3,10 +3,10 @@ use crate::broker_client::{broker_keys, BrokerError};
 use crate::models::SessionRow;
 use crate::routes::json_response;
 use crate::session_loader::find_session;
+use axum::body::{to_bytes, Body};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Response;
-use axum::Json;
 use base64::Engine;
 use serde_json::{json, Value};
 use std::fs;
@@ -14,13 +14,32 @@ use std::io::Write;
 use std::path::{Path as FsPath, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const ATTACH_UPLOAD_MAX_BYTES: usize = 10 * 1024 * 1024;
+const ATTACH_UPLOAD_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 pub(crate) async fn session_inject_file(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
-    Json(payload): Json<Value>,
+    body: Body,
 ) -> Response {
+    let body_limit = attach_body_limit_bytes();
+    let bytes = match to_bytes(body, body_limit).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return json_response(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                json!({"error": format!("request body too large (max {body_limit} bytes)")}),
+            )
+        }
+    };
+    let payload = match serde_json::from_slice::<Value>(&bytes) {
+        Ok(value) => value,
+        Err(err) => {
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                json!({"error": format!("invalid JSON: {err}")}),
+            )
+        }
+    };
     match inject_impl(&state, &session_id, &payload) {
         Ok(value) => json_response(StatusCode::OK, value),
         Err((status, value)) => json_response(status, value),
@@ -121,10 +140,11 @@ fn stage_uploaded_file(
     filename: &str,
     raw: &[u8],
 ) -> Result<PathBuf, (StatusCode, String)> {
-    if raw.len() > ATTACH_UPLOAD_MAX_BYTES {
+    let max_bytes = attach_max_bytes();
+    if raw.len() > max_bytes {
         return Err((
             StatusCode::PAYLOAD_TOO_LARGE,
-            format!("file too large (max {ATTACH_UPLOAD_MAX_BYTES} bytes)"),
+            format!("file too large (max {max_bytes} bytes)"),
         ));
     }
     let safe_name = safe_filename(filename);
@@ -145,6 +165,22 @@ fn stage_uploaded_file(
     drop(file);
     set_private_mode(&out_path)?;
     Ok(out_path)
+}
+
+fn attach_max_bytes() -> usize {
+    std::env::var("CODEX_WEB_ATTACH_MAX_BYTES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(ATTACH_UPLOAD_MAX_BYTES)
+}
+
+fn attach_body_limit_bytes() -> usize {
+    std::env::var("CODEX_WEB_ATTACH_BODY_MAX_BYTES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or_else(|| 4 * attach_max_bytes().div_ceil(3) + (64 * 1024))
 }
 
 fn safe_filename(name: &str) -> String {
