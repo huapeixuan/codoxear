@@ -9,6 +9,8 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use sha2::Digest;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process;
 use tempfile::TempDir;
@@ -276,7 +278,11 @@ async fn delete_hides_session_and_clears_sidecar_state() {
     .unwrap();
     fs::write(
         dir.join("session_sidebar.json"),
-        json!({"sid-a": {"priority_offset": 0.5}}).to_string(),
+        json!({
+            "sid-a": {"priority_offset": 0.5},
+            "sid-b": {"priority_offset": 0.2, "dependency_session_id": "sid-a"}
+        })
+        .to_string(),
     )
     .unwrap();
     fs::write(
@@ -315,6 +321,33 @@ async fn delete_hides_session_and_clears_sidecar_state() {
             serde_json::from_str(&fs::read_to_string(dir.join(name)).unwrap()).unwrap();
         assert!(saved.get("sid-a").is_none(), "{name} still contains sid-a");
     }
+    let sidebar: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("session_sidebar.json")).unwrap())
+            .unwrap();
+    assert!(sidebar["sid-b"].get("dependency_session_id").is_none());
+}
+
+#[tokio::test]
+async fn heartbeat_preserves_sidecar_private_file_mode() {
+    let (home, app) = test_app();
+    write_session(&home, "sid-a", "pi");
+    let sidecar_path = app_dir(&home).join("socks/sid-a.json");
+    #[cfg(unix)]
+    fs::set_permissions(&sidecar_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let cookie = signed_cookie(&home);
+
+    let (status, body) = post_json(app, "/api/sessions/sid-a/heartbeat", &cookie, json!({})).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"], true);
+    #[cfg(unix)]
+    assert_eq!(
+        fs::metadata(&sidecar_path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let sidecar: Value = serde_json::from_str(&fs::read_to_string(sidecar_path).unwrap()).unwrap();
+    assert_eq!(sidecar["session_id"], "sid-a");
+    assert!(sidecar["last_web_activity_ts"].as_f64().unwrap() > 0.0);
 }
 
 #[tokio::test]

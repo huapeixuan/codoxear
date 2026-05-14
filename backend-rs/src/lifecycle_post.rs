@@ -11,6 +11,7 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use serde_json::{json, Value};
 use std::fs;
+use std::io::Write;
 use std::path::{Path as FsPath, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -61,7 +62,7 @@ fn heartbeat_impl(state: &AppState, session_id: &str) -> Result<Value, (StatusCo
             json!(row.idle_timeout_seconds.unwrap_or(0)),
         );
         meta.insert("auto_stop_on_idle".to_string(), json!(true));
-        write_object_file(&path, &meta)
+        write_sidecar_object_file(&path, &meta)
     })?;
     Ok(
         json!({"ok": true, "session_id": row.session_id, "idle_timeout_seconds": row.idle_timeout_seconds.unwrap_or(0), "last_web_activity_ts": ts}),
@@ -100,7 +101,6 @@ fn delete_session_impl(state: &AppState, session_id: &str) -> Result<Value, (Sta
 fn clear_session_state(app_dir: &FsPath, session_id: &str) -> Result<(), (StatusCode, String)> {
     for file in [
         "session_aliases.json",
-        "session_sidebar.json",
         "session_files.json",
         "session_queues.json",
         "harness.json",
@@ -112,6 +112,87 @@ fn clear_session_state(app_dir: &FsPath, session_id: &str) -> Result<(), (Status
             write_object_file(&path, &object)
         })?;
     }
+    let sidebar_path = app_dir.join("session_sidebar.json");
+    with_state_file_lock(&sidebar_path, || {
+        let mut sidebar = read_object_file(&sidebar_path)?;
+        sidebar.remove(session_id);
+        for entry in sidebar.values_mut() {
+            let Some(object) = entry.as_object_mut() else {
+                continue;
+            };
+            if object.get("dependency_session_id").and_then(Value::as_str) == Some(session_id) {
+                object.remove("dependency_session_id");
+            }
+        }
+        write_object_file(&sidebar_path, &sidebar)
+    })?;
+    Ok(())
+}
+
+fn write_sidecar_object_file(
+    path: &FsPath,
+    object: &serde_json::Map<String, Value>,
+) -> Result<(), (StatusCode, String)> {
+    let parent = path.parent().ok_or((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        format!("missing parent for {}", path.display()),
+    ))?;
+    fs::create_dir_all(parent).map_err(|err| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("create {}: {err}", parent.display()),
+        )
+    })?;
+    let tmp = path.with_extension("json.tmp");
+    let raw = serde_json::to_string_pretty(&Value::Object(object.clone()))
+        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?
+        + "\n";
+    let mut file = fs::File::create(&tmp).map_err(|err| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("write {}: {err}", tmp.display()),
+        )
+    })?;
+    file.write_all(raw.as_bytes()).map_err(|err| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("write {}: {err}", tmp.display()),
+        )
+    })?;
+    file.sync_all().map_err(|err| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("sync {}: {err}", tmp.display()),
+        )
+    })?;
+    drop(file);
+    set_private_mode(&tmp)?;
+    fs::rename(&tmp, path).map_err(|err| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("rename {}: {err}", path.display()),
+        )
+    })?;
+    set_private_mode(path)?;
+    if let Ok(parent_file) = fs::File::open(parent) {
+        let _ = parent_file.sync_all();
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_private_mode(path: &FsPath) -> Result<(), (StatusCode, String)> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|err| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("chmod {}: {err}", path.display()),
+        )
+    })
+}
+
+#[cfg(not(unix))]
+fn set_private_mode(_path: &FsPath) -> Result<(), (StatusCode, String)> {
     Ok(())
 }
 
