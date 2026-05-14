@@ -138,6 +138,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "indexmap",
+ "libc",
  "serde",
  "serde_json",
  "sha2",

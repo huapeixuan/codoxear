@@ -32,6 +32,12 @@ struct SessionMeta {
     #[serde(default)]
     transport: Option<String>,
     #[serde(default)]
+    last_web_activity_ts: Option<f64>,
+    #[serde(default)]
+    idle_timeout_seconds: Option<i64>,
+    #[serde(default)]
+    auto_stop_on_idle: Option<bool>,
+    #[serde(default)]
     supports_live_ui: Option<bool>,
     #[serde(default)]
     ui_protocol_version: Option<i64>,
@@ -347,6 +353,13 @@ fn session_from_meta(
         base_priority
     };
     let harness_entry = context.harness.get(session_id);
+    let transport = clean_optional(meta.transport);
+    let default_idle_timeout = default_idle_timeout_seconds();
+    let default_auto_stop = meta.owner.as_deref() == Some("web")
+        && agent_backend == "pi"
+        && transport.as_deref().map(str::trim) == Some("pi-rpc")
+        && default_idle_timeout.map(|value| value > 0).unwrap_or(false);
+    let idle_timeout_seconds = meta.idle_timeout_seconds.or(default_idle_timeout);
     Ok(Some(SessionRow {
         session_id: session_id.to_string(),
         thread_id: clean_optional(meta.session_id).or_else(|| Some(session_id.to_string())),
@@ -357,7 +370,10 @@ fn session_from_meta(
         backend: agent_backend,
         owner: meta.owner.clone(),
         owned: meta.owner.as_deref() == Some("web"),
-        transport: clean_optional(meta.transport),
+        transport,
+        last_web_activity_ts: meta.last_web_activity_ts,
+        idle_timeout_seconds,
+        auto_stop_on_idle: meta.auto_stop_on_idle.unwrap_or(default_auto_stop),
         supports_live_ui: meta.supports_live_ui.unwrap_or(false),
         ui_protocol_version: meta.ui_protocol_version,
         cwd,
@@ -626,4 +642,12 @@ fn pid_alive(pid: i64) -> bool {
     {
         true
     }
+}
+
+fn default_idle_timeout_seconds() -> Option<i64> {
+    let timeout = std::env::var("CODEX_WEB_PI_RPC_IDLE_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(1800);
+    (timeout > 0).then_some(timeout)
 }

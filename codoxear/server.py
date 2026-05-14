@@ -876,6 +876,14 @@ def _is_same_password(pw: str) -> bool:
     return hmac.compare_digest(_sha256_hex(pw.encode("utf-8")), _password_hash())
 
 
+def _env_flag_truthy(name: str) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    trimmed = str(value).strip()
+    return bool(trimmed) and trimmed != "0" and trimmed.lower() != "false"
+
+
 def _safe_read_text(path: Path, max_bytes: int = 512 * 1024) -> str:
     try:
         b = path.read_bytes()
@@ -4186,18 +4194,24 @@ class SessionManager:
             vapid_private_key_path=VAPID_PRIVATE_KEY_PATH,
         )
         self._discover_existing(force=True, skip_invalid_sidecars=True)
-        self._harness_thr = threading.Thread(
-            target=self._harness_loop, name="harness", daemon=True
-        )
-        self._harness_thr.start()
-        self._queue_thr = threading.Thread(
-            target=self._queue_loop, name="queue", daemon=True
-        )
-        self._queue_thr.start()
-        self._voice_push_scan_thr = threading.Thread(
-            target=self._voice_push_scan_loop, name="voice-push-scan", daemon=True
-        )
-        self._voice_push_scan_thr.start()
+        self._harness_thr = None
+        if not _env_flag_truthy("CODOXEAR_ENABLE_HARNESS_SWEEP"):
+            self._harness_thr = threading.Thread(
+                target=self._harness_loop, name="harness", daemon=True
+            )
+            self._harness_thr.start()
+        self._queue_thr = None
+        if not _env_flag_truthy("CODOXEAR_ENABLE_QUEUE_SWEEP"):
+            self._queue_thr = threading.Thread(
+                target=self._queue_loop, name="queue", daemon=True
+            )
+            self._queue_thr.start()
+        self._voice_push_scan_thr = None
+        if not _env_flag_truthy("CODOXEAR_ENABLE_VOICE_SCAN"):
+            self._voice_push_scan_thr = threading.Thread(
+                target=self._voice_push_scan_loop, name="voice-push-scan", daemon=True
+            )
+            self._voice_push_scan_thr.start()
 
     def stop(self) -> None:
         self._stop.set()

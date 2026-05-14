@@ -13,6 +13,12 @@ use crate::handlers::sessions_list::{session_resume_candidates, sessions};
 use crate::handlers::voice::{
     notification_feed, notification_message, notification_subscriptions, settings_voice,
 };
+use crate::lifecycle_post::{session_delete, session_heartbeat};
+use crate::post_handlers::{
+    cwd_group_edit, hooks_notify, login, logout, queue_delete, queue_update, session_edit,
+    session_enqueue, session_harness, session_interrupt, session_rename, session_send,
+    session_ui_response,
+};
 use crate::runtime::{cookie_name, load_or_create_hmac_secret, verify_auth_cookie};
 use axum::body::Body;
 use axum::extract::{Request, State};
@@ -20,7 +26,7 @@ use axum::http::header;
 use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::Response;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use serde_json::{json, Value};
 
@@ -35,7 +41,38 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/v1/sessions/:session_id/diagnostics", get(diagnostics))
         .route("/api/v1/sessions/:session_id/queue", get(queue))
-        .route("/api/v1/sessions/:session_id/harness", get(harness_get))
+        .route(
+            "/api/v1/sessions/:session_id/enqueue",
+            post(session_enqueue),
+        )
+        .route(
+            "/api/v1/sessions/:session_id/queue/delete",
+            post(queue_delete),
+        )
+        .route(
+            "/api/v1/sessions/:session_id/queue/update",
+            post(queue_update),
+        )
+        .route(
+            "/api/v1/sessions/:session_id/harness",
+            get(harness_get).post(session_harness),
+        )
+        .route("/api/v1/sessions/:session_id/rename", post(session_rename))
+        .route("/api/v1/sessions/:session_id/edit", post(session_edit))
+        .route("/api/v1/sessions/:session_id/delete", post(session_delete))
+        .route("/api/v1/sessions/:session_id/send", post(session_send))
+        .route(
+            "/api/v1/sessions/:session_id/ui_response",
+            post(session_ui_response),
+        )
+        .route(
+            "/api/v1/sessions/:session_id/heartbeat",
+            post(session_heartbeat),
+        )
+        .route(
+            "/api/v1/sessions/:session_id/interrupt",
+            post(session_interrupt),
+        )
         .route("/api/v1/sessions/:session_id/workspace", get(workspace))
         .route("/api/v1/sessions/:session_id/details", get(details))
         .route("/api/v1/sessions/:session_id/ui_state", get(ui_state))
@@ -71,6 +108,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/notifications/message", get(notification_message))
         .route("/api/v1/notifications/feed", get(notification_feed))
         .route("/api/v1/metrics", get(metrics))
+        .route("/api/v1/logout", post(logout))
+        .route("/api/v1/cwd_groups/edit", post(cwd_group_edit))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_public_api_auth,
@@ -78,6 +117,8 @@ pub fn router(state: AppState) -> Router {
 
     Router::new()
         .route("/api/v1/health", get(health))
+        .route("/api/v1/login", post(login))
+        .route("/api/v1/hooks/notify", post(hooks_notify))
         .merge(protected_v1)
         .nest("/api", public_api_router(state.clone()))
         .fallback(not_found)
@@ -92,7 +133,23 @@ fn public_api_router(state: AppState) -> Router<AppState> {
         .route("/session_resume_candidates", get(session_resume_candidates))
         .route("/sessions/:session_id/diagnostics", get(diagnostics))
         .route("/sessions/:session_id/queue", get(queue))
-        .route("/sessions/:session_id/harness", get(harness_get))
+        .route("/sessions/:session_id/enqueue", post(session_enqueue))
+        .route("/sessions/:session_id/queue/delete", post(queue_delete))
+        .route("/sessions/:session_id/queue/update", post(queue_update))
+        .route(
+            "/sessions/:session_id/harness",
+            get(harness_get).post(session_harness),
+        )
+        .route("/sessions/:session_id/rename", post(session_rename))
+        .route("/sessions/:session_id/edit", post(session_edit))
+        .route("/sessions/:session_id/delete", post(session_delete))
+        .route("/sessions/:session_id/send", post(session_send))
+        .route(
+            "/sessions/:session_id/ui_response",
+            post(session_ui_response),
+        )
+        .route("/sessions/:session_id/heartbeat", post(session_heartbeat))
+        .route("/sessions/:session_id/interrupt", post(session_interrupt))
         .route("/sessions/:session_id/workspace", get(workspace))
         .route("/sessions/:session_id/details", get(details))
         .route("/sessions/:session_id/ui_state", get(ui_state))
@@ -125,12 +182,18 @@ fn public_api_router(state: AppState) -> Router<AppState> {
         .route("/notifications/message", get(notification_message))
         .route("/notifications/feed", get(notification_feed))
         .route("/metrics", get(metrics))
+        .route("/logout", post(logout))
+        .route("/cwd_groups/edit", post(cwd_group_edit))
         .route_layer(middleware::from_fn_with_state(
             state,
             require_public_api_auth,
         ));
 
-    Router::new().route("/health", get(health)).merge(protected)
+    Router::new()
+        .route("/health", get(health))
+        .route("/login", post(login))
+        .route("/hooks/notify", post(hooks_notify))
+        .merge(protected)
 }
 
 async fn not_found() -> Response {

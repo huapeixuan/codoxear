@@ -212,7 +212,7 @@ pub fn read_cwd_groups(path: &Path) -> Result<Map<String, Value>, String> {
         let label = entry
             .get("label")
             .and_then(Value::as_str)
-            .map(clean_alias)
+            .map(clean_alias_public)
             .unwrap_or_default();
         let collapsed = entry
             .get("collapsed")
@@ -229,7 +229,7 @@ pub fn read_cwd_groups(path: &Path) -> Result<Map<String, Value>, String> {
             // Phase 3 will reconcile via `cwd_groups_save` when POST /api/cwd_groups/edit lands.
             cleaned.insert(
                 normalized_cwd,
-                cwd_group_entry(&label, collapsed, hidden, hidden_after_live_start_ts),
+                cwd_group_entry_public(&label, collapsed, hidden, hidden_after_live_start_ts),
             );
         }
     }
@@ -300,7 +300,7 @@ fn read_optional_json_lenient(path: &Path, label: &str) -> Result<Option<Value>,
     }
 }
 
-fn clean_alias(value: &str) -> String {
+pub fn clean_alias_public(value: &str) -> String {
     let mut out = value.split_whitespace().collect::<Vec<_>>().join(" ");
     if out.len() > 80 {
         out.truncate(80);
@@ -365,14 +365,14 @@ fn clean_hidden_after_live_start_ts(value: &Value) -> Option<f64> {
     (out.is_finite() && out > 0.0).then_some(out)
 }
 
-fn cwd_group_entry(
+pub fn cwd_group_entry_public(
     label: &str,
     collapsed: bool,
     hidden: bool,
     hidden_after_live_start_ts: Option<f64>,
 ) -> Value {
     let mut entry = Map::new();
-    entry.insert("label".to_string(), json!(clean_alias(label)));
+    entry.insert("label".to_string(), json!(clean_alias_public(label)));
     entry.insert("collapsed".to_string(), json!(collapsed));
     if hidden {
         entry.insert("hidden".to_string(), json!(true));

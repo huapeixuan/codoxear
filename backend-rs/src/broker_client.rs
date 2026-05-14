@@ -94,6 +94,46 @@ pub fn broker_commands(sock_path: &Path, timeout: Duration) -> Result<BrokerComm
     Ok(BrokerCommands { raw })
 }
 
+pub fn broker_send(
+    sock_path: &Path,
+    text: &str,
+    images: Option<Vec<Value>>,
+    timeout: Duration,
+) -> Result<Value, BrokerError> {
+    let mut request = serde_json::Map::new();
+    request.insert("cmd".to_string(), json!("send"));
+    request.insert("text".to_string(), json!(text));
+    if let Some(images) = images.filter(|images| !images.is_empty()) {
+        request.insert("images".to_string(), Value::Array(images));
+    }
+    broker_request(sock_path, &Value::Object(request), timeout)
+}
+
+pub fn broker_keys(sock_path: &Path, seq: &str, timeout: Duration) -> Result<Value, BrokerError> {
+    broker_request(sock_path, &json!({ "cmd": "keys", "seq": seq }), timeout)
+}
+
+pub fn broker_ui_response(
+    sock_path: &Path,
+    payload: &Value,
+    timeout: Duration,
+) -> Result<Value, BrokerError> {
+    let mut request = serde_json::Map::new();
+    request.insert("cmd".to_string(), json!("ui_response"));
+    if let Some(object) = payload.as_object() {
+        for key in ["id", "value", "confirmed", "cancelled"] {
+            if let Some(value) = object.get(key) {
+                request.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+    broker_request(sock_path, &Value::Object(request), timeout)
+}
+
+pub fn broker_shutdown(sock_path: &Path, timeout: Duration) -> Result<Value, BrokerError> {
+    broker_request(sock_path, &json!({ "cmd": "shutdown" }), timeout)
+}
+
 fn map_connect_error(error: std::io::Error) -> BrokerError {
     match error.kind() {
         std::io::ErrorKind::NotFound
