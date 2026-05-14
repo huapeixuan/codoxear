@@ -14,6 +14,7 @@ use crate::handlers::sessions_list::{session_resume_candidates, sessions};
 use crate::handlers::voice::{
     notification_feed, notification_message, notification_subscriptions, settings_voice,
 };
+use crate::inject_post::session_inject_file;
 use crate::lifecycle_post::{session_delete, session_heartbeat};
 use crate::post_handlers::{
     cwd_group_edit, hooks_notify, login, logout, queue_delete, queue_update, session_edit,
@@ -78,6 +79,14 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/sessions/:session_id/interrupt",
             post(session_interrupt),
+        )
+        .route(
+            "/api/v1/sessions/:session_id/inject_file",
+            post(session_inject_file),
+        )
+        .route(
+            "/api/v1/sessions/:session_id/inject_image",
+            post(session_inject_file),
         )
         .route("/api/v1/sessions/:session_id/workspace", get(workspace))
         .route("/api/v1/sessions/:session_id/details", get(details))
@@ -174,6 +183,14 @@ fn public_api_router(state: AppState) -> Router<AppState> {
         )
         .route("/sessions/:session_id/heartbeat", post(session_heartbeat))
         .route("/sessions/:session_id/interrupt", post(session_interrupt))
+        .route(
+            "/sessions/:session_id/inject_file",
+            post(session_inject_file),
+        )
+        .route(
+            "/sessions/:session_id/inject_image",
+            post(session_inject_file),
+        )
         .route("/sessions/:session_id/workspace", get(workspace))
         .route("/sessions/:session_id/details", get(details))
         .route("/sessions/:session_id/ui_state", get(ui_state))

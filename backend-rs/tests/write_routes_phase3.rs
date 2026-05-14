@@ -567,3 +567,22 @@ async fn takeover_open_returns_descriptor_without_side_effect_when_not_eligible(
         "takeover is only available for web-owned Pi sessions"
     );
 }
+
+#[tokio::test]
+async fn inject_file_rejects_pi_sessions_before_decoding_upload() {
+    let (home, app) = test_app();
+    write_session(&home, "sid-a", "pi");
+    let cookie = signed_cookie(&home);
+
+    let (status, body) = post_json(
+        app,
+        "/api/sessions/sid-a/inject_file",
+        &cookie,
+        json!({"data_b64": "not-base64", "filename": "x.txt", "attachment_index": 1}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["backend"], "pi");
+    assert_eq!(body["operation"], "attachment_injection");
+}

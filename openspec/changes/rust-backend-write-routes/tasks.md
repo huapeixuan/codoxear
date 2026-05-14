@@ -59,12 +59,12 @@
 
 ## 8. File write, global file POST, and attachment injection
 
-- [x] 8.1 Reuse or extend Phase 2 path helpers for write-safe `_resolve_session_path`, `_resolve_under`, global `_resolve_client_file_path`, symlink escape rejection, and absolute-path handling. _(core file-write/global read helpers implemented; attachment-specific staging helpers remain under 8.5)_
+- [x] 8.1 Reuse or extend Phase 2 path helpers for write-safe `_resolve_session_path`, `_resolve_under`, global `_resolve_client_file_path`, symlink escape rejection, and absolute-path handling.
 - [x] 8.2 Implement `POST /api/sessions/{id}/file/write` create/update paths: text validation, version required, conflict responses, atomic UTF-8 write, `session_files.json` history update, response `ok/path/rel/size/version/editable`.
 - [x] 8.3 Implement `POST /api/files/read` and `/api/files/inspect` using Phase 2 file view helper and add file history when `session_id` is valid.
 - [x] 8.4 Implement `POST /api/files/blob` alias behavior, including query `path`, inline image/pdf bytes, Content-Disposition, Cache-Control, and errors.
-- [ ] 8.5 Implement `POST /api/sessions/{id}/inject_file` and `/inject_image`: body size cap, base64 validation, filename sanitization, decoded byte limit, upload mode `0600`, Pi 409 rejection, bracketed paste broker `keys` command.
-- [ ] 8.6 Add contract tests for file update success, stale version conflict, create success/conflict, path traversal, non-editable file, global read/inspect/blob, file history round-trip, upload too large, invalid base64, Pi injection rejection, and successful non-Pi injection command. _(partial: Rust integration coverage added for global read/inspect history, file update success, stale conflict, and history round-trip)_
+- [x] 8.5 Implement `POST /api/sessions/{id}/inject_file` and `/inject_image`: body size cap, base64 validation, filename sanitization, decoded byte limit, upload mode `0600`, Pi 409 rejection, bracketed paste broker `keys` command. _(body size cap relies on Axum/global body limit in this slice; handler covers decoded limit, filename sanitization, 0600 upload mode, Pi 409, and bracketed paste broker command)_
+- [ ] 8.6 Add contract tests for file update success, stale version conflict, create success/conflict, path traversal, non-editable file, global read/inspect/blob, file history round-trip, upload too large, invalid base64, Pi injection rejection, and successful non-Pi injection command. _(partial: Rust integration coverage added for global read/inspect history, file update success, stale conflict, history round-trip, and Pi injection rejection)_
 
 ## 9. Session create/delete/takeover lifecycle
 
