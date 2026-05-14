@@ -17,7 +17,18 @@ from .pi_log import pi_assistant_is_final_turn_end
 from .pi_log import pi_message_role
 from .pi_log import pi_token_update
 from .pi_log import pi_user_text
-from .voice_push import ClassifiedAssistantMessage
+
+try:
+    from .voice_push import ClassifiedAssistantMessage
+except ImportError:  # minimal CI may not install optional voice push dependencies
+    from dataclasses import dataclass
+
+    @dataclass(frozen=True)
+    class ClassifiedAssistantMessage:  # type: ignore[no-redef]
+        message_id: str
+        message_class: str
+        text: str
+        ts: float | None
 
 
 _OAI_MEM_CITATION_TAIL_RE = re.compile(r"\s*<oai-mem-citation>\s*.*?</oai-mem-citation>\s*\Z", re.DOTALL)
