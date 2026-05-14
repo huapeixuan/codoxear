@@ -48,6 +48,14 @@ def _wait_for_http(url: str, *, timeout: float = 10.0) -> None:
     raise RuntimeError(f"server did not become ready at {url}: {last_error}")
 
 
+def _server_ready_timeout() -> float:
+    # macOS GitHub Actions can spend >10s importing cryptography/initializing
+    # the Python voice stack for each isolated contract server process.
+    if os.environ.get("GITHUB_ACTIONS") == "true" and sys.platform == "darwin":
+        return 60.0
+    return 10.0
+
+
 @pytest.fixture(scope="session")
 def shared_app_home() -> Iterator[Path]:
     """Shared HOME for Python and Rust contract servers."""
@@ -203,7 +211,7 @@ def python_server_url(
     )
     url = f"http://127.0.0.1:{port}"
     try:
-        _wait_for_http(url)
+        _wait_for_http(url, timeout=_server_ready_timeout())
         yield url
     finally:
         proc.terminate()
@@ -243,7 +251,7 @@ def rust_server_url(
     )
     url = f"http://127.0.0.1:{port}"
     try:
-        _wait_for_http(url)
+        _wait_for_http(url, timeout=_server_ready_timeout())
         yield url
     finally:
         proc.terminate()
