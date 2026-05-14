@@ -129,6 +129,8 @@ Rollback order:
 
 Never run Python and Rust with the same queue/harness/voice writer enabled at the same time; `session_queues.json`, `harness.json`, and voice state files are single-writer during the cutover.
 
+Phase 3 POST contract selector: `pytest tests/contract -q -k 'parity and post'`.
+
 ## Tailscale HTTPS
 
 If you want browser notifications or iOS Web Push, use HTTPS instead of plain `http://<host>:8743`.

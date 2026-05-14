@@ -903,18 +903,19 @@ async fn session_create_parser_validation_and_deferred_spawn_response() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
-    assert_eq!(body["ok"], false);
-    assert_eq!(body["backend"], "codex");
-    assert_eq!(body["phase"], "phase3");
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body["error"],
+        "worktree_branch cannot be used when resuming a session"
+    );
 
     let (status, body) = post_json(
         app,
         "/api/sessions",
         &cookie,
-        json!({"cwd": cwd.to_string_lossy(), "backend": "pi", "preferred_auth_method": "apikey", "service_tier": "flex", "worktree_branch": "ignored", "reasoning_effort": "minimal"}),
+        json!({"cwd": cwd.to_string_lossy(), "backend": "pi", "resume_session_id": "resume-1", "preferred_auth_method": "apikey", "service_tier": "flex", "worktree_branch": "ignored", "reasoning_effort": "minimal"}),
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
-    assert_eq!(body["backend"], "pi");
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "resume session not found for cwd: resume-1");
 }

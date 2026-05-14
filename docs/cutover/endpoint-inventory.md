@@ -129,3 +129,5 @@ Spot-check performed by `coding-agent` on 2026-05-09 against `codoxear/server.py
 5. `POST /api/hooks/notify` row matches `path == "/api/hooks/notify"` at `codoxear/server.py:11037-11041`, requires no auth, and returns `{"ignored": true}`.
 
 Independent review by `code-reviewer` on 2026-05-09: spot-check 5/5 confirmed against `codoxear/server.py@ffe4afb`; follow-up fixes incorporated review items #3 and #5.
+
+Phase 3 POST update by `coding-agent` on 2026-05-15: `rust-backend-write-routes` keeps `POST /api/notifications/test_push` and `POST /api/audio/test_announcement` as Phase 5-owned side-effect routes; Rust registers explicit `501` feature-disabled responses for those paths so they are not falsely successful. Phase 3 POST contract selector is `pytest tests/contract -q -k 'parity and post'`.

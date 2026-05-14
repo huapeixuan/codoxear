@@ -61,3 +61,7 @@ Rust background writers are opt-in during Phase 3 and Python remains the default
 - `CODOXEAR_ENABLE_VOICE_SCAN=1` is reserved for Phase 5 voice ownership; Python skips its voice scan thread while truthy, but Phase 3 Rust must not send WebPush, synthesize TTS, or write voice delivery ledgers.
 
 Rollback is to stop Rust, unset the corresponding `CODOXEAR_ENABLE_*` flag, and restart the Python `codoxear-server`. Do not leave both servers running with the same writer flag enabled; `session_queues.json`, `harness.json`, and voice state files are single-writer cutover files.
+
+## Phase 3 Rust write strategy
+
+`rust-backend-write-routes` writes Phase 3 JSON state through `backend-rs/src/state_files.rs` helpers: read/modify/write operations take a per-file lock, serialize pretty JSON with sorted keys and trailing newline where Python does, write a temp file in the same directory, `fsync` the temp file, rename it over the target, and best-effort `fsync` the parent directory. This intentionally hardens the atomicity relative to some Python direct-write paths while preserving filenames, schemas, key names, and normal JSON file modes.

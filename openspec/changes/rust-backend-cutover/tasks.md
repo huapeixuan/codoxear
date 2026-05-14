@@ -27,7 +27,7 @@
 
 ## 5. Phase 3 — Write routes parity + worker handoff
 
-- [ ] 5.1 Open OpenSpec change `rust-backend-write-routes` (covers POST endpoints from inventory § 1.1: session create/edit/rename/delete, send, enqueue, queue mutate, harness POST, ui_response, heartbeat, interrupt, login/logout, settings save, notifications subscribe/toggle/test_push, audio listener/test_announcement, file write, files inspect/blob, hooks notify, cwd_groups edit). Same change must update `codoxear/server.py:SessionManager` so Python sweeps decline to start when the matching `CODOXEAR_ENABLE_*` flag is set, satisfying spec scenario "Both Rust and Python workers are never co-active". _(in progress via PR #5 / `rust-backend-write-routes`; implemented slices cover core write routes, file/voice/takeover/injection, worker handoff flags, gated queue/harness workers, and validation remains green; session create and full POST contract coverage remain pending)_
+- [x] 5.1 Open OpenSpec change `rust-backend-write-routes` (covers POST endpoints from inventory § 1.1: session create/edit/rename/delete, send, enqueue, queue mutate, harness POST, ui_response, heartbeat, interrupt, login/logout, settings save, notifications subscribe/toggle/test_push, audio listener/test_announcement, file write, files inspect/blob, hooks notify, cwd_groups edit). Same change must update `codoxear/server.py:SessionManager` so Python sweeps decline to start when the matching `CODOXEAR_ENABLE_*` flag is set, satisfying spec scenario "Both Rust and Python workers are never co-active". Phase 3 validation status: `pytest tests/contract -q -k 'parity and post'` passes; Rust voice debug/test POSTs remain explicit Phase 5 `501` feature-disabled side-effect routes.
 
 ## 6. Phase 4 — Broker port
 

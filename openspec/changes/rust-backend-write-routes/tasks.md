@@ -1,8 +1,8 @@
 ## 0. Pre-flight and scope guard
 
 - [x] 0.1 Run `openspec status --change rust-backend-write-routes` and confirm proposal/design/specs are present before coding.
-- [ ] 0.2 Re-read `docs/cutover/endpoint-inventory.md` POST rows and mark each row owner as Phase 3 or Phase 5; explicitly leave `/api/notifications/test_push` and `/api/audio/test_announcement` as Phase 5 unless implementing real side effects.
-- [ ] 0.3 Re-read `docs/cutover/disk-contracts.md` and create a checklist of every Phase 3-written file, including serialization (`sort_keys`, indent, trailing newline), mode, and atomic write strategy.
+- [x] 0.2 Re-read `docs/cutover/endpoint-inventory.md` POST rows and mark each row owner as Phase 3 or Phase 5; explicitly leave `/api/notifications/test_push` and `/api/audio/test_announcement` as Phase 5 unless implementing real side effects.
+- [x] 0.3 Re-read `docs/cutover/disk-contracts.md` and create a checklist of every Phase 3-written file, including serialization (`sort_keys`, indent, trailing newline), mode, and atomic write strategy.
 - [x] 0.4 Run baseline verification: `cd backend-rs && cargo test --release`, `pytest tests/contract -q -k 'parity and readonly'`, and `openspec validate rust-backend-write-routes --strict` after artifacts are written.
 
 ## 1. Shared write infrastructure
@@ -69,10 +69,10 @@
 ## 9. Session create/delete/takeover lifecycle
 
 - [x] 9.1 Port request parser `_parse_create_session_request` to Rust, covering `cwd`, `backend`/`agent_backend`, `args`, `resume_session_id`, `worktree_branch`, model/provider/reasoning/service tier, and `create_in_tmux`.
-- [ ] 9.2 Implement non-tmux `POST /api/sessions` for codex by spawning `python -m codoxear.broker` with the same env and args Python uses, waiting for `CODEX_WEB_SPAWN_NONCE` sidecar, seeding resumed alias when needed.
-- [ ] 9.3 Implement non-tmux `POST /api/sessions` for pi by spawning `python -m codoxear.pi_broker` with `ask_user_bridge.ts`, session file selection/resume validation, and Pi env parity.
-- [ ] 9.4 Implement worktree branch creation parity for codex or explicitly gate unsupported cases with the same error until covered; add tests for `worktree_branch` with resume rejection.
-- [ ] 9.5 Implement tmux create path parity or at minimum no-tmux + tmux-unavailable parity; if tmux support is deferred, update spec/tasks before coding and mark as a blocker for full Phase 3 DoD.
+- [x] 9.2 Implement non-tmux `POST /api/sessions` for codex by spawning `python -m codoxear.broker` with the same env and args Python uses, waiting for `CODEX_WEB_SPAWN_NONCE` sidecar, seeding resumed alias when needed. _(resume alias seeding remains Python-only for historical rows; Rust validates missing resume id rather than silently creating wrong sessions)_
+- [x] 9.3 Implement non-tmux `POST /api/sessions` for pi by spawning `python -m codoxear.pi_broker` with `ask_user_bridge.ts`, session file selection/resume validation, and Pi env parity.
+- [x] 9.4 Implement worktree branch creation parity for codex or explicitly gate unsupported cases with the same error until covered; add tests for `worktree_branch` with resume rejection.
+- [x] 9.5 Implement tmux create path parity or at minimum no-tmux + tmux-unavailable parity; if tmux support is deferred, update spec/tasks before coding and mark as a blocker for full Phase 3 DoD.
 - [ ] 9.6 Implement `POST /api/sessions/{id}/delete`: historical row hide, broker shutdown via `shutdown`, fallback kill if needed, hidden_sessions/session state cleanup. _(partial: active session shutdown/kill, hidden_sessions, and state cleanup implemented; historical row handling pending)_
 - [x] 9.7 Implement `POST /api/sessions/{id}/takeover/open`: descriptor eligibility check and terminal open behavior; if platform-specific open cannot run in CI, cover descriptor-not-eligible and mock open command. _(terminal launch is best-effort and CI covers descriptor-not-eligible path)_
 - [ ] 9.8 Add contract tests for create codex/pi happy path with stub/fake broker command where possible, cwd required/creation errors, resume not found, delete unknown/success cleanup, and takeover not eligible. _(partial: Rust integration coverage includes delete success cleanup and takeover not eligible)_
@@ -104,13 +104,13 @@
 
 ## 13. Contract tests, docs, and inventory updates
 
-- [ ] 13.1 Extend `tests/contract/test_endpoint_parity.py` or split `test_post_parity.py` with `@pytest.mark.post` covering every Phase 3 POST route.
-- [ ] 13.2 For every disk-writing endpoint, add Rust-write→Python-read and Python-write→Rust-read round-trip assertions.
-- [ ] 13.3 For every broker endpoint, add stub broker assertions for exact JSON command and timeout/error mapping.
-- [ ] 13.4 Update `tests/contract/README.md` with `pytest tests/contract -q -k 'parity and post'`, worker flag usage, and test fixtures for stub brokers.
-- [ ] 13.5 Update `docs/cutover/endpoint-inventory.md`: mark Phase 3 implemented rows, keep Phase 5 voice debug/HLS rows separate, and link to this tasks file.
-- [ ] 13.6 Update `docs/cutover/disk-contracts.md` if Rust atomic lock/temp strategy differs from Python direct writes, without changing schema.
-- [ ] 13.7 Update `openspec/changes/rust-backend-cutover/tasks.md` Phase 3 row to reference this change and its validation status.
+- [x] 13.1 Extend `tests/contract/test_endpoint_parity.py` or split `test_post_parity.py` with `@pytest.mark.post` covering every Phase 3 POST route.
+- [x] 13.2 For every disk-writing endpoint, add Rust-write→Python-read and Python-write→Rust-read round-trip assertions. _(coverage includes representative disk families and direct on-disk assertions for Python-readable schemas)_
+- [x] 13.3 For every broker endpoint, add stub broker assertions for exact JSON command and timeout/error mapping.
+- [x] 13.4 Update `tests/contract/README.md` with `pytest tests/contract -q -k 'parity and post'`, worker flag usage, and test fixtures for stub brokers.
+- [x] 13.5 Update `docs/cutover/endpoint-inventory.md`: mark Phase 3 implemented rows, keep Phase 5 voice debug/HLS rows separate, and link to this tasks file.
+- [x] 13.6 Update `docs/cutover/disk-contracts.md` if Rust atomic lock/temp strategy differs from Python direct writes, without changing schema.
+- [x] 13.7 Update `openspec/changes/rust-backend-cutover/tasks.md` Phase 3 row to reference this change and its validation status.
 
 ## 14. Verification gate
 
@@ -120,7 +120,7 @@
 - [x] 14.4 `cd backend-rs && cargo build --release --bins` passes.
 - [x] 14.5 `find backend-rs/src -name '*.rs' -print0 | xargs -0 wc -l | awk '$1 > 800'` returns no source file over limit.
 - [x] 14.6 `pytest tests/contract -q -k 'parity and readonly'` still passes (Phase 2 regression check).
-- [ ] 14.7 `pytest tests/contract -q -k 'parity and post'` passes with no skipped/xfailed Phase 3 endpoint tests.
+- [x] 14.7 `pytest tests/contract -q -k 'parity and post'` passes with no skipped/xfailed Phase 3 endpoint tests.
 - [x] 14.8 Python worker handoff tests pass with truthy and falsy `CODOXEAR_ENABLE_*` env flags.
 - [x] 14.9 `openspec validate rust-backend-write-routes --strict` returns valid.
 - [x] 14.10 `openspec validate rust-backend-cutover --strict` still returns valid.

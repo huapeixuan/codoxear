@@ -12,6 +12,7 @@ Build the Rust backend binaries first:
 (cd backend-rs && cargo build --release --bins)
 pytest tests/contract -q -k 'parity and not readonly'
 pytest tests/contract -q -k 'parity and readonly'
+pytest tests/contract -q -k 'parity and post'
 ```
 
 Phase 2 readonly parity requires `gh` on `PATH` (CI installs it on Linux and
@@ -22,6 +23,21 @@ Current implementation status: Phase 1 retest covers `/api/me` and
 `/api/sessions/bootstrap` including populated bootstrap state; the broader
 readonly endpoint tests are unlocked wave-by-wave by
 `rust-backend-readonly-routes`.
+
+Phase 3 POST parity uses the same dual-server fixture for disk-writing routes
+and lightweight Rust-only stub broker coverage for live broker mutations. The
+`post` selector covers auth, cwd group edits, alias/sidebar writes, queue and
+harness mutations, send/ui/interrupt socket calls, file write/read/inspect,
+attachment rejection boundaries, voice/subscription/listener writes, feature-
+disabled voice debug endpoints, hooks no-auth behavior, and session-create
+validation/tmux-unavailable boundaries.
+
+Queue and harness workers remain opt-in during Phase 3. To test or operate Rust
+workers, start Rust with `CODOXEAR_ENABLE_QUEUE_SWEEP=1` and/or
+`CODOXEAR_ENABLE_HARNESS_SWEEP=1`; Python `SessionManager` yields the matching
+thread when the same flag is truthy. Rollback order is: unset the Rust flag,
+stop/restart the Rust process, then restart Python so Python starts the default
+sweep thread and resumes ownership of `session_queues.json` / `harness.json`.
 
 If you need to run Python-only contract collection without the Rust binary, set:
 
