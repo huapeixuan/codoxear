@@ -100,7 +100,7 @@
 - [x] 12.2 Modify `SessionManager.__init__` to start `_queue_thr` only when `CODOXEAR_ENABLE_QUEUE_SWEEP` is falsy.
 - [x] 12.3 Modify `SessionManager.__init__` to start `_voice_push_scan_thr` only when `CODOXEAR_ENABLE_VOICE_SCAN` is falsy; leave voice worker/TTS ownership for Phase 5.
 - [x] 12.4 Add Python tests verifying truthy flags prevent thread creation and falsy/unset flags preserve existing thread startup; assert no corresponding file is touched during a short wait when yielded.
-- [ ] 12.5 Document worker handoff env vars in README or cutover docs with rollback order: disable Rust flag, restart Python, verify Python thread active.
+- [x] 12.5 Document worker handoff env vars in README or cutover docs with rollback order: disable Rust flag, restart Python, verify Python thread active.
 
 ## 13. Contract tests, docs, and inventory updates
 

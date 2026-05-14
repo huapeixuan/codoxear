@@ -105,6 +105,30 @@ Run the HTTP server from the repository root with:
 
 By default it binds to `[::]:8743`, matching the Python server. Rollback is simply not running the Rust binary (or reverting the additive Phase 1 files); the Python backend remains unchanged.
 
+### Rust worker handoff flags (cutover preview)
+
+The Rust backend can own selected background sweeps only when explicitly enabled. By default these flags are unset, so the Python server remains the writer for the same state files.
+
+- `CODOXEAR_ENABLE_QUEUE_SWEEP=1` — Rust drains `session_queues.json` after broker/log idle plus `CODEX_WEB_QUEUE_IDLE_GRACE_SECONDS`; Python does not start its queue sweep thread when this flag is truthy.
+- `CODOXEAR_ENABLE_HARNESS_SWEEP=1` — Rust performs harness injections and writes `harness.json`; Python does not start its harness sweep thread when this flag is truthy.
+- `CODOXEAR_ENABLE_VOICE_SCAN=1` — reserved for the later Rust voice scan/worker path; Python yields its voice scan thread when truthy, but Phase 3 Rust does not implement WebPush/HLS/TTS delivery.
+
+Safe handoff order:
+
+1. Stop the currently running Codoxear server.
+2. Set only the Rust worker flag(s) you want Rust to own.
+3. Start the Rust backend.
+4. Verify the Python server is not running with the same writer enabled.
+
+Rollback order:
+
+1. Stop the Rust backend.
+2. Unset the corresponding `CODOXEAR_ENABLE_*` flag(s).
+3. Restart `codoxear-server` (Python).
+4. Confirm the Python worker thread is active by observing normal queue/harness behavior and that no Rust backend process is still running.
+
+Never run Python and Rust with the same queue/harness/voice writer enabled at the same time; `session_queues.json`, `harness.json`, and voice state files are single-writer during the cutover.
+
 ## Tailscale HTTPS
 
 If you want browser notifications or iOS Web Push, use HTTPS instead of plain `http://<host>:8743`.

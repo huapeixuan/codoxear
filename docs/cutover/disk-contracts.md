@@ -51,3 +51,13 @@ These live outside `~/.local/share/codoxear` but influence API responses and Rus
 3. Preserve file modes where Python explicitly sets them: `hmac_secret`, `socks/*.json`, uploaded files are `0600`; other JSON files inherit normal process umask (normally `0644`).
 4. Prefer temp-file + `fsync` + POSIX rename in Rust for worker JSON, but do not change schema, key names, or path names.
 5. During dual-run phases, a given state file may have only one writer. Feature-flag handoff must disable the corresponding Python sweep/voice writer before enabling the Rust writer.
+
+## Phase 3 worker handoff and rollback
+
+Rust background writers are opt-in during Phase 3 and Python remains the default owner when flags are unset.
+
+- `CODOXEAR_ENABLE_QUEUE_SWEEP=1` makes Rust own queue draining and `session_queues.json`; Python `SessionManager` skips its queue sweep thread while this flag is truthy.
+- `CODOXEAR_ENABLE_HARNESS_SWEEP=1` makes Rust own harness injection and `harness.json`; Python skips its harness sweep thread while this flag is truthy.
+- `CODOXEAR_ENABLE_VOICE_SCAN=1` is reserved for Phase 5 voice ownership; Python skips its voice scan thread while truthy, but Phase 3 Rust must not send WebPush, synthesize TTS, or write voice delivery ledgers.
+
+Rollback is to stop Rust, unset the corresponding `CODOXEAR_ENABLE_*` flag, and restart the Python `codoxear-server`. Do not leave both servers running with the same writer flag enabled; `session_queues.json`, `harness.json`, and voice state files are single-writer cutover files.
