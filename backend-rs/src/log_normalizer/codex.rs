@@ -495,21 +495,35 @@ fn parse_iso8601_to_epoch(value: &str) -> Option<f64> {
     if !value.ends_with('Z') {
         return None;
     }
-    // The contract fixtures use whole-second UTC timestamps. Full RFC3339 parsing
-    // is intentionally deferred until more log-normalizer cases need it.
     let trimmed = value.trim_end_matches('Z');
     let (date, time) = trimmed.split_once('T')?;
     let mut date_parts = date.split('-').filter_map(|part| part.parse::<i32>().ok());
     let year = date_parts.next()?;
     let month = date_parts.next()?;
     let day = date_parts.next()?;
-    let mut time_parts = time.split(':').filter_map(|part| part.parse::<i32>().ok());
-    let hour = time_parts.next()?;
-    let minute = time_parts.next()?;
-    let second = time_parts.next()?;
+    let mut time_parts = time.split(':');
+    let hour = time_parts.next()?.parse::<i32>().ok()?;
+    let minute = time_parts.next()?.parse::<i32>().ok()?;
+    let second_raw = time_parts.next()?;
+    if time_parts.next().is_some() {
+        return None;
+    }
+    let (second_part, fractional_part) = second_raw.split_once('.').unwrap_or((second_raw, ""));
+    let second = second_part.parse::<i32>().ok()?;
+    let fractional = if fractional_part.is_empty() {
+        0.0
+    } else {
+        if !fractional_part.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        let digits = fractional_part.len().min(9);
+        let numerator = fractional_part[..digits].parse::<u64>().ok()? as f64;
+        numerator / 10_f64.powi(digits as i32)
+    };
     Some(
         days_from_civil(year, month, day) as f64 * 86_400.0
-            + (hour * 3600 + minute * 60 + second) as f64,
+            + (hour * 3600 + minute * 60 + second) as f64
+            + fractional,
     )
 }
 

@@ -757,6 +757,7 @@ fn queue_worker_requires_idle_grace_before_popping_queue_item() {
 
 #[test]
 fn harness_worker_requires_assistant_tail_and_cooldown_before_injecting() {
+    use codoxear_backend_rs::log_normalizer::codex::last_chat_role_ts_from_log;
     use codoxear_backend_rs::workers::harness_sweep_once_at;
     let (home, _app) = test_app();
     write_session(&home, "sid-a", "codex");
@@ -787,10 +788,15 @@ fn harness_worker_requires_assistant_tail_and_cooldown_before_injecting() {
     assert!(!harness_sweep_once_at(&state, 100.0).unwrap());
     fs::write(
         &log_path,
-        r#"{"type":"response_item","timestamp":"1970-01-01T00:01:00Z","payload":{"type":"message","role":"assistant","end_turn":true,"content":[{"type":"output_text","text":"done"}]}}
+        r#"{"type":"response_item","timestamp":"1970-01-01T00:01:00.500Z","payload":{"type":"message","role":"assistant","end_turn":true,"content":[{"type":"output_text","text":"done"}]}}
 "#,
     )
     .unwrap();
+    let last = last_chat_role_ts_from_log(&log_path, 256 * 1024)
+        .unwrap()
+        .expect("fractional assistant timestamp");
+    assert_eq!(last.0, "assistant");
+    assert!((last.1 - 60.5).abs() < 0.001);
     assert!(!harness_sweep_once_at(&state, 100.0).unwrap());
     let server = spawn_broker_server(app_dir.join("socks/sid-a.sock"), 2, |request| match request
         ["cmd"]
