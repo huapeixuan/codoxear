@@ -153,7 +153,7 @@ pub fn notification_feed_since(app_dir: &Path, since: f64) -> Vec<Value> {
     out
 }
 
-fn read_subscriptions(app_dir: &Path) -> Vec<Value> {
+pub fn read_subscriptions(app_dir: &Path) -> Vec<Value> {
     let Some(Value::Array(items)) = read_json(&app_dir.join("push_subscriptions.json")) else {
         return Vec::new();
     };
@@ -186,7 +186,7 @@ fn read_ledger(app_dir: &Path) -> Map<String, Value> {
     cleaned
 }
 
-fn clean_voice_settings(raw: &Value) -> Option<Map<String, Value>> {
+pub fn clean_voice_settings(raw: &Value) -> Option<Map<String, Value>> {
     let object = raw.as_object()?;
     let base_url = normalize_base_url(object.get("tts_base_url"))?;
     let mut settings = Map::new();
@@ -217,7 +217,7 @@ fn clean_voice_settings(raw: &Value) -> Option<Map<String, Value>> {
     Some(settings)
 }
 
-fn default_voice_settings() -> Map<String, Value> {
+pub fn default_voice_settings() -> Map<String, Value> {
     let mut settings = Map::new();
     settings.insert("tts_enabled_for_narration".to_string(), json!(false));
     settings.insert("tts_enabled_for_final_response".to_string(), json!(false));
@@ -240,7 +240,7 @@ fn normalize_base_url(raw: Option<&Value>) -> Option<String> {
     }
 }
 
-fn clean_subscription_record(raw: &Value) -> Option<Map<String, Value>> {
+pub fn clean_subscription_record(raw: &Value) -> Option<Map<String, Value>> {
     let object = raw.as_object()?;
     let subscription = clean_subscription(object.get("subscription")?)?;
     let now = now_seconds();
@@ -284,7 +284,7 @@ fn clean_subscription_record(raw: &Value) -> Option<Map<String, Value>> {
     Some(record)
 }
 
-fn clean_subscription(raw: &Value) -> Option<Map<String, Value>> {
+pub fn clean_subscription(raw: &Value) -> Option<Map<String, Value>> {
     let object = raw.as_object()?;
     let endpoint = clean_string(object.get("endpoint"))?;
     if endpoint.is_empty() {
@@ -364,7 +364,7 @@ fn clean_ledger_row(message_id: &str, row: &Value) -> Option<Map<String, Value>>
     Some(out)
 }
 
-fn subscription_id(subscription: &Map<String, Value>) -> String {
+pub fn subscription_id(subscription: &Map<String, Value>) -> String {
     let endpoint = subscription
         .get("endpoint")
         .and_then(Value::as_str)
@@ -379,7 +379,7 @@ fn subscription_id(subscription: &Map<String, Value>) -> String {
         .to_string()
 }
 
-fn clean_device_class(raw: Option<&Value>, user_agent: &str) -> String {
+pub fn clean_device_class(raw: Option<&Value>, user_agent: &str) -> String {
     let value = clean_string(raw).unwrap_or_default().to_lowercase();
     if value == "mobile" || value == "desktop" {
         return value;
@@ -444,7 +444,7 @@ fn number_or_null(value: Option<&Value>) -> Value {
     }
 }
 
-fn now_seconds() -> f64 {
+pub fn now_seconds() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs_f64())

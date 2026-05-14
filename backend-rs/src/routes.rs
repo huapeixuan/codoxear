@@ -21,6 +21,10 @@ use crate::post_handlers::{
     session_ui_response,
 };
 use crate::runtime::{cookie_name, load_or_create_hmac_secret, verify_auth_cookie};
+use crate::voice_post::{
+    audio_listener, notification_subscription_toggle, notification_subscription_upsert,
+    settings_voice_save,
+};
 use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::header;
@@ -107,13 +111,21 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/sessions/:session_id/git/file_versions",
             get(file_versions),
         )
-        .route("/api/v1/settings/voice", get(settings_voice))
+        .route(
+            "/api/v1/settings/voice",
+            get(settings_voice).post(settings_voice_save),
+        )
         .route(
             "/api/v1/notifications/subscription",
-            get(notification_subscriptions),
+            get(notification_subscriptions).post(notification_subscription_upsert),
+        )
+        .route(
+            "/api/v1/notifications/subscription/toggle",
+            post(notification_subscription_toggle),
         )
         .route("/api/v1/notifications/message", get(notification_message))
         .route("/api/v1/notifications/feed", get(notification_feed))
+        .route("/api/v1/audio/listener", post(audio_listener))
         .route("/api/v1/metrics", get(metrics))
         .route("/api/v1/logout", post(logout))
         .route("/api/v1/cwd_groups/edit", post(cwd_group_edit))
@@ -184,13 +196,21 @@ fn public_api_router(state: AppState) -> Router<AppState> {
             "/sessions/:session_id/git/file_versions",
             get(file_versions),
         )
-        .route("/settings/voice", get(settings_voice))
+        .route(
+            "/settings/voice",
+            get(settings_voice).post(settings_voice_save),
+        )
         .route(
             "/notifications/subscription",
-            get(notification_subscriptions),
+            get(notification_subscriptions).post(notification_subscription_upsert),
+        )
+        .route(
+            "/notifications/subscription/toggle",
+            post(notification_subscription_toggle),
         )
         .route("/notifications/message", get(notification_message))
         .route("/notifications/feed", get(notification_feed))
+        .route("/audio/listener", post(audio_listener))
         .route("/metrics", get(metrics))
         .route("/logout", post(logout))
         .route("/cwd_groups/edit", post(cwd_group_edit))

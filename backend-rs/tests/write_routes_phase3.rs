@@ -420,3 +420,99 @@ async fn session_file_write_updates_text_with_version_and_records_history() {
     assert_eq!(body["conflict"], true);
     assert_eq!(body["error"], "file changed on disk");
 }
+
+#[tokio::test]
+async fn voice_settings_and_subscription_writes_persist_python_shape() {
+    let (home, app) = test_app();
+    let cookie = signed_cookie(&home);
+    let dir = app_dir(&home);
+
+    let (status, body) = post_json(
+        app.clone(),
+        "/api/settings/voice",
+        &cookie,
+        json!({
+            "tts_enabled_for_narration": true,
+            "tts_enabled_for_final_response": false,
+            "tts_base_url": "https://example.com/v1/",
+            "tts_api_key": "  key  ",
+            "summarization_model": "sum",
+            "tts_model": "tts"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["tts_base_url"], "https://example.com/v1");
+    let saved: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("voice_settings.json")).unwrap())
+            .unwrap();
+    assert_eq!(saved["tts_api_key"], "key");
+
+    let subscription =
+        json!({"endpoint": "https://push.example/sub", "keys": {"p256dh": "p", "auth": "a"}});
+    let (status, body) = post_json(
+        app.clone(),
+        "/api/notifications/subscription",
+        &cookie,
+        json!({
+            "subscription": subscription,
+            "user_agent": "Mozilla iPhone",
+            "device_label": "Phone",
+            "device_class": ""
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"], true);
+    assert_eq!(
+        body["subscriptions"][0]["endpoint"],
+        "https://push.example/sub"
+    );
+    assert_eq!(body["subscriptions"][0]["device_class"], "mobile");
+
+    let saved: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("push_subscriptions.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        saved[0]["subscription"]["endpoint"],
+        "https://push.example/sub"
+    );
+    assert_eq!(saved[0]["notifications_enabled"], true);
+
+    let (status, body) = post_json(
+        app,
+        "/api/notifications/subscription/toggle",
+        &cookie,
+        json!({"endpoint": "https://push.example/sub", "enabled": false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["subscriptions"][0]["notifications_enabled"], false);
+}
+
+#[tokio::test]
+async fn audio_listener_heartbeat_validates_payload_and_tracks_memory_state() {
+    let (home, app) = test_app();
+    let cookie = signed_cookie(&home);
+
+    let (status, body) = post_json(
+        app.clone(),
+        "/api/audio/listener",
+        &cookie,
+        json!({"client_id": "browser-1", "enabled": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({"ok": true, "active_listener_count": 1}));
+
+    let (status, body) = post_json(
+        app,
+        "/api/audio/listener",
+        &cookie,
+        json!({"client_id": "browser-1", "enabled": false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({"ok": true, "active_listener_count": 0}));
+}
