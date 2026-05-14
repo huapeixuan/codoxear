@@ -1,7 +1,8 @@
 use codoxear_backend_rs::broker_client::{
-    broker_commands, broker_request, broker_state, broker_ui_state, BrokerError,
+    broker_commands, broker_keys, broker_request, broker_send, broker_shutdown, broker_state,
+    broker_ui_response, broker_ui_state, BrokerError,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
@@ -81,6 +82,86 @@ fn ui_state_and_commands_use_read_only_cmd_literals() {
     let commands = broker_commands(&commands_sock, Duration::from_secs(1)).unwrap();
     assert_eq!(commands.raw, json!({"ok": true, "commands": ["a"]}));
     commands_server.join().unwrap();
+}
+
+#[test]
+fn mutation_wrappers_emit_python_compatible_json() {
+    let dir = TempDir::new().unwrap();
+
+    let send_sock = dir.path().join("send.sock");
+    let send_server = spawn_one_shot_server(send_sock.clone(), |request, mut stream| {
+        let value: Value = serde_json::from_str(request.trim_end()).unwrap();
+        assert_eq!(
+            value,
+            json!({"cmd": "send", "text": "hello", "images": [{"data_b64": "abc"}]})
+        );
+        stream
+            .write_all(
+                br#"{"ok":true}
+"#,
+            )
+            .unwrap();
+    });
+    let send = broker_send(
+        &send_sock,
+        "hello",
+        Some(vec![json!({"data_b64": "abc"})]),
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    assert_eq!(send, json!({"ok": true}));
+    send_server.join().unwrap();
+
+    let keys_sock = dir.path().join("keys.sock");
+    let keys_server = spawn_one_shot_server(keys_sock.clone(), |request, mut stream| {
+        assert_eq!(request.trim_end(), r#"{"cmd":"keys","seq":"\u001b"}"#);
+        stream
+            .write_all(
+                br#"{"ok":true}
+"#,
+            )
+            .unwrap();
+    });
+    let keys = broker_keys(&keys_sock, "\x1b", Duration::from_secs(1)).unwrap();
+    assert_eq!(keys, json!({"ok": true}));
+    keys_server.join().unwrap();
+
+    let ui_sock = dir.path().join("ui_response.sock");
+    let ui_server = spawn_one_shot_server(ui_sock.clone(), |request, mut stream| {
+        let value: Value = serde_json::from_str(request.trim_end()).unwrap();
+        assert_eq!(
+            value,
+            json!({"cmd": "ui_response", "id": "ask-1", "value": "yes", "confirmed": true, "cancelled": false})
+        );
+        stream
+            .write_all(
+                br#"{"ok":true}
+"#,
+            )
+            .unwrap();
+    });
+    let ui = broker_ui_response(
+        &ui_sock,
+        &json!({"id": "ask-1", "value": "yes", "confirmed": true, "cancelled": false, "ignored": "x"}),
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    assert_eq!(ui, json!({"ok": true}));
+    ui_server.join().unwrap();
+
+    let shutdown_sock = dir.path().join("shutdown.sock");
+    let shutdown_server = spawn_one_shot_server(shutdown_sock.clone(), |request, mut stream| {
+        assert_eq!(request.trim_end(), r#"{"cmd":"shutdown"}"#);
+        stream
+            .write_all(
+                br#"{"ok":true}
+"#,
+            )
+            .unwrap();
+    });
+    let shutdown = broker_shutdown(&shutdown_sock, Duration::from_secs(1)).unwrap();
+    assert_eq!(shutdown, json!({"ok": true}));
+    shutdown_server.join().unwrap();
 }
 
 #[test]

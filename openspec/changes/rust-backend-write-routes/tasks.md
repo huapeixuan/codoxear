@@ -17,7 +17,7 @@
 
 - [x] 2.1 Extend `backend-rs/src/broker_client.rs` with typed write wrappers: `broker_send`, `broker_keys`, `broker_ui_response`, `broker_shutdown`, and optionally `broker_tail` if existing message/tail code needs parity reuse.
 - [x] 2.2 Implement Python-equivalent timeouts: state 1.5s, send/ui_response 3.0s, keys/interrupt 2.0s, shutdown 1.0s unless Python uses a different timeout at the call site.
-- [ ] 2.3 Add stub Unix socket tests asserting exact outbound JSON for `send` with/without Pi images, `keys` ESC, `ui_response` value/confirmed/cancelled, and `shutdown`.
+- [x] 2.3 Add stub Unix socket tests asserting exact outbound JSON for `send` with/without Pi images, `keys` ESC, `ui_response` value/confirmed/cancelled, and `shutdown`.
 - [ ] 2.4 Add error mapping tests: broker `{error:"..."}` becomes handler 502 where Python raises `ValueError`; dead session cleanup path returns 404 where Python would remove stale sidecar.
 
 ## 3. Router and auth POST endpoints
