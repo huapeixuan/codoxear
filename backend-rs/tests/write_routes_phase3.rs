@@ -892,11 +892,18 @@ fn harness_worker_requires_assistant_tail_and_cooldown_before_injecting() {
         other => panic!("unexpected broker cmd {other}"),
     });
     assert!(harness_sweep_once_at(&state, 121.0).unwrap());
-    assert!(!harness_sweep_once_at(&state, 150.0).unwrap());
+    server.join().unwrap();
+
     let harness: Value =
         serde_json::from_slice(&fs::read(app_dir.join("harness.json")).unwrap()).unwrap();
     assert_eq!(harness["sid-a"]["remaining_injections"], 1);
-    server.join().unwrap();
+
+    let cooldown_server = spawn_broker_server(app_dir.join("socks/sid-a.sock"), 1, |request| {
+        assert_eq!(request["cmd"], "state");
+        json!({"busy": false, "queue_len": 0})
+    });
+    assert!(!harness_sweep_once_at(&state, 150.0).unwrap());
+    cooldown_server.join().unwrap();
 }
 
 #[test]

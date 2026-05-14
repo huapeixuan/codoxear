@@ -10,7 +10,7 @@
 - [ ] 1.1 Add `backend-rs/src/state_files.rs` or equivalent with `read_modify_write_json`, `write_json_atomic`, file-mode preservation, temp-file + fsync + rename, and parent fsync best effort. _(partial: added atomic JSON writer + parent fsync + lock wrapper; mode preservation/read_modify helper still pending)_
 - [x] 1.2 Add per-file in-process mutex/advisory lock helper for `harness.json`, `session_queues.json`, `session_aliases.json`, `session_sidebar.json`, `session_files.json`, `cwd_groups.json`, `voice_settings.json`, and `push_subscriptions.json`.
 - [ ] 1.3 Add Rust helpers mirroring Python cleaners: alias, priority offset, snooze_until, dependency_session_id, harness cooldown, harness remaining, queue item images, hidden_after_live_start_ts, safe filename, attachment inject text. _(partial: metadata/queue/harness cleaners added; file/attachment cleaners pending)_
-- [ ] 1.4 Add unit tests for all cleaners using Python edge cases from `codoxear/server.py` and `codoxear/voice_push.py`.
+- [x] 1.4 Add unit tests for all cleaners using Python edge cases from `codoxear/server.py` and `codoxear/voice_push.py`.
 - [x] 1.5 Extend line-count CI gate if new modules are added; ensure every `backend-rs/src/**/*.rs` file remains ≤ 800 lines.
 
 ## 2. Broker mutation client
@@ -32,7 +32,7 @@
 - [x] 4.1 Implement `POST /api/cwd_groups/edit`: known cwd validation, hidden reconciliation inputs, normalized key, and `cwd_groups.json` persistence.
 - [x] 4.2 Implement `POST /api/sessions/{id}/rename`: `session_aliases.json` update/removal and response `ok/alias` parity.
 - [x] 4.3 Implement `POST /api/sessions/{id}/edit`: update alias plus `session_sidebar.json` fields `priority_offset`, `snooze_until`, `dependency_session_id`; validate dependency exists and is not self.
-- [ ] 4.4 Add Rust unit tests for JSON write shape and key ordering for `cwd_groups.json`, `session_aliases.json`, and `session_sidebar.json`.
+- [x] 4.4 Add Rust unit tests for JSON write shape and key ordering for `cwd_groups.json`, `session_aliases.json`, and `session_sidebar.json`.
 - [ ] 4.5 Add contract tests: Rust edit → Python GET `/ui_state`/`/sessions`; Python edit → Rust GET `/ui_state`/`/sessions`; include invalid field 400 and unknown session 404.
 
 ## 5. Queue mutation endpoints
