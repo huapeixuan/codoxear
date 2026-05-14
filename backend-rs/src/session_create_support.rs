@@ -1,7 +1,7 @@
 use crate::app_state::AppState;
 use crate::session_create::CreateSessionRequest;
 use axum::http::StatusCode;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use sha2::Digest;
 use std::ffi::OsString;
 use std::fs;
@@ -146,6 +146,13 @@ pub(crate) fn clean_optional_resume_session_id(
         Some(Value::String(text)) => Ok(clean_optional_text(text)),
         Some(_) => Err("resume_session_id must be a string".to_string()),
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexResumeCandidate {
+    pub session_id: String,
+    pub log_path: PathBuf,
+    pub first_user_message: Option<String>,
 }
 
 pub(crate) fn normalize_requested_model(value: Option<&Value>) -> Result<Option<String>, String> {
@@ -416,8 +423,15 @@ pub(crate) fn pi_new_session_file_for_cwd(cwd: &Path) -> PathBuf {
 }
 
 pub(crate) fn find_pi_resume_session_file(cwd: &Path, resume_id: &str) -> Option<PathBuf> {
-    let dir = pi_home().join("agent").join("sessions");
-    let mut stack = vec![dir];
+    find_pi_resume_session_file_in(&pi_home().join("agent").join("sessions"), cwd, resume_id)
+}
+
+pub fn find_pi_resume_session_file_in(
+    sessions_dir: &Path,
+    cwd: &Path,
+    resume_id: &str,
+) -> Option<PathBuf> {
+    let mut stack = vec![sessions_dir.to_path_buf()];
     while let Some(path) = stack.pop() {
         let Ok(entries) = fs::read_dir(&path) else {
             continue;
@@ -439,6 +453,44 @@ pub(crate) fn find_pi_resume_session_file(cwd: &Path, resume_id: &str) -> Option
     None
 }
 
+pub(crate) fn find_codex_resume_candidate(
+    cwd: &Path,
+    resume_id: &str,
+) -> Option<CodexResumeCandidate> {
+    find_codex_resume_candidate_in(&codex_home().join("sessions"), cwd, resume_id)
+}
+
+pub fn find_codex_resume_candidate_in(
+    sessions_dir: &Path,
+    cwd: &Path,
+    resume_id: &str,
+) -> Option<CodexResumeCandidate> {
+    let cwd_text = cwd.to_string_lossy();
+    let mut ranked = Vec::new();
+    collect_codex_resume_logs(sessions_dir, &mut ranked);
+    ranked.sort_by(|left, right| right.0.total_cmp(&left.0));
+    for (_, path) in ranked {
+        let Some(payload) = codex_session_meta_payload(&path) else {
+            continue;
+        };
+        if is_codex_subagent_meta(&payload) {
+            continue;
+        }
+        if payload.get("id").and_then(Value::as_str) != Some(resume_id) {
+            continue;
+        }
+        if payload.get("cwd").and_then(Value::as_str) != Some(cwd_text.as_ref()) {
+            continue;
+        }
+        return Some(CodexResumeCandidate {
+            session_id: resume_id.to_string(),
+            first_user_message: first_user_message_preview_from_codex_log(&path),
+            log_path: path,
+        });
+    }
+    None
+}
+
 fn pi_session_file_matches(path: &Path, cwd: &Path, resume_id: &str) -> bool {
     let Ok(raw) = fs::read_to_string(path) else {
         return false;
@@ -447,16 +499,124 @@ fn pi_session_file_matches(path: &Path, cwd: &Path, resume_id: &str) -> bool {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             return false;
         };
-        value
-            .get("sessionId")
+        let id_matches = value
+            .get("id")
+            .or_else(|| value.get("sessionId"))
             .or_else(|| value.get("session_id"))
             .and_then(Value::as_str)
-            == Some(resume_id)
-            || value
-                .pointer("/session/cwd")
-                .and_then(Value::as_str)
-                .is_some_and(|raw_cwd| raw_cwd == cwd.to_string_lossy())
+            == Some(resume_id);
+        let cwd_matches = value
+            .get("cwd")
+            .or_else(|| value.pointer("/session/cwd"))
+            .and_then(Value::as_str)
+            .is_some_and(|raw_cwd| raw_cwd == cwd.to_string_lossy());
+        id_matches && cwd_matches
     })
+}
+
+fn collect_codex_resume_logs(dir: &Path, out: &mut Vec<(f64, PathBuf)>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_codex_resume_logs(&path, out);
+            continue;
+        }
+        if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+            continue;
+        }
+        if !path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("rollout-"))
+        {
+            continue;
+        }
+        let mtime = path
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs_f64())
+            .unwrap_or(0.0);
+        out.push((mtime, path));
+    }
+}
+
+fn codex_session_meta_payload(path: &Path) -> Option<Map<String, Value>> {
+    let raw = fs::read(path).ok()?;
+    for line in raw.split(|byte| *byte == b'\n') {
+        if line.iter().all(|byte| byte.is_ascii_whitespace()) {
+            continue;
+        }
+        let value = serde_json::from_slice::<Value>(line).ok()?;
+        if value.get("type").and_then(Value::as_str) != Some("session_meta") {
+            continue;
+        }
+        return value.get("payload")?.as_object().cloned();
+    }
+    None
+}
+
+fn is_codex_subagent_meta(payload: &Map<String, Value>) -> bool {
+    payload
+        .get("source")
+        .and_then(Value::as_object)
+        .is_some_and(|source| source.contains_key("subagent"))
+}
+
+fn first_user_message_preview_from_codex_log(path: &Path) -> Option<String> {
+    let raw = fs::read(path).ok()?;
+    for line in raw.split(|byte| *byte == b'\n') {
+        if line.iter().all(|byte| byte.is_ascii_whitespace()) {
+            continue;
+        }
+        let value = serde_json::from_slice::<Value>(line).ok()?;
+        let text = if value.get("type").and_then(Value::as_str) == Some("response_item") {
+            let payload = value.get("payload")?.as_object()?;
+            if payload.get("type").and_then(Value::as_str) != Some("message")
+                || payload.get("role").and_then(Value::as_str) != Some("user")
+            {
+                continue;
+            }
+            user_message_text(payload)
+        } else {
+            continue;
+        };
+        let text = text.trim();
+        if text.is_empty() || is_scaffold_user_text(text) {
+            continue;
+        }
+        return Some(resume_preview_from_text(text));
+    }
+    None
+}
+
+fn user_message_text(payload: &Map<String, Value>) -> String {
+    match payload.get("content") {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .filter_map(|part| {
+                part.get("text")
+                    .or_else(|| part.get("content"))
+                    .and_then(Value::as_str)
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+fn is_scaffold_user_text(text: &str) -> bool {
+    text.starts_with("# AGENTS.md instructions for ") || text.starts_with("<environment_context>")
+}
+
+fn resume_preview_from_text(text: &str) -> String {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    collapsed.chars().take(120).collect()
 }
 
 pub(crate) fn codex_trust_override_for_path(path: &Path) -> String {

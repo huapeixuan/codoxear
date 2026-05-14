@@ -4,10 +4,11 @@ use crate::runtime::tmux_available;
 use crate::session_create_support::{
     base_spawn_env, clean_optional_resume_session_id, clean_optional_text,
     clean_optional_text_value, codex_home, codex_trust_override_for_path, create_git_worktree,
-    find_pi_resume_session_file, internal_error, normalize_agent_backend,
-    normalize_preferred_auth_method, normalize_reasoning_effort, normalize_requested_model,
-    normalize_service_tier, parse_args, parse_optional_bool, pi_home, pi_new_session_file_for_cwd,
-    python_exe, repo_root, resolve_dir_target, spawn_nonce, spawn_python_broker,
+    find_codex_resume_candidate, find_pi_resume_session_file, internal_error,
+    normalize_agent_backend, normalize_preferred_auth_method, normalize_reasoning_effort,
+    normalize_requested_model, normalize_service_tier, parse_args, parse_optional_bool, pi_home,
+    pi_new_session_file_for_cwd, python_exe, repo_root, resolve_dir_target, spawn_nonce,
+    spawn_python_broker,
 };
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -218,12 +219,18 @@ fn spawn_codex_session(
     } else {
         cwd_path.to_path_buf()
     };
-    if let Some(resume_id) = request.resume_session_id.as_deref() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            format!("resume session not found for cwd: {resume_id}"),
-        ));
-    }
+    let resume_candidate = if let Some(resume_id) = request.resume_session_id.as_deref() {
+        Some(
+            find_codex_resume_candidate(cwd_path, resume_id).ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("resume session not found for cwd: {resume_id}"),
+                )
+            })?,
+        )
+    } else {
+        None
+    };
 
     let mut argv = vec![
         python_exe(),
@@ -257,6 +264,9 @@ fn spawn_codex_session(
     if let Some(tier) = &request.service_tier {
         argv.extend(["-c".to_string(), format!("service_tier=\"{tier}\"")]);
     }
+    if let Some(candidate) = &resume_candidate {
+        argv.extend(["resume".to_string(), candidate.session_id.clone()]);
+    }
     argv.extend(request.args.clone().unwrap_or_default());
     let mut envs = base_spawn_env("codex", spawn_nonce);
     envs.push((
@@ -281,7 +291,42 @@ fn spawn_codex_session(
     if let Some(tier) = &request.service_tier {
         envs.push(("CODEX_WEB_SERVICE_TIER".to_string(), tier.clone()));
     }
-    spawn_python_broker(state, request, &spawn_cwd, spawn_nonce, argv, envs)
+    if let Some(candidate) = &resume_candidate {
+        envs.push((
+            "CODEX_WEB_RESUME_SESSION_ID".to_string(),
+            candidate.session_id.clone(),
+        ));
+    }
+    let mut out = spawn_python_broker(state, request, &spawn_cwd, spawn_nonce, argv, envs)?;
+    if let Some(candidate) = &resume_candidate {
+        seed_resumed_alias(state, &mut out, candidate.first_user_message.as_deref())?;
+    }
+    Ok(out)
+}
+
+fn seed_resumed_alias(
+    state: &AppState,
+    out: &mut Value,
+    label: Option<&str>,
+) -> Result<(), (StatusCode, String)> {
+    let Some(label) = label.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(());
+    };
+    let Some(session_id) = out.get("session_id").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    let aliases_path = state.config.app_dir.join("session_aliases.json");
+    crate::state_files::with_state_file_lock(&aliases_path, || {
+        let mut aliases = crate::state_files::read_string_file(
+            &aliases_path,
+            crate::runtime::clean_alias_public,
+        )?;
+        aliases.insert(
+            session_id.to_string(),
+            crate::runtime::clean_alias_public(label),
+        );
+        crate::state_files::write_string_file(&aliases_path, &aliases)
+    })
 }
 
 #[cfg(test)]
