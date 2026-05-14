@@ -586,3 +586,17 @@ async fn inject_file_rejects_pi_sessions_before_decoding_upload() {
     assert_eq!(body["backend"], "pi");
     assert_eq!(body["operation"], "attachment_injection");
 }
+
+#[test]
+fn worker_flag_parser_matches_python_truthy_semantics() {
+    use codoxear_backend_rs::workers::env_flag_truthy_value;
+
+    assert!(!env_flag_truthy_value(None));
+    assert!(!env_flag_truthy_value(Some("")));
+    assert!(!env_flag_truthy_value(Some("0")));
+    assert!(!env_flag_truthy_value(Some("false")));
+    assert!(!env_flag_truthy_value(Some(" FALSE ")));
+    assert!(env_flag_truthy_value(Some("1")));
+    assert!(env_flag_truthy_value(Some("true")));
+    assert!(env_flag_truthy_value(Some("yes")));
+}

@@ -16,6 +16,7 @@ pub mod state_files;
 pub mod takeover_post;
 pub mod voice_post;
 pub mod voice_state;
+pub mod workers;
 pub mod write_cleaners;
 
 // Phase 4 will add: pub mod broker;

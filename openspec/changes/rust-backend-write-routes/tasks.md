@@ -89,10 +89,10 @@
 
 ## 11. Rust queue and harness workers
 
-- [ ] 11.1 Add `queue_worker.rs`: gated by `CODOXEAR_ENABLE_QUEUE_SWEEP`, periodically discovers sessions, prunes missing queues, checks broker busy/queue_len and log idle state, waits `QUEUE_IDLE_GRACE_SECONDS`, sends one queued item, then pops it from `session_queues.json`.
-- [ ] 11.2 Add `harness_worker.rs`: gated by `CODOXEAR_ENABLE_HARNESS_SWEEP`, implements Python `_harness_sweep` cooldown, remaining injection, assistant-last-message, broker idle, local queue empty, and rendered prompt send behavior.
-- [ ] 11.3 Wire workers in `backend-rs/src/main.rs` after state build; default off; truthy/falsy parsing matches Python helper.
-- [ ] 11.4 Add worker unit/integration tests with temp app dir, log fixtures, and stub broker: disabled no side effects, enabled sends once, cooldown prevents duplicate, remaining reaches zero disables harness, queue drain pops exactly one item.
+- [ ] 11.1 Add `queue_worker.rs`: gated by `CODOXEAR_ENABLE_QUEUE_SWEEP`, periodically discovers sessions, prunes missing queues, checks broker busy/queue_len and log idle state, waits `QUEUE_IDLE_GRACE_SECONDS`, sends one queued item, then pops it from `session_queues.json`. _(partial: gated Rust worker loop added; prunes missing queues, checks broker/session busy, sends one item and pops it; log idle grace remains pending)_
+- [ ] 11.2 Add `harness_worker.rs`: gated by `CODOXEAR_ENABLE_HARNESS_SWEEP`, implements Python `_harness_sweep` cooldown, remaining injection, assistant-last-message, broker idle, local queue empty, and rendered prompt send behavior. _(partial: gated Rust worker loop added; checks broker/local queue idle, sends rendered prompt, decrements remaining; cooldown and assistant-last-message gating remain pending)_
+- [x] 11.3 Wire workers in `backend-rs/src/main.rs` after state build; default off; truthy/falsy parsing matches Python helper.
+- [ ] 11.4 Add worker unit/integration tests with temp app dir, log fixtures, and stub broker: disabled no side effects, enabled sends once, cooldown prevents duplicate, remaining reaches zero disables harness, queue drain pops exactly one item. _(partial: truthy/falsy parser coverage added; worker behavior stub tests pending)_
 
 ## 12. Python worker handoff
 
