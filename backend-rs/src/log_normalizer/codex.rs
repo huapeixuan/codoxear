@@ -309,15 +309,14 @@ fn idle_from_objects(objects: &[Value]) -> Result<Option<bool>, String> {
                         saw_terminal_signal = true;
                         idle = false;
                     }
-                    Some("agent_message") => {
+                    Some("agent_message")
                         if payload
                             .get("message")
                             .and_then(Value::as_str)
-                            .is_some_and(|message| !message.trim().is_empty())
-                        {
-                            saw_terminal_signal = true;
-                            idle = false;
-                        }
+                            .is_some_and(|message| !message.trim().is_empty()) =>
+                    {
+                        saw_terminal_signal = true;
+                        idle = false;
                     }
                     Some("agent_reasoning") => {
                         saw_terminal_signal = true;
