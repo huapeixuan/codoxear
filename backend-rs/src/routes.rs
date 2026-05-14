@@ -24,8 +24,8 @@ use crate::post_handlers::{
 use crate::runtime::{cookie_name, load_or_create_hmac_secret, verify_auth_cookie};
 use crate::takeover_post::takeover_open;
 use crate::voice_post::{
-    audio_listener, notification_subscription_toggle, notification_subscription_upsert,
-    settings_voice_save,
+    audio_listener, feature_disabled_debug_endpoint, notification_subscription_toggle,
+    notification_subscription_upsert, settings_voice_save,
 };
 use axum::body::Body;
 use axum::extract::{Request, State};
@@ -137,9 +137,17 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/notifications/subscription/toggle",
             post(notification_subscription_toggle),
         )
+        .route(
+            "/api/v1/notifications/test_push",
+            post(feature_disabled_debug_endpoint),
+        )
         .route("/api/v1/notifications/message", get(notification_message))
         .route("/api/v1/notifications/feed", get(notification_feed))
         .route("/api/v1/audio/listener", post(audio_listener))
+        .route(
+            "/api/v1/audio/test_announcement",
+            post(feature_disabled_debug_endpoint),
+        )
         .route("/api/v1/metrics", get(metrics))
         .route("/api/v1/logout", post(logout))
         .route("/api/v1/cwd_groups/edit", post(cwd_group_edit))
@@ -231,9 +239,17 @@ fn public_api_router(state: AppState) -> Router<AppState> {
             "/notifications/subscription/toggle",
             post(notification_subscription_toggle),
         )
+        .route(
+            "/notifications/test_push",
+            post(feature_disabled_debug_endpoint),
+        )
         .route("/notifications/message", get(notification_message))
         .route("/notifications/feed", get(notification_feed))
         .route("/audio/listener", post(audio_listener))
+        .route(
+            "/audio/test_announcement",
+            post(feature_disabled_debug_endpoint),
+        )
         .route("/metrics", get(metrics))
         .route("/logout", post(logout))
         .route("/cwd_groups/edit", post(cwd_group_edit))

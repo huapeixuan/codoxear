@@ -83,9 +83,9 @@
 - [x] 10.2 Implement `POST /api/notifications/subscription`: clean subscription endpoint/keys, compute Python-compatible subscription id, persist record with timestamps/device fields, return subscription snapshot.
 - [x] 10.3 Implement `POST /api/notifications/subscription/toggle`: endpoint required, enabled bool, unknown subscription 404, persist updated timestamp and enabled state.
 - [x] 10.4 Implement `POST /api/audio/listener`: client_id/enabled validation and active listener heartbeat state if in-memory state exists; do not start HLS/TTS worker.
-- [ ] 10.5 Decide and implement Phase 3 behavior for `/api/notifications/test_push` and `/api/audio/test_announcement`: either leave unregistered/404 or return explicit 501 feature-disabled; update endpoint inventory to keep Phase 5 owner.
+- [x] 10.5 Decide and implement Phase 3 behavior for `/api/notifications/test_push` and `/api/audio/test_announcement`: either leave unregistered/404 or return explicit 501 feature-disabled; update endpoint inventory to keep Phase 5 owner.
 - [x] 10.6 Implement unauthenticated `POST /api/hooks/notify` and `/api/v1/hooks/notify` returning `{"ignored":true}`.
-- [ ] 10.7 Add contract tests for settings update, subscription upsert/toggle/unknown, listener heartbeat validation, debug endpoints non-success/no side effects, and hooks no-auth behavior. _(partial: Rust integration coverage added for settings update, subscription upsert/toggle, listener heartbeat, and hooks no-auth; debug endpoint non-success/unknown toggle contract coverage pending)_
+- [ ] 10.7 Add contract tests for settings update, subscription upsert/toggle/unknown, listener heartbeat validation, debug endpoints non-success/no side effects, and hooks no-auth behavior. _(partial: Rust integration coverage added for settings update, subscription upsert/toggle, listener heartbeat, hooks no-auth, and debug endpoint feature-disabled/no-side-effect; unknown toggle contract coverage pending)_
 
 ## 11. Rust queue and harness workers
 

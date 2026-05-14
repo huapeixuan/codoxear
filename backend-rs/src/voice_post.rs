@@ -194,6 +194,17 @@ pub(crate) async fn audio_listener(Json(payload): Json<Value>) -> Response {
     )
 }
 
+pub(crate) async fn feature_disabled_debug_endpoint() -> Response {
+    json_response(
+        StatusCode::NOT_IMPLEMENTED,
+        json!({
+            "error": "feature disabled in Rust Phase 3",
+            "phase": "phase5",
+            "ok": false,
+        }),
+    )
+}
+
 fn read_subscription_records(state: &AppState) -> Map<String, Value> {
     let mut records = Map::new();
     for item in read_subscriptions(&state.config.app_dir) {

@@ -146,6 +146,25 @@ async fn post_json(
     (status, json)
 }
 
+async fn post_json_no_cookie(app: axum::Router, uri: &str, value: Value) -> (StatusCode, Value) {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(&value).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json = serde_json::from_slice(&body)
+        .unwrap_or_else(|_| json!({"raw": String::from_utf8_lossy(&body)}));
+    (status, json)
+}
+
 #[tokio::test]
 async fn cwd_group_edit_persists_python_compatible_json() {
     let (home, app) = test_app();
@@ -601,6 +620,41 @@ async fn audio_listener_heartbeat_validates_payload_and_tracks_memory_state() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, json!({"ok": true, "active_listener_count": 0}));
+}
+
+#[tokio::test]
+async fn voice_debug_endpoints_are_feature_disabled_without_side_effects() {
+    let (home, app) = test_app();
+    let cookie = signed_cookie(&home);
+    let dir = app_dir(&home);
+
+    let (status, body) = post_json(
+        app.clone(),
+        "/api/notifications/test_push",
+        &cookie,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(body["ok"], false);
+    assert_eq!(body["phase"], "phase5");
+
+    let (status, body) = post_json(app, "/api/audio/test_announcement", &cookie, json!({})).await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(body["ok"], false);
+    assert_eq!(body["phase"], "phase5");
+    assert!(!dir.join("push_ledger.json").exists());
+    assert!(!dir.join("audio_announcement_queue.json").exists());
+}
+
+#[tokio::test]
+async fn hooks_notify_is_public_no_auth_noop() {
+    let (_home, app) = test_app();
+
+    let (status, body) = post_json_no_cookie(app, "/api/hooks/notify", json!({"x": 1})).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({"ignored": true}));
 }
 
 #[tokio::test]
