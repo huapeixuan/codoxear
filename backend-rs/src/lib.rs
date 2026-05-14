@@ -1,5 +1,6 @@
 pub mod app_state;
 pub mod broker_client;
+pub mod file_post;
 pub mod git_context;
 pub mod handlers;
 pub mod launch_defaults;

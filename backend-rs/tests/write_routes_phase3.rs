@@ -7,7 +7,9 @@ use codoxear_backend_rs::runtime::{
 };
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
+use sha2::Digest;
 use std::fs;
+use std::path::Path;
 use std::process;
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -56,6 +58,12 @@ fn write_session(home: &TempDir, session_id: &str, backend: &str) {
         .unwrap(),
     )
     .unwrap();
+}
+
+fn assert_same_path(value: &Value, expected: &Path) {
+    let actual = fs::canonicalize(value.as_str().expect("json path")).unwrap();
+    let expected = fs::canonicalize(expected).unwrap();
+    assert_eq!(actual, expected);
 }
 
 async fn post_json(
@@ -330,4 +338,85 @@ async fn send_falls_back_to_queue_when_live_process_has_stale_socket() {
     )
     .unwrap();
     assert_eq!(queues["sid-a"][0], "queued while switching");
+}
+
+#[tokio::test]
+async fn global_file_post_read_and_inspect_track_session_history() {
+    let (home, app) = test_app();
+    write_session(&home, "sid-a", "codex");
+    let file_path = home.path().join("notes.md");
+    fs::write(&file_path, "hello file").unwrap();
+    let cookie = signed_cookie(&home);
+
+    let (status, body) = post_json(
+        app.clone(),
+        "/api/files/read",
+        &cookie,
+        json!({"path": file_path.to_string_lossy(), "session_id": "sid-a"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["kind"], "markdown");
+    assert_eq!(body["text"], "hello file");
+    assert_eq!(body["editable"], true);
+    assert_same_path(&body["path"], &file_path);
+
+    let history: Value = serde_json::from_str(
+        &fs::read_to_string(app_dir(&home).join("session_files.json")).unwrap(),
+    )
+    .unwrap();
+    assert_same_path(&history["sid:sid-a"][0], &file_path);
+
+    let (status, body) = post_json(
+        app,
+        "/api/files/inspect",
+        &cookie,
+        json!({"path": file_path.to_string_lossy(), "session_id": "sid-a"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["kind"], "markdown");
+    assert_eq!(body["size"], 10);
+}
+
+#[tokio::test]
+async fn session_file_write_updates_text_with_version_and_records_history() {
+    let (home, app) = test_app();
+    write_session(&home, "sid-a", "codex");
+    let target = home.path().join("draft.txt");
+    fs::write(&target, "old").unwrap();
+    let old_version = format!("{:x}", sha2::Sha256::digest(b"old"));
+    let cookie = signed_cookie(&home);
+
+    let (status, body) = post_json(
+        app.clone(),
+        "/api/sessions/sid-a/file/write",
+        &cookie,
+        json!({"path": "draft.txt", "text": "new text", "version": old_version}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["editable"], true);
+    assert_eq!(body["rel"], "draft.txt");
+    assert_eq!(fs::read_to_string(&target).unwrap(), "new text");
+
+    let history: Value = serde_json::from_str(
+        &fs::read_to_string(app_dir(&home).join("session_files.json")).unwrap(),
+    )
+    .unwrap();
+    assert_same_path(&history["sid:sid-a"][0], &target);
+
+    let (status, body) = post_json(
+        app,
+        "/api/sessions/sid-a/file/write",
+        &cookie,
+        json!({"path": "draft.txt", "text": "conflict", "version": "stale"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["conflict"], true);
+    assert_eq!(body["error"], "file changed on disk");
 }

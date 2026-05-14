@@ -1,4 +1,5 @@
 use crate::app_state::AppState;
+use crate::file_post::{files_inspect_post, files_read_post, session_file_write};
 use crate::handlers::files::{
     file_blob, file_download, file_list, file_read, file_search, files_blob,
 };
@@ -83,6 +84,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/sessions/:session_id/tail", get(tail))
         .route("/api/v1/sessions/:session_id/live", get(live))
         .route("/api/v1/sessions/:session_id/file/read", get(file_read))
+        .route(
+            "/api/v1/sessions/:session_id/file/write",
+            post(session_file_write),
+        )
         .route("/api/v1/sessions/:session_id/file/search", get(file_search))
         .route("/api/v1/sessions/:session_id/file/list", get(file_list))
         .route("/api/v1/sessions/:session_id/file/blob", get(file_blob))
@@ -90,7 +95,9 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/sessions/:session_id/file/download",
             get(file_download),
         )
-        .route("/api/v1/files/blob", get(files_blob))
+        .route("/api/v1/files/blob", get(files_blob).post(files_blob))
+        .route("/api/v1/files/read", post(files_read_post))
+        .route("/api/v1/files/inspect", post(files_inspect_post))
         .route(
             "/api/v1/sessions/:session_id/git/changed_files",
             get(changed_files),
@@ -160,11 +167,14 @@ fn public_api_router(state: AppState) -> Router<AppState> {
         .route("/sessions/:session_id/tail", get(tail))
         .route("/sessions/:session_id/live", get(live))
         .route("/sessions/:session_id/file/read", get(file_read))
+        .route("/sessions/:session_id/file/write", post(session_file_write))
         .route("/sessions/:session_id/file/search", get(file_search))
         .route("/sessions/:session_id/file/list", get(file_list))
         .route("/sessions/:session_id/file/blob", get(file_blob))
         .route("/sessions/:session_id/file/download", get(file_download))
-        .route("/files/blob", get(files_blob))
+        .route("/files/blob", get(files_blob).post(files_blob))
+        .route("/files/read", post(files_read_post))
+        .route("/files/inspect", post(files_inspect_post))
         .route(
             "/sessions/:session_id/git/changed_files",
             get(changed_files),
