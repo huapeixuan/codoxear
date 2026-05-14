@@ -68,7 +68,7 @@
 
 ## 9. Session create/delete/takeover lifecycle
 
-- [ ] 9.1 Port request parser `_parse_create_session_request` to Rust, covering `cwd`, `backend`/`agent_backend`, `args`, `resume_session_id`, `worktree_branch`, model/provider/reasoning/service tier, and `create_in_tmux`.
+- [x] 9.1 Port request parser `_parse_create_session_request` to Rust, covering `cwd`, `backend`/`agent_backend`, `args`, `resume_session_id`, `worktree_branch`, model/provider/reasoning/service tier, and `create_in_tmux`.
 - [ ] 9.2 Implement non-tmux `POST /api/sessions` for codex by spawning `python -m codoxear.broker` with the same env and args Python uses, waiting for `CODEX_WEB_SPAWN_NONCE` sidecar, seeding resumed alias when needed.
 - [ ] 9.3 Implement non-tmux `POST /api/sessions` for pi by spawning `python -m codoxear.pi_broker` with `ask_user_bridge.ts`, session file selection/resume validation, and Pi env parity.
 - [ ] 9.4 Implement worktree branch creation parity for codex or explicitly gate unsupported cases with the same error until covered; add tests for `worktree_branch` with resume rejection.

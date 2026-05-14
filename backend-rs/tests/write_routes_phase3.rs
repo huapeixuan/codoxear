@@ -873,3 +873,48 @@ fn harness_worker_requires_assistant_tail_and_cooldown_before_injecting() {
     assert_eq!(harness["sid-a"]["remaining_injections"], 1);
     server.join().unwrap();
 }
+
+#[tokio::test]
+async fn session_create_parser_validation_and_deferred_spawn_response() {
+    let (home, app) = test_app();
+    let cookie = signed_cookie(&home);
+
+    let (status, body) =
+        post_json(app.clone(), "/api/sessions", &cookie, json!({"cwd": "   "})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "cwd required");
+    assert_eq!(body["field"], "cwd");
+
+    let cwd = home.path().join("new-session");
+    let (status, body) = post_json(
+        app.clone(),
+        "/api/sessions",
+        &cookie,
+        json!({
+            "cwd": cwd.to_string_lossy(),
+            "backend": "codex",
+            "args": ["--foo", ""],
+            "resume_session_id": " resume-1 ",
+            "worktree_branch": " feature/x ",
+            "model": "default",
+            "reasoning_effort": "HIGH",
+            "service_tier": "fast",
+            "create_in_tmux": false
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(body["ok"], false);
+    assert_eq!(body["backend"], "codex");
+    assert_eq!(body["phase"], "phase3");
+
+    let (status, body) = post_json(
+        app,
+        "/api/sessions",
+        &cookie,
+        json!({"cwd": cwd.to_string_lossy(), "backend": "pi", "preferred_auth_method": "apikey", "service_tier": "flex", "worktree_branch": "ignored", "reasoning_effort": "minimal"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(body["backend"], "pi");
+}

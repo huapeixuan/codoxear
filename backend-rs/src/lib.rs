@@ -11,6 +11,7 @@ pub mod models;
 pub mod post_handlers;
 pub mod routes;
 pub mod runtime;
+pub mod session_create;
 pub mod session_loader;
 pub mod state_files;
 pub mod takeover_post;

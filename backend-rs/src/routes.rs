@@ -22,6 +22,7 @@ use crate::post_handlers::{
     session_ui_response,
 };
 use crate::runtime::{cookie_name, load_or_create_hmac_secret, verify_auth_cookie};
+use crate::session_create::session_create;
 use crate::takeover_post::takeover_open;
 use crate::voice_post::{
     audio_listener, feature_disabled_debug_endpoint, notification_subscription_toggle,
@@ -41,7 +42,7 @@ pub fn router(state: AppState) -> Router {
     let protected_v1 = Router::new()
         .route("/api/v1/me", get(me))
         .route("/api/v1/sessions/bootstrap", get(sessions_bootstrap))
-        .route("/api/v1/sessions", get(sessions))
+        .route("/api/v1/sessions", get(sessions).post(session_create))
         .route(
             "/api/v1/session_resume_candidates",
             get(session_resume_candidates),
@@ -170,7 +171,7 @@ fn public_api_router(state: AppState) -> Router<AppState> {
     let protected = Router::new()
         .route("/me", get(me))
         .route("/sessions/bootstrap", get(sessions_bootstrap))
-        .route("/sessions", get(sessions))
+        .route("/sessions", get(sessions).post(session_create))
         .route("/session_resume_candidates", get(session_resume_candidates))
         .route("/sessions/:session_id/diagnostics", get(diagnostics))
         .route("/sessions/:session_id/queue", get(queue))
