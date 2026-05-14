@@ -25,7 +25,7 @@
 - [x] 3.1 Register POST routes in `backend-rs/src/routes.rs` for both `/api/v1/...` and legacy `/api/...`; keep `POST /api/hooks/notify` outside auth middleware.
 - [x] 3.2 Implement auth login handler: parse JSON body, verify password using Python-compatible source/env, sign `codoxear_auth`, emit matching `Set-Cookie`, return compact `{"ok":true}`.
 - [x] 3.3 Implement auth logout handler: require auth, clear cookie with same path / Max-Age / HttpOnly / SameSite / Secure behavior as Python.
-- [ ] 3.4 Add contract tests for login success cookie cross-authenticates Python, bad password 403, malformed/empty body behavior, and logout cookie clearing.
+- [x] 3.4 Add contract tests for login success cookie cross-authenticates Python, bad password 403, malformed/empty body behavior, and logout cookie clearing.
 
 ## 4. CWD groups, aliases, and sidebar writes
 

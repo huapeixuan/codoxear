@@ -11,6 +11,8 @@ from typing import Any
 
 import pytest
 
+from .conftest import CONTRACT_PASSWORD
+
 
 _STUB_BROKER_SERVERS: list[socket.socket] = []
 
@@ -69,6 +71,31 @@ def _post_response(
     payload: dict[str, Any] | None,
 ) -> JsonHttpResponse:
     body = b"" if payload is None else json.dumps(payload).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if cookie is not None:
+        headers["Cookie"] = cookie
+    request = urllib.request.Request(
+        f"{base_url}{path}", data=body, headers=headers, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            response_body = response.read()
+            response_headers = {
+                key.lower(): value for key, value in response.headers.items()
+            }
+            return JsonHttpResponse(response.status, response_headers, response_body)
+    except urllib.error.HTTPError as exc:
+        response_body = exc.read()
+        response_headers = {key.lower(): value for key, value in exc.headers.items()}
+        return JsonHttpResponse(exc.code, response_headers, response_body)
+
+
+def _post_raw_response(
+    base_url: str,
+    path: str,
+    cookie: str | None,
+    body: bytes,
+) -> JsonHttpResponse:
     headers = {"Content-Type": "application/json"}
     if cookie is not None:
         headers["Cookie"] = cookie
@@ -639,10 +666,38 @@ def test_login_logout_post_parity(
     python_server_url: str, rust_server_url: str, signed_auth_cookie: str
 ) -> None:
     for base_url in (python_server_url, rust_server_url):
+        empty = _post_raw_response(base_url, "/api/login", None, b"")
+        assert empty.status in {400, 500}
+
+        malformed = _post_raw_response(base_url, "/api/login", None, b"[]")
+        assert malformed.status in {400, 403, 500}
+
         bad = _post_response(base_url, "/api/login", None, {"password": "wrong"})
         assert bad.status == 403
         assert bad.json() == {"error": "bad password"}
 
+        good = _post_response(
+            base_url, "/api/login", None, {"password": CONTRACT_PASSWORD}
+        )
+        assert good.status == 200
+        assert good.json() == {"ok": True}
+        assert "codoxear_auth=" in good.headers.get("set-cookie", "")
+
+    rust_login = _post_response(
+        rust_server_url, "/api/login", None, {"password": CONTRACT_PASSWORD}
+    )
+    rust_cookie = rust_login.headers.get("set-cookie", "")
+    python_me = _get_response(python_server_url, "/api/me", rust_cookie)
+    assert python_me.status == 200
+
+    python_login = _post_response(
+        python_server_url, "/api/login", None, {"password": CONTRACT_PASSWORD}
+    )
+    python_cookie = python_login.headers.get("set-cookie", "")
+    rust_me = _get_response(rust_server_url, "/api/me", python_cookie)
+    assert rust_me.status == 200
+
+    for base_url in (python_server_url, rust_server_url):
         logout = _post_response(base_url, "/api/logout", signed_auth_cookie, {})
         assert logout.status == 200
         assert logout.json() == {"ok": True}

@@ -16,6 +16,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread;
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -119,6 +120,15 @@ where
             stream.write_all(b"\n").unwrap();
         }
     })
+}
+
+static WORKER_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn worker_test_guard() -> MutexGuard<'static, ()> {
+    WORKER_TEST_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap()
 }
 
 async fn post_json(
@@ -765,6 +775,7 @@ async fn inject_file_rejects_decoded_payload_above_python_default_limit() {
 #[test]
 fn queue_worker_requires_idle_grace_before_popping_queue_item() {
     use codoxear_backend_rs::workers::{queue_sweep_once_at, worker_state_reset_for_tests};
+    let _guard = worker_test_guard();
     worker_state_reset_for_tests();
     let (home, _app) = test_app();
     write_session(&home, "sid-a", "codex");
@@ -813,6 +824,7 @@ fn queue_worker_requires_idle_grace_before_popping_queue_item() {
 #[test]
 fn queue_worker_prunes_missing_session_without_broker_side_effects() {
     use codoxear_backend_rs::workers::{queue_sweep_once_at, worker_state_reset_for_tests};
+    let _guard = worker_test_guard();
     worker_state_reset_for_tests();
     let (home, _app) = test_app();
     let app_dir = app_dir(&home);
@@ -837,6 +849,7 @@ fn queue_worker_prunes_missing_session_without_broker_side_effects() {
 fn harness_worker_requires_assistant_tail_and_cooldown_before_injecting() {
     use codoxear_backend_rs::log_normalizer::codex::last_chat_role_ts_from_log;
     use codoxear_backend_rs::workers::{harness_sweep_once_at, worker_state_reset_for_tests};
+    let _guard = worker_test_guard();
     worker_state_reset_for_tests();
     let (home, _app) = test_app();
     write_session(&home, "sid-a", "codex");
@@ -877,19 +890,18 @@ fn harness_worker_requires_assistant_tail_and_cooldown_before_injecting() {
     assert_eq!(last.0, "assistant");
     assert!((last.1 - 60.5).abs() < 0.001);
     assert!(!harness_sweep_once_at(&state, 100.0).unwrap());
-    let server = spawn_broker_server(app_dir.join("socks/sid-a.sock"), 2, |request| match request
-        ["cmd"]
-        .as_str()
-        .unwrap()
-    {
-        "state" => json!({"busy": false, "queue_len": 0}),
-        "send" => {
-            let text = request["text"].as_str().unwrap();
-            assert!(text.starts_with("Unattended-mode instructions"));
-            assert!(text.contains("Additional request from user: ship it"));
-            json!({"ok": true})
+    let sock_path = app_dir.join("socks/sid-a.sock");
+    let server = spawn_broker_server(sock_path.clone(), 2, |request| {
+        match request["cmd"].as_str().unwrap() {
+            "state" => json!({"busy": false, "queue_len": 0}),
+            "send" => {
+                let text = request["text"].as_str().unwrap();
+                assert!(text.starts_with("Unattended-mode instructions"));
+                assert!(text.contains("Additional request from user: ship it"));
+                json!({"ok": true})
+            }
+            other => panic!("unexpected broker cmd {other}"),
         }
-        other => panic!("unexpected broker cmd {other}"),
     });
     assert!(harness_sweep_once_at(&state, 121.0).unwrap());
     server.join().unwrap();
@@ -898,7 +910,7 @@ fn harness_worker_requires_assistant_tail_and_cooldown_before_injecting() {
         serde_json::from_slice(&fs::read(app_dir.join("harness.json")).unwrap()).unwrap();
     assert_eq!(harness["sid-a"]["remaining_injections"], 1);
 
-    let cooldown_server = spawn_broker_server(app_dir.join("socks/sid-a.sock"), 1, |request| {
+    let cooldown_server = spawn_broker_server(sock_path.clone(), 1, |request| {
         assert_eq!(request["cmd"], "state");
         json!({"busy": false, "queue_len": 0})
     });
@@ -909,6 +921,7 @@ fn harness_worker_requires_assistant_tail_and_cooldown_before_injecting() {
 #[test]
 fn harness_worker_disables_zero_remaining_without_broker_side_effects() {
     use codoxear_backend_rs::workers::{harness_sweep_once_at, worker_state_reset_for_tests};
+    let _guard = worker_test_guard();
     worker_state_reset_for_tests();
     let (home, _app) = test_app();
     write_session(&home, "sid-a", "codex");
