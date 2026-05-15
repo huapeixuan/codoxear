@@ -486,9 +486,8 @@ pub(super) fn dispatch_command(
             json!({"requests": requests})
         }
         Some("commands") if env.backend == "pi" => {
-            let st = state.lock().expect("broker state poisoned");
-            let commands = st
-                .pi_rpc
+            let rpc = state.lock().expect("broker state poisoned").pi_rpc.clone();
+            let commands = rpc
                 .as_ref()
                 .and_then(|rpc| rpc.get_commands().ok())
                 .unwrap_or_default();
@@ -512,10 +511,8 @@ pub(super) fn dispatch_command(
                 }
                 pending["status"] = json!("resolved");
             }
-            let send_result = {
-                let st = state.lock().expect("broker state poisoned");
-                st.pi_rpc.as_ref().map(|rpc| rpc.send_ui_response(id, req))
-            };
+            let rpc = state.lock().expect("broker state poisoned").pi_rpc.clone();
+            let send_result = rpc.as_ref().map(|rpc| rpc.send_ui_response(id, req));
             if let Some(Err(err)) = send_result {
                 let mut st = state.lock().expect("broker state poisoned");
                 if let Some(pending) = st.pending_ui_requests.get_mut(id) {
@@ -539,10 +536,8 @@ fn sync_pi_state(state: &Arc<Mutex<State>>, env: &BrokerEnv) {
     if env.backend != "pi" {
         return;
     }
-    let rpc_state = {
-        let st = state.lock().expect("broker state poisoned");
-        st.pi_rpc.as_ref().and_then(|rpc| rpc.get_state().ok())
-    };
+    let rpc = state.lock().expect("broker state poisoned").pi_rpc.clone();
+    let rpc_state = rpc.as_ref().and_then(|rpc| rpc.get_state().ok());
     drain_pi_output(state);
     let Some(rpc_state) = rpc_state else {
         return;
@@ -580,13 +575,11 @@ fn sync_pi_state(state: &Arc<Mutex<State>>, env: &BrokerEnv) {
 }
 
 pub(super) fn drain_pi_output(state: &Arc<Mutex<State>>) {
-    let (events, stderr_lines) = {
-        let st = state.lock().expect("broker state poisoned");
-        let Some(rpc) = &st.pi_rpc else {
-            return;
-        };
-        (rpc.drain_events(), rpc.drain_stderr_lines())
+    let rpc = state.lock().expect("broker state poisoned").pi_rpc.clone();
+    let Some(rpc) = rpc else {
+        return;
     };
+    let (events, stderr_lines) = (rpc.drain_events(), rpc.drain_stderr_lines());
     let mut st = state.lock().expect("broker state poisoned");
     for line in stderr_lines {
         st.output_tail.push_str("[stderr] ");

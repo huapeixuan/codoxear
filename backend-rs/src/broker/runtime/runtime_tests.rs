@@ -1,6 +1,7 @@
 use super::*;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
+use std::sync::mpsc;
 use tempfile::TempDir;
 
 fn test_env() -> BrokerEnv {
@@ -68,6 +69,18 @@ fn attach_rpc(state: &Arc<Mutex<State>>, script: String) -> std::process::Child 
 
 fn socket_json(state: &Arc<Mutex<State>>, env: &BrokerEnv, req: Value) -> Value {
     dispatch_command(&req, state, env, &Arc::new(AtomicBool::new(false)))
+}
+
+fn wait_for_state_lock(state: &Arc<Mutex<State>>, timeout: Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if let Ok(guard) = state.try_lock() {
+            drop(guard);
+            return true;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    false
 }
 
 #[test]
@@ -237,7 +250,6 @@ fn pi_send_propagates_prompt_error_and_clears_busy() {
     assert!(!state.lock().unwrap().busy);
     let _ = child.kill();
     let _ = child.wait();
-    let _ = child.wait();
 }
 
 #[test]
@@ -305,6 +317,59 @@ fn pi_escape_keys_calls_abort_rpc() {
     assert_eq!(state.lock().unwrap().last_turn_id, None);
     let _ = child.kill();
     let _ = child.wait();
+}
+
+#[test]
+fn pi_read_commands_do_not_hold_state_lock_while_rpc_waits() {
+    let dir = TempDir::new().unwrap();
+    let env = test_env();
+    let state = test_state(dir.path(), "pi");
+    let mut child = attach_rpc(
+        &state,
+        r#"while IFS= read -r line; do id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'); typ=$(printf '%s' "$line" | sed -n 's/.*"type":"\([^"]*\)".*/\1/p'); if [ "$typ" = "get_commands" ]; then sleep 1; printf '{"type":"response","id":"%s","success":true,"data":{"commands":[{"name":"ok"}]}}\n' "$id"; elif [ "$typ" = "get_state" ]; then sleep 1; printf '{"type":"response","id":"%s","success":true,"data":{"busy":false}}\n' "$id"; fi; done"#.into(),
+    );
+    for req in [json!({"cmd":"commands"}), json!({"cmd":"state"})] {
+        let (tx, rx) = mpsc::channel();
+        let state2 = state.clone();
+        let env2 = env.clone();
+        thread::spawn(move || {
+            let _ = socket_json(&state2, &env2, req);
+            let _ = tx.send(());
+        });
+        thread::sleep(Duration::from_millis(100));
+        assert!(wait_for_state_lock(&state, Duration::from_millis(100)));
+        assert!(rx.recv_timeout(Duration::from_secs(2)).is_ok());
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
+fn pi_ui_response_does_not_hold_state_lock_while_rpc_waits() {
+    let dir = TempDir::new().unwrap();
+    let env = test_env();
+    let state = test_state(dir.path(), "pi");
+    state.lock().unwrap().pending_ui_requests.insert(
+        "ask-1".into(),
+        json!({"id":"ask-1","status":"pending","type":"ask_user"}),
+    );
+    let mut child = attach_rpc(&state, "while IFS= read -r line; do sleep 1; done".into());
+    let (tx, rx) = mpsc::channel();
+    let state2 = state.clone();
+    let env2 = env.clone();
+    thread::spawn(move || {
+        let resp = socket_json(
+            &state2,
+            &env2,
+            json!({"cmd":"ui_response","id":"ask-1","value":"ok"}),
+        );
+        let _ = tx.send(resp);
+    });
+    thread::sleep(Duration::from_millis(100));
+    assert!(wait_for_state_lock(&state, Duration::from_millis(100)));
+    let resp = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(resp, json!({"ok":true}));
+    let _ = child.kill();
     let _ = child.wait();
 }
 
@@ -336,6 +401,5 @@ fn pi_live_messages_coalesce_stream_deltas() {
         .iter()
         .any(|event| event["text"] == "Hello" && event["completed"] == true));
     let _ = child.kill();
-    let _ = child.wait();
     let _ = child.wait();
 }
