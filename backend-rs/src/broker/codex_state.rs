@@ -330,6 +330,8 @@ mod tests {
             stdin_eof: false,
             token: None,
             child_stdin: None,
+            pi_rpc: None,
+            last_turn_id: None,
             pty_master: None,
             pending_ui_requests: serde_json::Map::new(),
             live_message_offset: 0,

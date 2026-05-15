@@ -3,6 +3,7 @@ pub mod config;
 pub mod ipc;
 pub mod log_discovery;
 pub mod meta;
+pub mod pi_rpc;
 pub mod pty;
 pub mod runtime;
 pub mod shim;

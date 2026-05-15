@@ -104,6 +104,8 @@ pub struct State {
     pub stdin_eof: bool,
     pub token: Option<Value>,
     pub child_stdin: Option<std::process::ChildStdin>,
+    pub pi_rpc: Option<crate::broker::pi_rpc::PiRpcClient>,
+    pub last_turn_id: Option<String>,
     pub pty_master: Option<std::fs::File>,
     pub pending_ui_requests: serde_json::Map<String, Value>,
     pub live_message_offset: u64,
@@ -155,7 +157,7 @@ fn run_inner(cli: BrokerCli, env: BrokerEnv) -> Result<i32, String> {
             None,
             Some(master.try_clone().map_err(|e| e.to_string())?),
         ),
-        ChildHandle::Process { child } => (child.id(), child.stdin.take(), None),
+        ChildHandle::Process { child } => (child.id(), None, None),
     };
 
     let state = Arc::new(Mutex::new(State {
@@ -175,10 +177,18 @@ fn run_inner(cli: BrokerCli, env: BrokerEnv) -> Result<i32, String> {
         stdin_eof: false,
         token: None,
         child_stdin,
+        pi_rpc: None,
+        last_turn_id: None,
         pty_master: pty_master.as_ref().and_then(|f| f.try_clone().ok()),
         pending_ui_requests: serde_json::Map::new(),
         live_message_offset: 0,
     }));
+    if env.backend == "pi" {
+        if let ChildHandle::Process { child } = &mut child {
+            let rpc = crate::broker::pi_rpc::PiRpcClient::from_child(child)?;
+            state.lock().map_err(|_| "broker state poisoned")?.pi_rpc = Some(rpc);
+        }
+    }
     write_meta(&state, &env)?;
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -202,14 +212,8 @@ fn run_inner(cli: BrokerCli, env: BrokerEnv) -> Result<i32, String> {
 
 fn spawn_pi_process(cli: &BrokerCli, env: &BrokerEnv) -> Result<ChildHandle, String> {
     let mut command = Command::new(&env.pi_bin);
-    command.args(["--mode", "rpc"]);
-    if let Some(session_file) = &cli.session_file {
-        command.args([
-            "--session".to_string(),
-            session_file.to_string_lossy().to_string(),
-        ]);
-    }
-    command.args(&cli.agent_args);
+    let args = pi_rpc_args(cli);
+    command.args(&args);
     command.current_dir(&cli.cwd);
     command.env("PI_HOME", &env.pi_home);
     command.stdin(Stdio::piped());
@@ -224,6 +228,41 @@ fn spawn_pi_process(cli: &BrokerCli, env: &BrokerEnv) -> Result<ChildHandle, Str
         .spawn()
         .map(|child| ChildHandle::Process { child })
         .map_err(|err| format!("spawn pi failed: {err}"))
+}
+
+fn pi_rpc_args(cli: &BrokerCli) -> Vec<String> {
+    let mut args = vec!["--mode".to_string(), "rpc".to_string()];
+    if let Some(session_file) = &cli.session_file {
+        args.extend([
+            "--session".to_string(),
+            session_file.to_string_lossy().to_string(),
+        ]);
+    }
+    args.extend(ensure_pi_ask_user_extension(&cli.agent_args));
+    args
+}
+
+fn ensure_pi_ask_user_extension(args: &[String]) -> Vec<String> {
+    let bridge = repo_pi_ask_user_bridge_path();
+    for pair in args.windows(2) {
+        if pair[0] == "-e" && pair[1] == bridge {
+            return args.to_vec();
+        }
+    }
+    let mut out = vec!["-e".to_string(), bridge];
+    out.extend(args.iter().cloned());
+    out
+}
+
+fn repo_pi_ask_user_bridge_path() -> String {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("codoxear")
+        .join("pi_extensions")
+        .join("ask_user_bridge.ts")
+        .to_string_lossy()
+        .to_string()
 }
 
 fn spawn_codex_pty(cli: &BrokerCli, env: &BrokerEnv) -> Result<ChildHandle, String> {
@@ -329,29 +368,7 @@ fn start_output_reader(child: &mut ChildHandle, state: Arc<Mutex<State>>, stop: 
                 }
             });
         }
-        ChildHandle::Process { child } => {
-            if let Some(stdout) = child.stdout.take() {
-                let state2 = state.clone();
-                let stop2 = stop.clone();
-                thread::spawn(move || read_pipe(stdout, state2, stop2));
-            }
-            if let Some(stderr) = child.stderr.take() {
-                thread::spawn(move || read_pipe(stderr, state, stop));
-            }
-        }
-    }
-}
-
-fn read_pipe<R: std::io::Read>(reader: R, state: Arc<Mutex<State>>, stop: Arc<AtomicBool>) {
-    let mut reader = BufReader::new(reader);
-    let mut line = String::new();
-    while !stop.load(Ordering::SeqCst) {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(_) => append_tail(&state, &line),
-            Err(_) => break,
-        }
+        ChildHandle::Process { .. } => {}
     }
 }
 
@@ -433,11 +450,16 @@ fn dispatch_command(
 ) -> Value {
     match req.get("cmd").and_then(Value::as_str) {
         Some("state") => {
+            sync_pi_state(state, env);
             let st = state.lock().expect("broker state poisoned");
             json!({"busy": st.busy, "queue_len": 0, "token": st.token})
         }
         Some("tail") => {
-            let _ = refresh_codex_log_state(state, env);
+            if env.backend == "pi" {
+                drain_pi_output(state);
+            } else {
+                let _ = refresh_codex_log_state(state, env);
+            }
             let st = state.lock().expect("broker state poisoned");
             json!({"tail": st.output_tail})
         }
@@ -452,8 +474,12 @@ fn dispatch_command(
             let mut st = state.lock().expect("broker state poisoned");
             st.busy = true;
             if st.backend == "pi" {
-                if let Some(stdin) = &mut st.child_stdin {
-                    let _ = writeln!(stdin, "{text}");
+                let rpc = st.pi_rpc.as_ref();
+                let result = rpc.map(|rpc| rpc.prompt(text, req.get("images").cloned()));
+                if let Some(Ok(value)) = result {
+                    if let Some(turn_id) = value.get("turn_id").and_then(Value::as_str) {
+                        st.last_turn_id = Some(turn_id.to_string());
+                    }
                 }
             } else if let Some(master) = &mut st.pty_master {
                 let enter = req
@@ -492,10 +518,12 @@ fn dispatch_command(
             json!({"ok": true, "queued": false, "n": bytes.len()})
         }
         Some("live_messages") if env.backend == "pi" => {
+            drain_pi_output(state);
             let st = state.lock().expect("broker state poisoned");
             json!({"offset": st.live_message_offset, "events": []})
         }
         Some("ui_state") if env.backend == "pi" => {
+            drain_pi_output(state);
             let st = state.lock().expect("broker state poisoned");
             let requests: Vec<Value> = st
                 .pending_ui_requests
@@ -505,7 +533,15 @@ fn dispatch_command(
                 .collect();
             json!({"requests": requests})
         }
-        Some("commands") if env.backend == "pi" => json!({"commands": []}),
+        Some("commands") if env.backend == "pi" => {
+            let st = state.lock().expect("broker state poisoned");
+            let commands = st
+                .pi_rpc
+                .as_ref()
+                .and_then(|rpc| rpc.get_commands().ok())
+                .unwrap_or_default();
+            json!({"commands": commands})
+        }
         Some("ui_response") if env.backend == "pi" => {
             let Some(id) = req
                 .get("id")
@@ -514,14 +550,27 @@ fn dispatch_command(
             else {
                 return json!({"error": "id required"});
             };
-            let mut st = state.lock().expect("broker state poisoned");
-            let Some(pending) = st.pending_ui_requests.get_mut(id) else {
-                return json!({"error": "unknown or expired request"});
-            };
-            if pending.get("status").and_then(Value::as_str) != Some("pending") {
-                return json!({"error": "request already resolved"});
+            {
+                let mut st = state.lock().expect("broker state poisoned");
+                let Some(pending) = st.pending_ui_requests.get_mut(id) else {
+                    return json!({"error": "unknown or expired request"});
+                };
+                if pending.get("status").and_then(Value::as_str) != Some("pending") {
+                    return json!({"error": "request already resolved"});
+                }
+                pending["status"] = json!("resolved");
             }
-            pending["status"] = json!("resolved");
+            let send_result = {
+                let st = state.lock().expect("broker state poisoned");
+                st.pi_rpc.as_ref().map(|rpc| rpc.send_ui_response(id, req))
+            };
+            if let Some(Err(err)) = send_result {
+                let mut st = state.lock().expect("broker state poisoned");
+                if let Some(pending) = st.pending_ui_requests.get_mut(id) {
+                    pending["status"] = json!("pending");
+                }
+                return json!({"error": err});
+            }
             json!({"ok": true})
         }
         Some("shutdown") => {
@@ -531,6 +580,81 @@ fn dispatch_command(
             json!({"ok": true})
         }
         _ => json!({"error": "unknown cmd"}),
+    }
+}
+
+fn sync_pi_state(state: &Arc<Mutex<State>>, env: &BrokerEnv) {
+    if env.backend != "pi" {
+        return;
+    }
+    let rpc_state = {
+        let st = state.lock().expect("broker state poisoned");
+        st.pi_rpc.as_ref().and_then(|rpc| rpc.get_state().ok())
+    };
+    drain_pi_output(state);
+    let Some(rpc_state) = rpc_state else {
+        return;
+    };
+    let mut rewrite_meta = false;
+    {
+        let mut st = state.lock().expect("broker state poisoned");
+        if let Some(busy) = rpc_state.get("busy").and_then(Value::as_bool) {
+            st.busy = busy;
+        }
+        if let Some(turn_id) = rpc_state.get("turn_id").and_then(Value::as_str) {
+            st.last_turn_id = Some(turn_id.to_string());
+        }
+        if let Some(session_id) = rpc_state.get("session_id").and_then(Value::as_str) {
+            if st.session_id.as_deref() != Some(session_id) {
+                st.session_id = Some(session_id.to_string());
+                rewrite_meta = true;
+            }
+        }
+    }
+    if rewrite_meta {
+        let _ = write_meta(state, env);
+    }
+}
+
+fn drain_pi_output(state: &Arc<Mutex<State>>) {
+    let (events, stderr_lines) = {
+        let st = state.lock().expect("broker state poisoned");
+        let Some(rpc) = &st.pi_rpc else {
+            return;
+        };
+        (rpc.drain_events(), rpc.drain_stderr_lines())
+    };
+    let mut st = state.lock().expect("broker state poisoned");
+    for line in stderr_lines {
+        st.output_tail.push_str("[stderr] ");
+        st.output_tail.push_str(&line);
+        st.output_tail.push('\n');
+    }
+    for event in events {
+        if event.get("type").and_then(Value::as_str) == Some("extension_ui_request") {
+            if let Some(id) = event.get("id").and_then(Value::as_str) {
+                let mut request = event.clone();
+                request["status"] = json!("pending");
+                st.pending_ui_requests.insert(id.to_string(), request);
+            }
+        }
+        if let Some(delta) = event.get("delta").and_then(Value::as_str) {
+            st.output_tail.push_str(delta);
+        }
+        if let Some(text) = event.get("text").and_then(Value::as_str) {
+            st.output_tail.push_str(text);
+        }
+        if matches!(
+            event.get("event").and_then(Value::as_str),
+            Some("message.done" | "turn.completed" | "turn_complete")
+        ) {
+            st.busy = false;
+            st.last_turn_id = None;
+        }
+    }
+    if st.output_tail.len() > 64 * 1024 {
+        let keep_from = st.output_tail.len() - 64 * 1024;
+        st.output_tail = st.output_tail[keep_from..].to_string();
     }
 }
 
@@ -670,119 +794,4 @@ fn shell_quote(raw: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::os::unix::net::UnixStream;
-    use tempfile::TempDir;
-
-    fn test_env() -> BrokerEnv {
-        let dir = TempDir::new().unwrap();
-        BrokerEnv {
-            backend: "pi".into(),
-            owner: Some("web".into()),
-            spawn_nonce: None,
-            transport: None,
-            tmux_session: None,
-            tmux_window: None,
-            app_dir: dir.path().to_path_buf(),
-            codex_home: dir.path().join("codex"),
-            pi_home: dir.path().join("pi"),
-            codex_bin: "codex".into(),
-            pi_bin: "pi".into(),
-            model_provider: None,
-            preferred_auth_method: None,
-            model: None,
-            reasoning_effort: None,
-            service_tier: None,
-            debug: false,
-        }
-    }
-
-    fn test_state(dir: &Path, backend: &str) -> Arc<Mutex<State>> {
-        Arc::new(Mutex::new(State {
-            backend: backend.into(),
-            child_pid: 1,
-            broker_pid: 2,
-            cwd: dir.to_path_buf(),
-            start_ts: 1.0,
-            sock_path: dir.join("x.sock"),
-            session_path: None,
-            session_id: None,
-            log_path: None,
-            log_off: 0,
-            resume_session_id: None,
-            busy: backend == "codex",
-            output_tail: "tail".into(),
-            stdin_eof: false,
-            token: None,
-            child_stdin: None,
-            pty_master: None,
-            pending_ui_requests: serde_json::Map::new(),
-            live_message_offset: 0,
-        }))
-    }
-
-    #[test]
-    fn env_resolution_matches_codoxear_app_dir_contract() {
-        let dir = TempDir::new().unwrap();
-        std::env::set_var("CODOXEAR_APP_DIR", dir.path());
-        std::env::set_var("CODEX_WEB_AGENT_BACKEND", " pi ");
-        std::env::set_var("CODEX_WEB_BROKER_DEBUG", "1");
-        let env = BrokerEnv::from_process(None);
-        assert_eq!(env.backend, "pi");
-        assert_eq!(env.app_dir, dir.path());
-        assert!(env.debug);
-        std::env::remove_var("CODOXEAR_APP_DIR");
-        std::env::remove_var("CODEX_WEB_AGENT_BACKEND");
-        std::env::remove_var("CODEX_WEB_BROKER_DEBUG");
-    }
-
-    #[test]
-    fn socket_dispatch_matches_python_validation_strings() {
-        let dir = TempDir::new().unwrap();
-        let env = test_env();
-        let state = test_state(dir.path(), "pi");
-        let stop = Arc::new(AtomicBool::new(false));
-        assert_eq!(
-            dispatch_command(&json!({"cmd":"send","text":""}), &state, &env, &stop),
-            json!({"error":"text required"})
-        );
-        assert_eq!(
-            dispatch_command(
-                &json!({"cmd":"ui_response","id":"missing"}),
-                &state,
-                &env,
-                &stop
-            ),
-            json!({"error":"unknown or expired request"})
-        );
-        assert_eq!(
-            dispatch_command(&json!({"cmd":"wat"}), &state, &env, &stop),
-            json!({"error":"unknown cmd"})
-        );
-    }
-
-    #[test]
-    fn socket_server_round_trips_state() {
-        let dir = TempDir::new().unwrap();
-        let mut env = BrokerEnv::from_process(Some("codex"));
-        env.backend = "codex".into();
-        let state = test_state(dir.path(), "codex");
-        let stop = Arc::new(AtomicBool::new(false));
-        start_socket_server(state, env, stop.clone()).unwrap();
-        for _ in 0..20 {
-            if dir.path().join("x.sock").exists() {
-                break;
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-        let mut stream = UnixStream::connect(dir.path().join("x.sock")).unwrap();
-        writeln!(stream, "{}", json!({"cmd":"state"})).unwrap();
-        let mut resp = String::new();
-        BufReader::new(stream).read_line(&mut resp).unwrap();
-        stop.store(true, Ordering::SeqCst);
-        let value: Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(value["busy"], true);
-        assert_eq!(value["queue_len"], 0);
-    }
-}
+mod runtime_tests;
