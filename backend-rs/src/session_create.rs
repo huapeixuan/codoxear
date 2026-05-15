@@ -4,7 +4,7 @@ use crate::runtime::tmux_available;
 use crate::session_create_support::{
     base_spawn_env, clean_optional_resume_session_id, clean_optional_text,
     clean_optional_text_value, codex_home, codex_trust_override_for_path, create_git_worktree,
-    find_codex_resume_candidate, find_pi_resume_session_file, internal_error,
+    find_codex_resume_candidate_in, find_pi_resume_session_file, internal_error,
     normalize_agent_backend, normalize_preferred_auth_method, normalize_reasoning_effort,
     normalize_requested_model, normalize_service_tier, parse_args, parse_optional_bool, pi_home,
     pi_new_session_file_for_cwd, python_exe, repo_root, resolve_dir_target, spawn_nonce,
@@ -221,12 +221,13 @@ fn spawn_codex_session(
     };
     let resume_candidate = if let Some(resume_id) = request.resume_session_id.as_deref() {
         Some(
-            find_codex_resume_candidate(cwd_path, resume_id).ok_or_else(|| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    format!("resume session not found for cwd: {resume_id}"),
-                )
-            })?,
+            find_codex_resume_candidate_in(&codex_home().join("sessions"), cwd_path, resume_id)
+                .ok_or_else(|| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        format!("resume session not found for cwd: {resume_id}"),
+                    )
+                })?,
         )
     } else {
         None

@@ -331,6 +331,43 @@ async fn rename_edit_and_queue_routes_write_expected_state_files() {
 }
 
 #[tokio::test]
+async fn concurrent_enqueue_requests_do_not_lose_queue_updates() {
+    let (home, app) = test_app();
+    write_session(&home, "sid-a", "codex");
+    let cookie = signed_cookie(&home);
+    let mut tasks = Vec::new();
+
+    for idx in 0..24 {
+        let app = app.clone();
+        let cookie = cookie.clone();
+        tasks.push(tokio::spawn(async move {
+            post_json(
+                app,
+                "/api/sessions/sid-a/enqueue",
+                &cookie,
+                json!({"text": format!("item-{idx}")}),
+            )
+            .await
+        }));
+    }
+
+    for task in tasks {
+        let (status, body) = task.await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["queued"], true);
+    }
+    let queues: Value = serde_json::from_str(
+        &fs::read_to_string(app_dir(&home).join("session_queues.json")).unwrap(),
+    )
+    .unwrap();
+    let items = queues["sid-a"].as_array().unwrap();
+    assert_eq!(items.len(), 24);
+    for idx in 0..24 {
+        assert!(items.contains(&json!(format!("item-{idx}"))));
+    }
+}
+
+#[tokio::test]
 async fn harness_post_rejects_legacy_text_and_persists_normalized_config() {
     let (home, app) = test_app();
     write_session(&home, "sid-a", "codex");
@@ -647,7 +684,7 @@ async fn voice_settings_and_subscription_writes_persist_python_shape() {
     assert_eq!(saved[0]["notifications_enabled"], true);
 
     let (status, body) = post_json(
-        app,
+        app.clone(),
         "/api/notifications/subscription/toggle",
         &cookie,
         json!({"endpoint": "https://push.example/sub", "enabled": false}),
@@ -655,6 +692,16 @@ async fn voice_settings_and_subscription_writes_persist_python_shape() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["subscriptions"][0]["notifications_enabled"], false);
+
+    let (status, body) = post_json(
+        app,
+        "/api/notifications/subscription/toggle",
+        &cookie,
+        json!({"endpoint": "https://push.example/missing", "enabled": false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, json!({"error": "unknown subscription"}));
 }
 
 #[tokio::test]

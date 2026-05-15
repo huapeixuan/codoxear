@@ -3,6 +3,7 @@ use crate::broker_client::{broker_keys, BrokerError};
 use crate::models::SessionRow;
 use crate::routes::json_response;
 use crate::session_loader::find_session;
+use crate::write_cleaners::{attachment_inject_text, clean_safe_filename};
 use axum::body::{to_bytes, Body};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -99,7 +100,8 @@ fn inject_impl(
         .map_err(|_| (StatusCode::BAD_REQUEST, json!({"error": "invalid base64"})))?;
     let out_path = stage_uploaded_file(&state.config.app_dir, session_id, filename, &raw)
         .map_err(|(status, message)| (status, json!({"error": message})))?;
-    let inject_text = format!("Attachment {index}: {}\n", out_path.display());
+    let inject_text = attachment_inject_text(index, &out_path)
+        .map_err(|message| (StatusCode::BAD_REQUEST, json!({"error": message})))?;
     let seq = format!("\x1b[200~{inject_text}\x1b[201~");
     let sock = state
         .config
@@ -147,7 +149,7 @@ fn stage_uploaded_file(
             format!("file too large (max {max_bytes} bytes)"),
         ));
     }
-    let safe_name = safe_filename(filename);
+    let safe_name = clean_safe_filename(filename, "file");
     let subdir = app_dir.join("uploads").join(session_id);
     fs::create_dir_all(&subdir)
         .map_err(|err| (StatusCode::BAD_REQUEST, format!("create upload dir: {err}")))?;
@@ -181,24 +183,6 @@ fn attach_body_limit_bytes() -> usize {
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value > 0)
         .unwrap_or_else(|| 4 * attach_max_bytes().div_ceil(3) + (64 * 1024))
-}
-
-fn safe_filename(name: &str) -> String {
-    let base = FsPath::new(name)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("file");
-    let cleaned = base
-        .chars()
-        .filter(|ch| ch.is_alphanumeric() || matches!(ch, '-' | '_' | '.' | ' '))
-        .collect::<String>()
-        .trim()
-        .replace(' ', "_");
-    if cleaned.is_empty() {
-        "file".to_string()
-    } else {
-        cleaned.chars().take(96).collect()
-    }
 }
 
 #[cfg(unix)]

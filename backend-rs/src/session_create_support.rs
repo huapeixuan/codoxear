@@ -22,15 +22,12 @@ pub(crate) fn spawn_python_broker(
     envs: Vec<(String, String)>,
 ) -> Result<Value, (StatusCode, String)> {
     if request.create_in_tmux {
-        let tmux_window = safe_filename(
-            &format!(
-                "{}-{}",
-                cwd_path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("session"),
-                &spawn_nonce[..6]
-            ),
+        let name = cwd_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("session");
+        let tmux_window = crate::write_cleaners::clean_safe_filename(
+            &format!("{}-{}", name, &spawn_nonce[..6]),
             "session",
         );
         let shell_cmd = build_tmux_shell_command(&argv, &envs);
@@ -453,13 +450,6 @@ pub fn find_pi_resume_session_file_in(
     None
 }
 
-pub(crate) fn find_codex_resume_candidate(
-    cwd: &Path,
-    resume_id: &str,
-) -> Option<CodexResumeCandidate> {
-    find_codex_resume_candidate_in(&codex_home().join("sessions"), cwd, resume_id)
-}
-
 pub fn find_codex_resume_candidate_in(
     sessions_dir: &Path,
     cwd: &Path,
@@ -574,17 +564,10 @@ fn first_user_message_preview_from_codex_log(path: &Path) -> Option<String> {
             continue;
         }
         let value = serde_json::from_slice::<Value>(line).ok()?;
-        let text = if value.get("type").and_then(Value::as_str) == Some("response_item") {
-            let payload = value.get("payload")?.as_object()?;
-            if payload.get("type").and_then(Value::as_str) != Some("message")
-                || payload.get("role").and_then(Value::as_str) != Some("user")
-            {
-                continue;
-            }
-            user_message_text(payload)
-        } else {
+        let Some(message) = codex_user_message_payload(&value) else {
             continue;
         };
+        let text = user_message_text(message);
         let text = text.trim();
         if text.is_empty() || is_scaffold_user_text(text) {
             continue;
@@ -592,6 +575,23 @@ fn first_user_message_preview_from_codex_log(path: &Path) -> Option<String> {
         return Some(resume_preview_from_text(text));
     }
     None
+}
+
+fn codex_user_message_payload(value: &Value) -> Option<&Map<String, Value>> {
+    let message = if value.get("type").and_then(Value::as_str) == Some("response_item") {
+        value.get("payload")?.as_object()?
+    } else if value.get("type").and_then(Value::as_str) == Some("message") {
+        value.as_object()?
+    } else {
+        return None;
+    };
+    (message
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("message")
+        == "message"
+        && message.get("role").and_then(Value::as_str) == Some("user"))
+    .then_some(message)
 }
 
 fn user_message_text(payload: &Map<String, Value>) -> String {
@@ -760,23 +760,6 @@ fn shell_quote(value: &str) -> String {
         return value.to_string();
     }
     format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-fn safe_filename(value: &str, default: &str) -> String {
-    let mut out = String::new();
-    for ch in value.chars() {
-        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
-            out.push(ch);
-        } else {
-            out.push('-');
-        }
-    }
-    let trimmed = out.trim_matches(['.', '-']);
-    if trimmed.is_empty() {
-        default.to_string()
-    } else {
-        trimmed.to_string()
-    }
 }
 
 pub(crate) fn spawn_nonce() -> String {

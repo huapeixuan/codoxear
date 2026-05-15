@@ -93,3 +93,37 @@ fn pi_resume_file_requires_id_and_cwd_to_match_same_header() {
     )
     .is_none());
 }
+
+#[test]
+fn codex_resume_candidate_ignores_subagent_logs_and_reads_legacy_message_preview() {
+    let home = TempDir::new().unwrap();
+    let cwd = home.path().join("repo");
+    fs::create_dir_all(&cwd).unwrap();
+    let sessions = home.path().join(".codex/sessions/2026/05/15");
+    let subagent = sessions.join("rollout-subagent.jsonl");
+    let wanted = sessions.join("rollout-legacy-message.jsonl");
+    write_jsonl(
+        &subagent,
+        &[
+            json!({"type":"session_meta","payload":{"id":"resume-b","cwd":cwd.to_string_lossy(),"source":{"subagent":"worker"}}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"wrong"}]}}),
+        ],
+    );
+    write_jsonl(
+        &wanted,
+        &[
+            json!({"type":"session_meta","payload":{"id":"resume-b","cwd":cwd.to_string_lossy(),"source":"cli"}}),
+            json!({"type":"message","role":"user","content":[{"type":"input_text","text":"Legacy message preview from resumed session."}]}),
+        ],
+    );
+
+    let candidate =
+        find_codex_resume_candidate_in(&home.path().join(".codex/sessions"), &cwd, "resume-b")
+            .expect("matching non-subagent codex resume candidate");
+
+    assert_eq!(candidate.log_path, wanted);
+    assert_eq!(
+        candidate.first_user_message.as_deref(),
+        Some("Legacy message preview from resumed session.")
+    );
+}

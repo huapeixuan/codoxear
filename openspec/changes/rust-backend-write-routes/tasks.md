@@ -7,9 +7,9 @@
 
 ## 1. Shared write infrastructure
 
-- [ ] 1.1 Add `backend-rs/src/state_files.rs` or equivalent with `read_modify_write_json`, `write_json_atomic`, file-mode preservation, temp-file + fsync + rename, and parent fsync best effort. _(partial: added atomic JSON writer + parent fsync + lock wrapper; mode preservation/read_modify helper still pending)_
+- [x] 1.1 Add `backend-rs/src/state_files.rs` or equivalent with `read_modify_write_json`, `write_json_atomic`, file-mode preservation, temp-file + fsync + rename, and parent fsync best effort.
 - [x] 1.2 Add per-file in-process mutex/advisory lock helper for `harness.json`, `session_queues.json`, `session_aliases.json`, `session_sidebar.json`, `session_files.json`, `cwd_groups.json`, `voice_settings.json`, and `push_subscriptions.json`.
-- [ ] 1.3 Add Rust helpers mirroring Python cleaners: alias, priority offset, snooze_until, dependency_session_id, harness cooldown, harness remaining, queue item images, hidden_after_live_start_ts, safe filename, attachment inject text. _(partial: metadata/queue/harness cleaners added; file/attachment cleaners pending)_
+- [x] 1.3 Add Rust helpers mirroring Python cleaners: alias, priority offset, snooze_until, dependency_session_id, harness cooldown, harness remaining, queue item images, hidden_after_live_start_ts, safe filename, attachment inject text.
 - [x] 1.4 Add unit tests for all cleaners using Python edge cases from `codoxear/server.py` and `codoxear/voice_push.py`.
 - [x] 1.5 Extend line-count CI gate if new modules are added; ensure every `backend-rs/src/**/*.rs` file remains ≤ 800 lines.
 
@@ -41,7 +41,7 @@
 - [x] 5.2 Implement `POST /api/sessions/{id}/enqueue` with text/images validation, Pi session file touch behavior where applicable, `queued/queue_len` response.
 - [x] 5.3 Implement `POST /api/sessions/{id}/queue/delete` and `/queue/update`, including index required, out-of-range mapping, image preservation on update, empty queue cleanup.
 - [x] 5.4 Add contract tests for enqueue text, enqueue images, update preserves images, delete last item removes session key, invalid index/text, unknown session.
-- [ ] 5.5 Add a concurrent enqueue Rust test to ensure no lost update under multiple simultaneous requests to the same queue file.
+- [x] 5.5 Add a concurrent enqueue Rust test to ensure no lost update under multiple simultaneous requests to the same queue file.
 
 ## 6. Harness config endpoint
 
@@ -64,7 +64,7 @@
 - [x] 8.3 Implement `POST /api/files/read` and `/api/files/inspect` using Phase 2 file view helper and add file history when `session_id` is valid.
 - [x] 8.4 Implement `POST /api/files/blob` alias behavior, including query `path`, inline image/pdf bytes, Content-Disposition, Cache-Control, and errors.
 - [x] 8.5 Implement `POST /api/sessions/{id}/inject_file` and `/inject_image`: body size cap, base64 validation, filename sanitization, decoded byte limit, upload mode `0600`, Pi 409 rejection, bracketed paste broker `keys` command.
-- [ ] 8.6 Add contract tests for file update success, stale version conflict, create success/conflict, path traversal, non-editable file, global read/inspect/blob, file history round-trip, upload too large, invalid base64, Pi injection rejection, and successful non-Pi injection command. _(partial: Rust integration coverage added for global read/inspect history, file update success, stale conflict, history round-trip, Pi injection rejection, non-Pi >2MiB upload success, and decoded upload too large)_
+- [x] 8.6 Add contract tests for file update success, stale version conflict, create success/conflict, path traversal, non-editable file, global read/inspect/blob, file history round-trip, upload too large, invalid base64, Pi injection rejection, and successful non-Pi injection command.
 
 ## 9. Session create/delete/takeover lifecycle
 
@@ -75,7 +75,7 @@
 - [x] 9.5 Implement tmux create path parity or at minimum no-tmux + tmux-unavailable parity; if tmux support is deferred, update spec/tasks before coding and mark as a blocker for full Phase 3 DoD.
 - [ ] 9.6 Implement `POST /api/sessions/{id}/delete`: historical row hide, broker shutdown via `shutdown`, fallback kill if needed, hidden_sessions/session state cleanup. _(partial: active session shutdown/kill, hidden_sessions, and state cleanup implemented; historical row handling pending)_
 - [x] 9.7 Implement `POST /api/sessions/{id}/takeover/open`: descriptor eligibility check and terminal open behavior; if platform-specific open cannot run in CI, cover descriptor-not-eligible and mock open command. _(terminal launch is best-effort and CI covers descriptor-not-eligible path)_
-- [ ] 9.8 Add contract tests for create codex/pi happy path with stub/fake broker command where possible, cwd required/creation errors, resume not found, delete unknown/success cleanup, and takeover not eligible. _(partial: Rust integration coverage includes delete success cleanup and takeover not eligible)_
+- [ ] 9.8 Add contract tests for create codex/pi happy path with stub/fake broker command where possible, cwd required/creation errors, resume not found, delete unknown/success cleanup, and takeover not eligible. _(partial: contract coverage added for cwd required, creation args error, resume not found, delete unknown/success cleanup, and takeover not eligible; create codex/pi happy path with fake broker remains pending)_
 
 ## 10. Lightweight voice/subscription writes and hooks
 
@@ -85,7 +85,7 @@
 - [x] 10.4 Implement `POST /api/audio/listener`: client_id/enabled validation and active listener heartbeat state if in-memory state exists; do not start HLS/TTS worker.
 - [x] 10.5 Decide and implement Phase 3 behavior for `/api/notifications/test_push` and `/api/audio/test_announcement`: either leave unregistered/404 or return explicit 501 feature-disabled; update endpoint inventory to keep Phase 5 owner.
 - [x] 10.6 Implement unauthenticated `POST /api/hooks/notify` and `/api/v1/hooks/notify` returning `{"ignored":true}`.
-- [ ] 10.7 Add contract tests for settings update, subscription upsert/toggle/unknown, listener heartbeat validation, debug endpoints non-success/no side effects, and hooks no-auth behavior. _(partial: Rust integration coverage added for settings update, subscription upsert/toggle, listener heartbeat, hooks no-auth, and debug endpoint feature-disabled/no-side-effect; unknown toggle contract coverage pending)_
+- [x] 10.7 Add contract tests for settings update, subscription upsert/toggle/unknown, listener heartbeat validation, debug endpoints non-success/no side effects, and hooks no-auth behavior.
 
 ## 11. Rust queue and harness workers
 

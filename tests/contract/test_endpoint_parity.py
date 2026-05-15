@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import socket
@@ -993,7 +995,11 @@ def test_send_ui_interrupt_post_stub_broker_parity(
         return {"busy": False, "queue_len": 0, "token": None}
 
     _write_contract_session(
-        shared_app_dir, session_id="sess-pi", cwd=cwd, backend="pi", broker_handler=pi_handler
+        shared_app_dir,
+        session_id="sess-pi",
+        cwd=cwd,
+        backend="pi",
+        broker_handler=pi_handler,
     )
 
     send = _post_response(
@@ -1079,7 +1085,12 @@ def test_send_ui_interrupt_post_stub_broker_parity(
     )
     assert ui.status == 200
     assert ui.json() == {"ok": True}
-    assert {"cmd": "ui_response", "id": "q1", "value": "yes", "confirmed": True} in pi_requests
+    assert {
+        "cmd": "ui_response",
+        "id": "q1",
+        "value": "yes",
+        "confirmed": True,
+    } in pi_requests
 
     legacy_requests: list[dict[str, Any]] = []
 
@@ -1092,7 +1103,11 @@ def test_send_ui_interrupt_post_stub_broker_parity(
         return {"busy": False, "queue_len": 0, "token": None}
 
     _write_contract_session(
-        shared_app_dir, session_id="sess-legacy", cwd=cwd, backend="pi", broker_handler=legacy_handler
+        shared_app_dir,
+        session_id="sess-legacy",
+        cwd=cwd,
+        backend="pi",
+        broker_handler=legacy_handler,
     )
     legacy = _post_response(
         rust_server_url,
@@ -1141,6 +1156,14 @@ def test_file_write_global_file_and_injection_post_contract(
     cwd.mkdir()
     target = cwd / "note.txt"
     target.write_text("old", encoding="utf-8")
+    image = cwd / "pixel.png"
+    image.write_bytes(
+        base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+        )
+    )
+    binary = cwd / "blob.bin"
+    binary.write_bytes(b"\x00\x01")
     _write_contract_session(shared_app_dir, cwd=cwd)
     _write_contract_session(shared_app_dir, session_id="sess-pi", cwd=cwd, backend="pi")
     _prime_contract_session_discovery(python_server_url, signed_auth_cookie)
@@ -1161,6 +1184,51 @@ def test_file_write_global_file_and_injection_post_contract(
     )
     assert python_read["text"] == "new"
 
+    stale = _post_response(
+        rust_server_url,
+        "/api/sessions/sess-contract/file/write",
+        signed_auth_cookie,
+        {"path": "note.txt", "text": "lost", "version": version},
+    )
+    assert stale.status == 409
+    assert stale.json()["conflict"] is True
+
+    created = _post_response(
+        rust_server_url,
+        "/api/sessions/sess-contract/file/write",
+        signed_auth_cookie,
+        {"path": "created.txt", "text": "made", "create": True},
+    )
+    assert created.status == 200
+    assert (cwd / "created.txt").read_text(encoding="utf-8") == "made"
+    create_conflict = _post_response(
+        rust_server_url,
+        "/api/sessions/sess-contract/file/write",
+        signed_auth_cookie,
+        {"path": "created.txt", "text": "again", "create": True},
+    )
+    assert create_conflict.status == 409
+    assert create_conflict.json()["conflict"] is True
+
+    traversal = _post_response(
+        rust_server_url,
+        "/api/sessions/sess-contract/file/write",
+        signed_auth_cookie,
+        {"path": "../escape.txt", "text": "no", "create": True},
+    )
+    assert traversal.status == 400
+    non_editable = _post_response(
+        rust_server_url,
+        "/api/sessions/sess-contract/file/write",
+        signed_auth_cookie,
+        {
+            "path": "blob.bin",
+            "text": "no",
+            "version": hashlib.sha256(b"\x00\x01").hexdigest(),
+        },
+    )
+    assert non_editable.status == 400
+
     global_read = _post_response(
         rust_server_url,
         "/api/files/read",
@@ -1177,6 +1245,27 @@ def test_file_write_global_file_and_injection_post_contract(
     )
     assert inspect.status == 200
     assert inspect.json()["size"] == 3
+    blob = _post_response(
+        rust_server_url,
+        f"/api/files/blob?path={urllib.parse.quote(str(image))}",
+        signed_auth_cookie,
+        {},
+    )
+    assert blob.status == 200
+    assert blob.headers["content-type"].startswith("image/png")
+
+    history = json.loads(
+        (shared_app_dir / "session_files.json").read_text(encoding="utf-8")
+    )
+    assert str(target) in history["sid:sess-contract"]
+
+    bad_b64 = _post_response(
+        rust_server_url,
+        "/api/sessions/sess-contract/inject_file",
+        signed_auth_cookie,
+        {"data_b64": "not-base64", "filename": "x.txt", "attachment_index": 1},
+    )
+    assert bad_b64.status == 400
 
     pi_inject = _post_response(
         rust_server_url,
@@ -1186,6 +1275,38 @@ def test_file_write_global_file_and_injection_post_contract(
     )
     assert pi_inject.status == 409
     assert pi_inject.json()["operation"] == "attachment_injection"
+
+    broker_requests: list[dict[str, Any]] = []
+
+    def broker_handler(request: dict[str, Any]) -> dict[str, Any]:
+        broker_requests.append(request)
+        if request.get("cmd") == "keys":
+            return {"ok": True}
+        return {"busy": False, "queue_len": 0, "token": None}
+
+    _write_contract_session(
+        shared_app_dir,
+        session_id="sess-inject",
+        cwd=cwd,
+        backend="codex",
+        broker_handler=broker_handler,
+    )
+    injected = _post_response(
+        rust_server_url,
+        "/api/sessions/sess-inject/inject_file",
+        signed_auth_cookie,
+        {
+            "data_b64": base64.b64encode(b"hello").decode("ascii"),
+            "filename": "../hello file.txt",
+            "attachment_index": 2,
+        },
+    )
+    assert injected.status == 200
+    assert Path(injected.json()["path"]).name.endswith("hello_file.txt")
+    assert any(
+        request.get("cmd") == "keys" and "Attachment 2:" in request.get("seq", "")
+        for request in broker_requests
+    )
 
 
 @pytest.mark.post
@@ -1252,6 +1373,7 @@ def test_session_create_post_validation_and_tmux_unavailable_parity(
     python_server_url: str,
     rust_server_url: str,
     signed_auth_cookie: str,
+    shared_app_dir: Path,
     tmp_path: Path,
 ) -> None:
     for base_url in (python_server_url, rust_server_url):
@@ -1276,3 +1398,54 @@ def test_session_create_post_validation_and_tmux_unavailable_parity(
     )
     if rust_tmux.status == 400:
         assert rust_tmux.json()["error"] == "tmux is unavailable on this host"
+
+    resume_missing = _post_response(
+        rust_server_url,
+        "/api/sessions",
+        signed_auth_cookie,
+        {
+            "cwd": str(tmp_path),
+            "resume_session_id": "missing-resume",
+            "create_in_tmux": False,
+        },
+    )
+    assert resume_missing.status == 400
+    assert "resume session not found" in resume_missing.json()["error"]
+
+    delete_unknown = _post_response(
+        rust_server_url,
+        "/api/sessions/missing/delete",
+        signed_auth_cookie,
+        {},
+    )
+    assert delete_unknown.status == 404
+
+    cwd = tmp_path / "delete-project"
+    cwd.mkdir()
+    _write_contract_session(shared_app_dir, session_id="sess-delete", cwd=cwd)
+    (shared_app_dir / "session_aliases.json").write_text(
+        json.dumps({"sess-delete": "Alias"}), encoding="utf-8"
+    )
+    delete_ok = _post_response(
+        rust_server_url,
+        "/api/sessions/sess-delete/delete",
+        signed_auth_cookie,
+        {},
+    )
+    assert delete_ok.status == 200
+    assert "sess-delete" in json.loads(
+        (shared_app_dir / "hidden_sessions.json").read_text(encoding="utf-8")
+    )
+    assert "sess-delete" not in json.loads(
+        (shared_app_dir / "session_aliases.json").read_text(encoding="utf-8")
+    )
+
+    _write_contract_session(shared_app_dir, session_id="sess-takeover", cwd=cwd)
+    takeover = _post_response(
+        rust_server_url,
+        "/api/sessions/sess-takeover/takeover/open",
+        signed_auth_cookie,
+        {},
+    )
+    assert takeover.status == 200
+    assert takeover.json()["eligible"] is False

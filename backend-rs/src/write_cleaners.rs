@@ -1,5 +1,6 @@
 use axum::http::StatusCode;
 use serde_json::{json, Value};
+use std::path::Path;
 
 pub fn normalize_pi_image_inputs(value: &Value) -> Result<Vec<Value>, String> {
     if value.is_null() {
@@ -173,6 +174,39 @@ pub fn clean_harness_remaining(value: &Value) -> Result<i64, (StatusCode, String
 pub fn clean_positive_number(value: &Value) -> Option<f64> {
     let out = value.as_f64()?;
     (out.is_finite() && out > 0.0).then_some(out)
+}
+
+pub fn clean_hidden_after_live_start_ts(value: &Value) -> Option<f64> {
+    if value.is_null() || value.is_boolean() {
+        return None;
+    }
+    clean_positive_number(value)
+}
+
+pub fn clean_safe_filename(name: &str, default: &str) -> String {
+    let base = Path::new(name)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(default);
+    let cleaned = base
+        .chars()
+        .filter(|ch| ch.is_alphanumeric() || matches!(ch, '-' | '_' | '.' | ' '))
+        .collect::<String>()
+        .trim()
+        .replace(' ', "_");
+    let cleaned = cleaned.trim_matches(['.', '-']).to_string();
+    if cleaned.is_empty() {
+        default.to_string()
+    } else {
+        cleaned.chars().take(96).collect()
+    }
+}
+
+pub fn attachment_inject_text(index: i64, path: &Path) -> Result<String, String> {
+    if index <= 0 {
+        return Err("attachment_index must be >= 1".to_string());
+    }
+    Ok(format!("Attachment {index}: {}\n", path.display()))
 }
 
 pub fn legacy_ui_response_text(payload: &Value) -> Option<String> {

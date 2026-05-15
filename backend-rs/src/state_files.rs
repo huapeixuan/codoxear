@@ -2,6 +2,9 @@ use axum::http::StatusCode;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
@@ -116,6 +119,18 @@ pub fn write_array_file(
     write_value(path, &Value::Object(object))
 }
 
+pub fn read_modify_write_json<T>(
+    path: &Path,
+    update: impl FnOnce(&mut Value) -> Result<T, (StatusCode, String)>,
+) -> Result<T, (StatusCode, String)> {
+    with_state_file_lock(path, || {
+        let mut value = read_value(path)?.unwrap_or(Value::Object(Map::new()));
+        let result = update(&mut value)?;
+        write_value(path, &value)?;
+        Ok(result)
+    })
+}
+
 pub fn write_value(path: &Path, value: &Value) -> Result<(), (StatusCode, String)> {
     let parent = path.parent().ok_or((
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -128,15 +143,30 @@ pub fn write_value(path: &Path, value: &Value) -> Result<(), (StatusCode, String
         )
     })?;
     let tmp = path.with_extension("json.tmp");
-    let raw = serde_json::to_string_pretty(value)
+    let sorted = sorted_json_value(value);
+    let raw = serde_json::to_string_pretty(&sorted)
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?
         + "\n";
-    fs::write(&tmp, raw).map_err(|err| {
+    let mut file = fs::File::create(&tmp).map_err(|err| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("write {}: {err}", tmp.display()),
         )
     })?;
+    file.write_all(raw.as_bytes()).map_err(|err| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("write {}: {err}", tmp.display()),
+        )
+    })?;
+    file.sync_all().map_err(|err| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("sync {}: {err}", tmp.display()),
+        )
+    })?;
+    drop(file);
+    preserve_existing_mode(path, &tmp)?;
     fs::rename(&tmp, path).map_err(|err| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -146,6 +176,46 @@ pub fn write_value(path: &Path, value: &Value) -> Result<(), (StatusCode, String
     if let Ok(parent_file) = fs::File::open(parent) {
         let _ = parent_file.sync_all();
     }
+    Ok(())
+}
+
+fn sorted_json_value(value: &Value) -> Value {
+    match value {
+        Value::Object(object) => {
+            let mut keys = object.keys().cloned().collect::<Vec<_>>();
+            keys.sort();
+            let mut sorted = Map::new();
+            for key in keys {
+                if let Some(value) = object.get(&key) {
+                    sorted.insert(key, sorted_json_value(value));
+                }
+            }
+            Value::Object(sorted)
+        }
+        Value::Array(items) => Value::Array(items.iter().map(sorted_json_value).collect()),
+        other => other.clone(),
+    }
+}
+
+#[cfg(unix)]
+fn preserve_existing_mode(path: &Path, tmp: &Path) -> Result<(), (StatusCode, String)> {
+    let Ok(metadata) = fs::metadata(path) else {
+        return Ok(());
+    };
+    fs::set_permissions(
+        tmp,
+        fs::Permissions::from_mode(metadata.permissions().mode() & 0o777),
+    )
+    .map_err(|err| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("chmod {}: {err}", tmp.display()),
+        )
+    })
+}
+
+#[cfg(not(unix))]
+fn preserve_existing_mode(_path: &Path, _tmp: &Path) -> Result<(), (StatusCode, String)> {
     Ok(())
 }
 
