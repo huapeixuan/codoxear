@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::ffi::CString;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::os::fd::FromRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -101,6 +101,7 @@ pub struct State {
     pub resume_session_id: Option<String>,
     pub busy: bool,
     pub output_tail: String,
+    pub stdin_eof: bool,
     pub token: Option<Value>,
     pub child_stdin: Option<std::process::ChildStdin>,
     pub pty_master: Option<std::fs::File>,
@@ -171,6 +172,7 @@ fn run_inner(cli: BrokerCli, env: BrokerEnv) -> Result<i32, String> {
         resume_session_id,
         busy: false,
         output_tail: String::new(),
+        stdin_eof: false,
         token: None,
         child_stdin,
         pty_master: pty_master.as_ref().and_then(|f| f.try_clone().ok()),
@@ -182,6 +184,12 @@ fn run_inner(cli: BrokerCli, env: BrokerEnv) -> Result<i32, String> {
     let stop = Arc::new(AtomicBool::new(false));
     start_socket_server(state.clone(), env.clone(), stop.clone())?;
     start_output_reader(&mut child, state.clone(), stop.clone());
+    if let ChildHandle::Pty { master, .. } = &child {
+        if let Ok(stdin_master) = master.try_clone() {
+            crate::broker::pty::start_terminal_bridge(stdin_master, state.clone(), stop.clone());
+        }
+        crate::broker::pty::install_sigwinch_resize(master.as_raw_fd());
+    }
     if env.backend == "codex" {
         start_codex_log_watcher(state.clone(), env.clone(), stop.clone());
     }
@@ -219,8 +227,7 @@ fn spawn_pi_process(cli: &BrokerCli, env: &BrokerEnv) -> Result<ChildHandle, Str
 }
 
 fn spawn_codex_pty(cli: &BrokerCli, env: &BrokerEnv) -> Result<ChildHandle, String> {
-    let rows = terminal_size().0;
-    let cols = terminal_size().1;
+    let (rows, cols) = crate::broker::pty::terminal_size();
     let argv = codex_exec_argv(cli, env);
     let mut master_fd: libc::c_int = -1;
     let mut winsize = libc::winsize {
@@ -619,21 +626,6 @@ fn seq_bytes(raw: &str) -> Vec<u8> {
     }
 }
 
-fn terminal_size() -> (u16, u16) {
-    let mut size = libc::winsize {
-        ws_row: 40,
-        ws_col: 120,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    let ok = unsafe { libc::ioctl(libc::STDIN_FILENO, libc::TIOCGWINSZ, &mut size) } == 0;
-    if ok && size.ws_row > 0 && size.ws_col > 0 {
-        (size.ws_row, size.ws_col)
-    } else {
-        (40, 120)
-    }
-}
-
 fn terminate_process_group(pid: u32) {
     if pid == 0 {
         return;
@@ -721,6 +713,7 @@ mod tests {
             resume_session_id: None,
             busy: backend == "codex",
             output_tail: "tail".into(),
+            stdin_eof: false,
             token: None,
             child_stdin: None,
             pty_master: None,

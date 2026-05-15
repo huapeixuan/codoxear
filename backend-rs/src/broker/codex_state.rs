@@ -327,6 +327,7 @@ mod tests {
             resume_session_id: None,
             busy: false,
             output_tail: String::new(),
+            stdin_eof: false,
             token: None,
             child_stdin: None,
             pty_master: None,

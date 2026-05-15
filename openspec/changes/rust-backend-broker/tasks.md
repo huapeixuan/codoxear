@@ -35,12 +35,12 @@
 ## 4. Codex PTY broker implementation
 
 - [x] 4.1 Implement Codex child spawn in a PTY with cwd, `TERM`, `COLUMNS`, `LINES`, backend home env, configured `CODEX_BIN`, post-`--` args, and headless web-owned login-shell behavior matching Python.
-- [ ] 4.2 Implement terminal-owned stdin raw-mode forwarding, stdout forwarding, termios restore, and EOF handling.
-- [ ] 4.3 Implement SIGWINCH resize propagation to the PTY and add a test around the resize abstraction.
+- [x] 4.2 Implement terminal-owned stdin raw-mode forwarding, stdout forwarding, termios restore, and EOF handling.
+- [x] 4.3 Implement SIGWINCH resize propagation to the PTY and add a test around the resize abstraction.
 - [x] 4.4 Implement `send` prompt injection using the same bracketed paste / enter sequence behavior as Python; include optional `enter_seq` support.
 - [x] 4.5 Implement `keys` raw sequence decoding compatible with Python unicode-escape handling and direct PTY write.
 - [x] 4.6 Implement process-group and child cleanup for normal exit, socket shutdown, server delete, and broker crash paths; Linux may use pdeathsig where available.
-- [ ] 4.7 Add PTY/fake-PTY tests for send/keys/state/tail/busy transitions and cleanup; keep real Codex binary out of unit tests.
+- [x] 4.7 Add PTY/fake-PTY tests for send/keys/state/tail/busy transitions and cleanup; keep real Codex binary out of unit tests.
 
 ## 5. Codex rollout log discovery and state tracking
 
