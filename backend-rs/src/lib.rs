@@ -3,6 +3,7 @@ pub mod broker_client;
 pub mod file_post;
 pub mod git_context;
 pub mod handlers;
+pub mod historical_sessions;
 pub mod inject_post;
 pub mod launch_defaults;
 pub mod lifecycle_post;

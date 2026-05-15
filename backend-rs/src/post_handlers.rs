@@ -1,5 +1,6 @@
 use crate::app_state::AppState;
 use crate::broker_client::{broker_keys, broker_send, broker_ui_response, BrokerError};
+use crate::historical_sessions::{parse_historical_session_id, send_historical_pi};
 use crate::lifecycle_post::heartbeat_impl;
 use crate::models::SessionRow;
 use crate::routes::{internal_error, json_response};
@@ -421,7 +422,7 @@ fn edit_session_impl(
     )
 }
 
-fn enqueue_impl(
+pub(crate) fn enqueue_impl(
     state: &AppState,
     session_id: &str,
     text: &str,
@@ -596,6 +597,12 @@ fn send_impl(
     text: &str,
     images: Vec<Value>,
 ) -> Result<Value, (StatusCode, String)> {
+    if let Some((backend, resume_id)) = parse_historical_session_id(session_id) {
+        if backend == "pi" {
+            return send_historical_pi(state, resume_id, text, images);
+        }
+        return Err((StatusCode::NOT_FOUND, "unknown session".to_string()));
+    }
     let row = session_or_404(state, session_id)?;
     if text.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "text required".to_string()));

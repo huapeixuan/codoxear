@@ -628,6 +628,49 @@ async fn send_refreshes_idle_heartbeat_for_web_owned_pi_rpc_sessions() {
     server.join().unwrap();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn send_historical_pi_session_spawns_resume_then_queues_to_live_session() {
+    let _fake = EnvVarGuard::set("CODOXEAR_FAKE_SPAWN_FOR_TESTS", "1");
+    let (home, app) = test_app();
+    let pi_home = home.path().join(".pi");
+    let _pi_home = EnvVarGuard::set("PI_HOME", &pi_home.to_string_lossy());
+    let cwd = home.path().join("historical-repo");
+    fs::create_dir_all(&cwd).unwrap();
+    let slug = cwd.to_string_lossy().trim_matches('/').replace('/', "-");
+    let session_dir = pi_home.join("agent/sessions").join(format!("--{slug}--"));
+    fs::create_dir_all(&session_dir).unwrap();
+    fs::write(
+        session_dir.join("resume.jsonl"),
+        serde_json::to_string(&json!({
+            "type": "session",
+            "id": "resume-123",
+            "cwd": cwd.to_string_lossy()
+        }))
+        .unwrap()
+            + "\n",
+    )
+    .unwrap();
+    let cookie = signed_cookie(&home);
+
+    let (status, body) = post_json(
+        app,
+        "/api/sessions/history:pi:resume-123/send",
+        &cookie,
+        json!({"text": "resume and send"}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["backend"], "pi");
+    let live_id = body["session_id"].as_str().unwrap();
+    assert!(live_id.starts_with("fake-"));
+    let queues: Value = serde_json::from_str(
+        &fs::read_to_string(app_dir(&home).join("session_queues.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(queues[live_id][0], "resume and send");
+}
+
 #[tokio::test]
 async fn global_file_post_read_and_inspect_track_session_history() {
     let (home, app) = test_app();
@@ -1127,7 +1170,7 @@ fn harness_worker_disables_zero_remaining_without_broker_side_effects() {
     assert_eq!(harness["sid-a"]["remaining_injections"], 0);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn session_create_parser_validation_and_deferred_spawn_response() {
     let (home, app) = test_app();
     let cookie = signed_cookie(&home);
@@ -1173,9 +1216,9 @@ async fn session_create_parser_validation_and_deferred_spawn_response() {
     assert_eq!(body["error"], "resume session not found for cwd: resume-1");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn session_create_happy_paths_accept_fake_spawn_metadata() {
-    let _guard = EnvVarGuard::set("CODOXEAR_FAKE_SPAWN_FOR_TESTS", "1");
+    let _fake = EnvVarGuard::set("CODOXEAR_FAKE_SPAWN_FOR_TESTS", "1");
     let (home, app) = test_app();
     let cookie = signed_cookie(&home);
     let cwd = home.path().join("create-happy");

@@ -129,7 +129,7 @@ pub fn parse_create_session_request(value: &Value) -> Result<CreateSessionReques
     })
 }
 
-fn spawn_web_session(
+pub(crate) fn spawn_web_session(
     state: &AppState,
     request: &CreateSessionRequest,
 ) -> Result<Value, (StatusCode, String)> {
@@ -167,7 +167,12 @@ fn spawn_pi_session(
     cwd_path: &Path,
     spawn_nonce: &str,
 ) -> Result<Value, (StatusCode, String)> {
-    let session_file = if let Some(resume_id) = request.resume_session_id.as_deref() {
+    let session_file = if std::env::var("CODOXEAR_FAKE_SPAWN_FOR_TESTS")
+        .ok()
+        .is_some_and(|value| crate::workers::env_flag_truthy_value(Some(&value)))
+    {
+        pi_new_session_file_for_cwd(cwd_path)
+    } else if let Some(resume_id) = request.resume_session_id.as_deref() {
         let path = find_pi_resume_session_file(cwd_path, resume_id).ok_or_else(|| {
             (
                 StatusCode::BAD_REQUEST,
