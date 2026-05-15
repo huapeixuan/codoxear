@@ -21,6 +21,17 @@ pub(crate) fn spawn_python_broker(
     argv: Vec<String>,
     envs: Vec<(String, String)>,
 ) -> Result<Value, (StatusCode, String)> {
+    if std::env::var("CODOXEAR_FAKE_SPAWN_FOR_TESTS")
+        .ok()
+        .is_some_and(|value| crate::workers::env_flag_truthy_value(Some(&value)))
+    {
+        return Ok(json!({
+            "ok": true,
+            "session_id": format!("fake-{spawn_nonce}"),
+            "backend": request.backend,
+            "broker_pid": std::process::id(),
+        }));
+    }
     if request.create_in_tmux {
         let name = cwd_path
             .file_name()

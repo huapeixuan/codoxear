@@ -21,6 +21,33 @@ use std::thread;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let previous = std::env::var(key).ok();
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(previous) = &self.previous {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+}
+
 fn test_app() -> (TempDir, axum::Router) {
     let home = TempDir::new().expect("temp home");
     let app_dir = home.path().join(".local/share/codoxear");
@@ -1144,4 +1171,35 @@ async fn session_create_parser_validation_and_deferred_spawn_response() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "resume session not found for cwd: resume-1");
+}
+
+#[tokio::test]
+async fn session_create_happy_paths_accept_fake_spawn_metadata() {
+    let _guard = EnvVarGuard::set("CODOXEAR_FAKE_SPAWN_FOR_TESTS", "1");
+    let (home, app) = test_app();
+    let cookie = signed_cookie(&home);
+    let cwd = home.path().join("create-happy");
+
+    let (status, body) = post_json(
+        app.clone(),
+        "/api/sessions",
+        &cookie,
+        json!({"cwd": cwd.to_string_lossy(), "backend": "codex", "create_in_tmux": false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["backend"], "codex");
+    assert!(body["session_id"].as_str().unwrap().starts_with("fake-"));
+
+    let (status, body) = post_json(
+        app,
+        "/api/sessions",
+        &cookie,
+        json!({"cwd": cwd.to_string_lossy(), "backend": "pi", "create_in_tmux": false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["backend"], "pi");
 }
