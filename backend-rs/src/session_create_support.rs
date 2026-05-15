@@ -21,13 +21,14 @@ pub(crate) fn spawn_python_broker(
     argv: Vec<String>,
     envs: Vec<(String, String)>,
 ) -> Result<Value, (StatusCode, String)> {
-    if std::env::var("CODOXEAR_FAKE_SPAWN_FOR_TESTS")
-        .ok()
-        .is_some_and(|value| crate::workers::env_flag_truthy_value(Some(&value)))
-    {
+    if state.fake_spawn_for_tests {
+        let session_id = state
+            .fake_spawn_session_id_for_tests
+            .clone()
+            .unwrap_or_else(|| format!("fake-{spawn_nonce}"));
         return Ok(json!({
             "ok": true,
-            "session_id": format!("fake-{spawn_nonce}"),
+            "session_id": session_id,
             "backend": request.backend,
             "broker_pid": std::process::id(),
         }));

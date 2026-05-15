@@ -167,10 +167,7 @@ fn spawn_pi_session(
     cwd_path: &Path,
     spawn_nonce: &str,
 ) -> Result<Value, (StatusCode, String)> {
-    let session_file = if std::env::var("CODOXEAR_FAKE_SPAWN_FOR_TESTS")
-        .ok()
-        .is_some_and(|value| crate::workers::env_flag_truthy_value(Some(&value)))
-    {
+    let session_file = if state.fake_spawn_for_tests {
         pi_new_session_file_for_cwd(cwd_path)
     } else if let Some(resume_id) = request.resume_session_id.as_deref() {
         let path = find_pi_resume_session_file(cwd_path, resume_id).ok_or_else(|| {

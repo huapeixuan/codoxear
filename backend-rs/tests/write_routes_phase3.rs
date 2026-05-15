@@ -49,13 +49,33 @@ impl Drop for EnvVarGuard {
 }
 
 fn test_app() -> (TempDir, axum::Router) {
-    let home = TempDir::new().expect("temp home");
+    test_app_with_fake_spawn(false)
+}
+
+fn test_app_with_fake_spawn(fake_spawn_for_tests: bool) -> (TempDir, axum::Router) {
+    test_app_with_spawn_options(fake_spawn_for_tests, None)
+}
+
+fn test_app_with_spawn_options(
+    fake_spawn_for_tests: bool,
+    fake_spawn_session_id_for_tests: Option<String>,
+) -> (TempDir, axum::Router) {
+    let home = temp_home();
     let app_dir = home.path().join(".local/share/codoxear");
     fs::create_dir_all(&app_dir).unwrap();
     let state = AppState {
         config: RuntimeConfig { app_dir },
+        fake_spawn_for_tests,
+        fake_spawn_session_id_for_tests,
     };
     (home, router(state))
+}
+
+fn temp_home() -> TempDir {
+    tempfile::Builder::new()
+        .prefix("cx")
+        .tempdir_in("/tmp")
+        .unwrap()
 }
 
 fn app_dir(home: &TempDir) -> std::path::PathBuf {
@@ -109,6 +129,32 @@ fn patch_session_sidecar(home: &TempDir, session_id: &str, patch: Value) {
         value[key] = patch_value.clone();
     }
     fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+}
+
+fn write_session_sidecar(home: &TempDir, session_id: &str, backend: &str, cwd: &Path) -> PathBuf {
+    let app_dir = app_dir(home);
+    let socks = app_dir.join("socks");
+    fs::create_dir_all(&socks).unwrap();
+    let sock_path = socks.join(format!("{session_id}.sock"));
+    fs::write(
+        sock_path.with_extension("json"),
+        serde_json::to_vec(&json!({
+            "session_id": session_id,
+            "cwd": cwd.to_string_lossy(),
+            "backend": backend,
+            "agent_backend": backend,
+            "broker_pid": process::id(),
+            "codex_pid": process::id(),
+            "start_ts": 1000.0,
+            "updated_ts": 1001.0,
+            "sock_path": sock_path.to_string_lossy(),
+            "owner": "web",
+            "transport": if backend == "pi" { "pi-rpc" } else { "pty" },
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    sock_path
 }
 
 fn queue_len_on_disk(app_dir: &Path, session_id: &str) -> usize {
@@ -629,13 +675,22 @@ async fn send_refreshes_idle_heartbeat_for_web_owned_pi_rpc_sessions() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn send_historical_pi_session_spawns_resume_then_queues_to_live_session() {
-    let _fake = EnvVarGuard::set("CODOXEAR_FAKE_SPAWN_FOR_TESTS", "1");
-    let (home, app) = test_app();
+async fn send_historical_pi_session_spawns_resume_then_sends_to_live_broker() {
+    let live_id = "live-resumed-pi";
+    let (home, app) = test_app_with_spawn_options(true, Some(live_id.to_string()));
     let pi_home = home.path().join(".pi");
     let _pi_home = EnvVarGuard::set("PI_HOME", &pi_home.to_string_lossy());
     let cwd = home.path().join("historical-repo");
     fs::create_dir_all(&cwd).unwrap();
+    let sock_path = write_session_sidecar(&home, live_id, "pi", &cwd);
+    let server = spawn_broker_server(sock_path, 3, |request| match request["cmd"].as_str() {
+        Some("state") => json!({"busy": false, "queue_len": 0, "token": null}),
+        Some("send") => {
+            assert_eq!(request["text"], "resume and send");
+            json!({"queue_len": 1})
+        }
+        other => panic!("unexpected broker request: {other:?}"),
+    });
     let slug = cwd.to_string_lossy().trim_matches('/').replace('/', "-");
     let session_dir = pi_home.join("agent/sessions").join(format!("--{slug}--"));
     fs::create_dir_all(&session_dir).unwrap();
@@ -662,13 +717,14 @@ async fn send_historical_pi_session_spawns_resume_then_queues_to_live_session() 
 
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["backend"], "pi");
-    let live_id = body["session_id"].as_str().unwrap();
-    assert!(live_id.starts_with("fake-"));
-    let queues: Value = serde_json::from_str(
-        &fs::read_to_string(app_dir(&home).join("session_queues.json")).unwrap(),
+    assert_eq!(body["session_id"], live_id);
+    assert_eq!(body["queue_len"], 1);
+    let queues: Value = serde_json::from_slice(
+        &fs::read(app_dir(&home).join("session_queues.json")).unwrap_or_else(|_| b"{}".to_vec()),
     )
     .unwrap();
-    assert_eq!(queues[live_id][0], "resume and send");
+    assert!(queues.as_object().unwrap().is_empty());
+    server.join().unwrap();
 }
 
 #[tokio::test]
@@ -1027,6 +1083,8 @@ fn queue_worker_requires_idle_grace_before_popping_queue_item() {
         config: RuntimeConfig {
             app_dir: app_dir.clone(),
         },
+        fake_spawn_for_tests: false,
+        fake_spawn_session_id_for_tests: None,
     };
     let server = spawn_broker_server(app_dir.join("socks/sid-a.sock"), 4, |request| match request
         ["cmd"]
@@ -1063,6 +1121,8 @@ fn queue_worker_prunes_missing_session_without_broker_side_effects() {
         config: RuntimeConfig {
             app_dir: app_dir.clone(),
         },
+        fake_spawn_for_tests: false,
+        fake_spawn_session_id_for_tests: None,
     };
 
     assert!(!queue_sweep_once_at(&state, 100.0).unwrap());
@@ -1101,6 +1161,8 @@ fn harness_worker_requires_assistant_tail_and_cooldown_before_injecting() {
         config: RuntimeConfig {
             app_dir: app_dir.clone(),
         },
+        fake_spawn_for_tests: false,
+        fake_spawn_session_id_for_tests: None,
     };
 
     assert!(!harness_sweep_once_at(&state, 100.0).unwrap());
@@ -1161,6 +1223,8 @@ fn harness_worker_disables_zero_remaining_without_broker_side_effects() {
         config: RuntimeConfig {
             app_dir: app_dir.clone(),
         },
+        fake_spawn_for_tests: false,
+        fake_spawn_session_id_for_tests: None,
     };
 
     assert!(!harness_sweep_once_at(&state, 100.0).unwrap());
@@ -1218,8 +1282,7 @@ async fn session_create_parser_validation_and_deferred_spawn_response() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn session_create_happy_paths_accept_fake_spawn_metadata() {
-    let _fake = EnvVarGuard::set("CODOXEAR_FAKE_SPAWN_FOR_TESTS", "1");
-    let (home, app) = test_app();
+    let (home, app) = test_app_with_fake_spawn(true);
     let cookie = signed_cookie(&home);
     let cwd = home.path().join("create-happy");
 

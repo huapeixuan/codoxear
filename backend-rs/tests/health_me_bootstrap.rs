@@ -14,6 +14,8 @@ fn test_app() -> (TempDir, axum::Router) {
     let app_dir = home.path().join(".local/share/codoxear");
     let state = AppState {
         config: RuntimeConfig { app_dir },
+        fake_spawn_for_tests: false,
+        fake_spawn_session_id_for_tests: None,
     };
     (home, router(state))
 }

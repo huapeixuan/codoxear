@@ -637,11 +637,11 @@ fn pid_alive(pid: i64) -> bool {
     if pid <= 0 {
         return false;
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     {
-        Path::new("/proc").join(pid.to_string()).exists()
+        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     {
         true
     }

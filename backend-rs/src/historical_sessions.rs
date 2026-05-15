@@ -1,5 +1,5 @@
 use crate::app_state::AppState;
-use crate::post_handlers::enqueue_impl;
+use crate::post_handlers::send_impl;
 use crate::session_create::{spawn_web_session, CreateSessionRequest};
 use crate::session_create_support::pi_home;
 use axum::http::StatusCode;
@@ -51,12 +51,13 @@ pub(crate) fn send_historical_pi(
                 "spawned session did not return a session id".to_string(),
             )
         })?;
-    let mut out = enqueue_impl(state, live_id, text, images).or_else(|err| {
-        if std::env::var("CODOXEAR_FAKE_SPAWN_FOR_TESTS")
-            .ok()
-            .is_some_and(|value| crate::workers::env_flag_truthy_value(Some(&value)))
-        {
-            enqueue_historical_fake(state, live_id, text)
+    let mut out = send_impl(state, live_id, text, images.clone()).or_else(|err| {
+        if err.0 == StatusCode::NOT_FOUND {
+            if state.fake_spawn_for_tests {
+                enqueue_historical_fake(state, live_id, text)
+            } else {
+                wait_for_live_send(state, live_id, text, images)
+            }
         } else {
             Err(err)
         }
@@ -64,6 +65,25 @@ pub(crate) fn send_historical_pi(
     out["session_id"] = json!(live_id);
     out["backend"] = json!("pi");
     Ok(out)
+}
+
+fn wait_for_live_send(
+    state: &AppState,
+    live_id: &str,
+    text: &str,
+    images: Vec<Value>,
+) -> Result<Value, (StatusCode, String)> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs_f64(3.0);
+    while std::time::Instant::now() <= deadline {
+        match send_impl(state, live_id, text, images.clone()) {
+            Ok(value) => return Ok(value),
+            Err(err) if err.0 == StatusCode::NOT_FOUND => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Err((StatusCode::NOT_FOUND, "unknown session".to_string()))
 }
 
 fn enqueue_historical_fake(

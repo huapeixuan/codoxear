@@ -9,7 +9,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
-use std::thread;
+use std::{process, thread};
 use tempfile::TempDir;
 
 fn config(dir: &TempDir) -> RuntimeConfig {
@@ -148,6 +148,51 @@ fn load_session_rows_prunes_dead_sidecar_when_all_recorded_pids_are_gone() {
     assert!(load_session_rows(&config).unwrap().is_empty());
     assert!(!sock_path.exists());
     assert!(!sock_path.with_extension("json").exists());
+}
+
+#[test]
+fn load_session_rows_prunes_dead_sidecar_with_positive_dead_pid() {
+    let dir = TempDir::new().unwrap();
+    let config = config(&dir);
+    let cwd = dir.path().join("project");
+    fs::create_dir(&cwd).unwrap();
+    let sock_path = config.app_dir.join("socks/s1.sock");
+    fs::write(&sock_path, b"").unwrap();
+    let dead_pid = spawn_exited_child_pid();
+    write_json(
+        sock_path.with_extension("json"),
+        json!({
+            "session_id": "thread-s1",
+            "agent_backend": "codex",
+            "owner": "web",
+            "cwd": cwd,
+            "broker_pid": dead_pid,
+            "codex_pid": 0,
+            "start_ts": 100.0,
+            "updated_ts": 101.0
+        }),
+    );
+
+    assert!(load_session_rows(&config).unwrap().is_empty());
+    assert!(!sock_path.exists());
+    assert!(!sock_path.with_extension("json").exists());
+}
+
+#[cfg(unix)]
+fn spawn_exited_child_pid() -> i64 {
+    let mut child = process::Command::new("sh")
+        .arg("-c")
+        .arg("exit 0")
+        .spawn()
+        .unwrap();
+    let pid = i64::from(child.id());
+    child.wait().unwrap();
+    pid
+}
+
+#[cfg(not(unix))]
+fn spawn_exited_child_pid() -> i64 {
+    0
 }
 
 #[test]

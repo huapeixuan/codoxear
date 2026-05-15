@@ -591,7 +591,7 @@ fn interrupt_impl(state: &AppState, session_id: &str) -> Result<Value, (StatusCo
     Ok(json!({"ok": true, "broker": broker}))
 }
 
-fn send_impl(
+pub(crate) fn send_impl(
     state: &AppState,
     session_id: &str,
     text: &str,
