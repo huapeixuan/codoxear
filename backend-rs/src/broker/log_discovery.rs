@@ -14,6 +14,43 @@ pub fn parse_macos_lsof_names(stdout: &str) -> HashSet<PathBuf> {
         .collect()
 }
 
+pub fn parse_child_pids(stdout: &str) -> Vec<u32> {
+    stdout
+        .split_whitespace()
+        .filter_map(|token| token.parse::<u32>().ok())
+        .collect()
+}
+
+pub fn macos_descendants<F>(root_pid: u32, mut pgrep: F) -> Result<Vec<u32>, String>
+where
+    F: FnMut(u32) -> Result<String, String>,
+{
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    let mut queue = VecDeque::from([root_pid]);
+    while let Some(pid) = queue.pop_front() {
+        if !seen.insert(pid) {
+            continue;
+        }
+        out.push(pid);
+        for child in parse_child_pids(&pgrep(pid)?) {
+            queue.push_back(child);
+        }
+    }
+    Ok(out)
+}
+
+pub fn macos_open_jsonl_logs<F>(pids: &[u32], mut lsof: F) -> Result<HashSet<PathBuf>, String>
+where
+    F: FnMut(u32) -> Result<String, String>,
+{
+    let mut out = HashSet::new();
+    for pid in pids {
+        out.extend(parse_macos_lsof_names(&lsof(*pid)?));
+    }
+    Ok(out)
+}
+
 pub fn proc_descendants(proc_root: &Path, root_pid: u32) -> Vec<u32> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
@@ -80,6 +117,29 @@ mod tests {
         );
         assert!(parsed.contains(Path::new("/tmp/rollout-a.jsonl")));
         assert_eq!(parsed.len(), 1);
+    }
+
+    #[test]
+    fn macos_descendants_and_lsof_are_command_runner_testable() {
+        let pids = macos_descendants(100, |pid| {
+            Ok(match pid {
+                100 => "101 102\n".to_string(),
+                101 => "103\n".to_string(),
+                _ => String::new(),
+            })
+        })
+        .unwrap();
+        assert_eq!(pids, vec![100, 101, 102, 103]);
+
+        let logs = macos_open_jsonl_logs(&pids, |pid| {
+            Ok(format!(
+                "p{pid}\nn/tmp/rollout-{pid}.jsonl\nn/tmp/not-a-log.txt\n"
+            ))
+        })
+        .unwrap();
+        assert!(logs.contains(Path::new("/tmp/rollout-100.jsonl")));
+        assert!(logs.contains(Path::new("/tmp/rollout-103.jsonl")));
+        assert_eq!(logs.len(), 4);
     }
 
     #[test]

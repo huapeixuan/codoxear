@@ -44,12 +44,12 @@
 
 ## 5. Codex rollout log discovery and state tracking
 
-- [ ] 5.1 Port Linux `/proc` descendant fd discovery from `codoxear.util.proc_find_open_rollout_log` into Rust with tests using fake proc trees equivalent to `tests/test_broker_proc_rollout.py`.
-- [ ] 5.2 Port macOS discovery using `pgrep -P` and `lsof -p ... -F n` or an equivalent command-runner abstraction; add tests with fixture command output so the code path is covered on Linux CI too.
-- [ ] 5.3 Port Codex rollout path validation, UUID extraction, `session_meta` parsing, and subagent-parent resolution/ignore behavior.
-- [ ] 5.4 Port Codex busy/token/tail state updates from rollout log events, including quiet seconds, interrupt grace, pending calls, token snapshot, and resume delivery mute behavior required by current tests.
-- [ ] 5.5 Patch sidecar `session_id`/`log_path` whenever log discovery first succeeds or switches from null to concrete path; do not bind to subagent logs.
-- [ ] 5.6 Add tests for initial `log_path:null`, later log discovery patch, subagent ignore/parent binding, resume session id, and multiple concurrent brokers claiming different logs.
+- [x] 5.1 Port Linux `/proc` descendant fd discovery from `codoxear.util.proc_find_open_rollout_log` into Rust with tests using fake proc trees equivalent to `tests/test_broker_proc_rollout.py`.
+- [x] 5.2 Port macOS discovery using `pgrep -P` and `lsof -p ... -F n` or an equivalent command-runner abstraction; add tests with fixture command output so the code path is covered on Linux CI too.
+- [x] 5.3 Port Codex rollout path validation, UUID extraction, `session_meta` parsing, and subagent-parent resolution/ignore behavior.
+- [x] 5.4 Port Codex busy/token/tail state updates from rollout log events, including quiet seconds, interrupt grace, pending calls, token snapshot, and resume delivery mute behavior required by current tests.
+- [x] 5.5 Patch sidecar `session_id`/`log_path` whenever log discovery first succeeds or switches from null to concrete path; do not bind to subagent logs.
+- [x] 5.6 Add tests for initial `log_path:null`, later log discovery patch, subagent ignore/parent binding, resume session id, and multiple concurrent brokers claiming different logs.
 
 ## 6. Pi RPC broker implementation
 

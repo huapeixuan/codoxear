@@ -1,3 +1,5 @@
+use crate::broker::codex_state::refresh_codex_log_state;
+use crate::broker::codex_state::start_codex_log_watcher;
 use crate::broker::config::{normalize_backend, BrokerCli};
 use crate::broker::meta::{
     codex_sidecar_value, pi_sidecar_value, write_sidecar_atomic, CodexMetaInput,
@@ -18,7 +20,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
 const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
-
 #[derive(Debug, Clone)]
 pub struct BrokerEnv {
     pub backend: String,
@@ -86,23 +87,28 @@ impl BrokerEnv {
 }
 
 #[derive(Debug)]
-struct State {
-    backend: String,
-    child_pid: u32,
-    broker_pid: u32,
-    cwd: PathBuf,
-    start_ts: f64,
-    sock_path: PathBuf,
-    session_path: Option<PathBuf>,
-    resume_session_id: Option<String>,
-    busy: bool,
-    output_tail: String,
-    token: Option<Value>,
-    child_stdin: Option<std::process::ChildStdin>,
-    pty_master: Option<std::fs::File>,
-    pending_ui_requests: serde_json::Map<String, Value>,
-    live_message_offset: u64,
+pub struct State {
+    pub backend: String,
+    pub child_pid: u32,
+    pub broker_pid: u32,
+    pub cwd: PathBuf,
+    pub start_ts: f64,
+    pub sock_path: PathBuf,
+    pub session_path: Option<PathBuf>,
+    pub session_id: Option<String>,
+    pub log_path: Option<PathBuf>,
+    pub log_off: u64,
+    pub resume_session_id: Option<String>,
+    pub busy: bool,
+    pub output_tail: String,
+    pub token: Option<Value>,
+    pub child_stdin: Option<std::process::ChildStdin>,
+    pub pty_master: Option<std::fs::File>,
+    pub pending_ui_requests: serde_json::Map<String, Value>,
+    pub live_message_offset: u64,
 }
+
+pub type BrokerStateHandle = Arc<Mutex<State>>;
 
 #[derive(Debug)]
 enum ChildHandle {
@@ -159,6 +165,9 @@ fn run_inner(cli: BrokerCli, env: BrokerEnv) -> Result<i32, String> {
         start_ts,
         sock_path: sock_path.clone(),
         session_path: cli.session_file.clone(),
+        session_id: None,
+        log_path: None,
+        log_off: 0,
         resume_session_id,
         busy: false,
         output_tail: String::new(),
@@ -173,6 +182,9 @@ fn run_inner(cli: BrokerCli, env: BrokerEnv) -> Result<i32, String> {
     let stop = Arc::new(AtomicBool::new(false));
     start_socket_server(state.clone(), env.clone(), stop.clone())?;
     start_output_reader(&mut child, state.clone(), stop.clone());
+    if env.backend == "codex" {
+        start_codex_log_watcher(state.clone(), env.clone(), stop.clone());
+    }
 
     let code = wait_child(child, stop.clone());
     stop.store(true, Ordering::SeqCst);
@@ -231,9 +243,7 @@ fn spawn_codex_pty(cli: &BrokerCli, env: &BrokerEnv) -> Result<ChildHandle, Stri
     if pid == 0 {
         child_exec(&argv, &cli.cwd, env, rows, cols);
     }
-    unsafe {
-        libc::setpgid(pid, pid);
-    }
+    unsafe { libc::setpgid(pid, pid) };
     let master = unsafe { std::fs::File::from_raw_fd(master_fd) };
     Ok(ChildHandle::Pty {
         pid: pid as u32,
@@ -263,9 +273,7 @@ fn codex_exec_argv(cli: &BrokerCli, env: &BrokerEnv) -> Vec<String> {
 }
 
 fn child_exec(argv: &[String], cwd: &Path, env: &BrokerEnv, rows: u16, cols: u16) -> ! {
-    unsafe {
-        libc::setpgid(0, 0);
-    }
+    unsafe { libc::setpgid(0, 0) };
     let _ = std::env::set_current_dir(cwd);
     std::env::set_var(
         "TERM",
@@ -377,7 +385,7 @@ fn start_socket_server(
                     thread::spawn(move || handle_conn(stream, state2, env2, stop2));
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(50));
+                    thread::sleep(Duration::from_millis(50))
                 }
                 Err(_) => break,
             }
@@ -401,10 +409,7 @@ fn handle_conn(
     if reader.read_line(&mut line).is_err() || line.trim().is_empty() {
         return;
     }
-    let req: Value = match serde_json::from_str(&line) {
-        Ok(req) => req,
-        Err(_) => json!({}),
-    };
+    let req: Value = serde_json::from_str(&line).unwrap_or_else(|_| json!({}));
     let resp = dispatch_command(&req, &state, &env, &stop);
     let _ = writeln!(
         stream,
@@ -425,6 +430,7 @@ fn dispatch_command(
             json!({"busy": st.busy, "queue_len": 0, "token": st.token})
         }
         Some("tail") => {
+            let _ = refresh_codex_log_state(state, env);
             let st = state.lock().expect("broker state poisoned");
             json!({"tail": st.output_tail})
         }
@@ -557,16 +563,16 @@ fn wait_child(child: ChildHandle, stop: Arc<AtomicBool>) -> i32 {
     }
 }
 
-fn write_meta(state: &Arc<Mutex<State>>, env: &BrokerEnv) -> Result<(), String> {
+pub fn write_meta(state: &Arc<Mutex<State>>, env: &BrokerEnv) -> Result<(), String> {
     let st = state.lock().expect("broker state poisoned");
     let input = CodexMetaInput {
-        session_id: None,
+        session_id: st.session_id.clone(),
         owner: env.owner.clone(),
         broker_pid: st.broker_pid,
         codex_pid: st.child_pid,
         cwd: st.cwd.to_string_lossy().to_string(),
         start_ts: st.start_ts,
-        log_path: None,
+        log_path: st.log_path.clone(),
         sock_path: st.sock_path.clone(),
         resume_session_id: st.resume_session_id.clone(),
         transport: env.transport.clone(),
@@ -592,20 +598,15 @@ fn write_meta(state: &Arc<Mutex<State>>, env: &BrokerEnv) -> Result<(), String> 
 
 fn resume_session_id_from_args(backend: &str, args: &[String]) -> Option<String> {
     if backend == "pi" {
-        for pair in args.windows(2) {
-            if pair[0] == "--session" && !pair[1].trim().is_empty() && !pair[1].ends_with(".jsonl")
-            {
-                return Some(pair[1].clone());
-            }
-        }
-        None
+        args.windows(2)
+            .find(|pair| {
+                pair[0] == "--session" && !pair[1].trim().is_empty() && !pair[1].ends_with(".jsonl")
+            })
+            .map(|pair| pair[1].clone())
     } else {
-        for pair in args.windows(2) {
-            if pair[0] == "resume" && !pair[1].trim().is_empty() {
-                return Some(pair[1].clone());
-            }
-        }
-        None
+        args.windows(2)
+            .find(|pair| pair[0] == "resume" && !pair[1].trim().is_empty())
+            .map(|pair| pair[1].clone())
     }
 }
 
@@ -682,6 +683,52 @@ mod tests {
     use std::os::unix::net::UnixStream;
     use tempfile::TempDir;
 
+    fn test_env() -> BrokerEnv {
+        let dir = TempDir::new().unwrap();
+        BrokerEnv {
+            backend: "pi".into(),
+            owner: Some("web".into()),
+            spawn_nonce: None,
+            transport: None,
+            tmux_session: None,
+            tmux_window: None,
+            app_dir: dir.path().to_path_buf(),
+            codex_home: dir.path().join("codex"),
+            pi_home: dir.path().join("pi"),
+            codex_bin: "codex".into(),
+            pi_bin: "pi".into(),
+            model_provider: None,
+            preferred_auth_method: None,
+            model: None,
+            reasoning_effort: None,
+            service_tier: None,
+            debug: false,
+        }
+    }
+
+    fn test_state(dir: &Path, backend: &str) -> Arc<Mutex<State>> {
+        Arc::new(Mutex::new(State {
+            backend: backend.into(),
+            child_pid: 1,
+            broker_pid: 2,
+            cwd: dir.to_path_buf(),
+            start_ts: 1.0,
+            sock_path: dir.join("x.sock"),
+            session_path: None,
+            session_id: None,
+            log_path: None,
+            log_off: 0,
+            resume_session_id: None,
+            busy: backend == "codex",
+            output_tail: "tail".into(),
+            token: None,
+            child_stdin: None,
+            pty_master: None,
+            pending_ui_requests: serde_json::Map::new(),
+            live_message_offset: 0,
+        }))
+    }
+
     #[test]
     fn env_resolution_matches_codoxear_app_dir_contract() {
         let dir = TempDir::new().unwrap();
@@ -700,42 +747,8 @@ mod tests {
     #[test]
     fn socket_dispatch_matches_python_validation_strings() {
         let dir = TempDir::new().unwrap();
-        let env = BrokerEnv {
-            backend: "pi".into(),
-            owner: Some("web".into()),
-            spawn_nonce: None,
-            transport: None,
-            tmux_session: None,
-            tmux_window: None,
-            app_dir: dir.path().to_path_buf(),
-            codex_home: dir.path().join("codex"),
-            pi_home: dir.path().join("pi"),
-            codex_bin: "codex".into(),
-            pi_bin: "pi".into(),
-            model_provider: None,
-            preferred_auth_method: None,
-            model: None,
-            reasoning_effort: None,
-            service_tier: None,
-            debug: false,
-        };
-        let state = Arc::new(Mutex::new(State {
-            backend: "pi".into(),
-            child_pid: 1,
-            broker_pid: 2,
-            cwd: dir.path().to_path_buf(),
-            start_ts: 1.0,
-            sock_path: dir.path().join("x.sock"),
-            session_path: None,
-            resume_session_id: None,
-            busy: false,
-            output_tail: String::new(),
-            token: None,
-            child_stdin: None,
-            pty_master: None,
-            pending_ui_requests: serde_json::Map::new(),
-            live_message_offset: 0,
-        }));
+        let env = test_env();
+        let state = test_state(dir.path(), "pi");
         let stop = Arc::new(AtomicBool::new(false));
         assert_eq!(
             dispatch_command(&json!({"cmd":"send","text":""}), &state, &env, &stop),
@@ -759,24 +772,9 @@ mod tests {
     #[test]
     fn socket_server_round_trips_state() {
         let dir = TempDir::new().unwrap();
-        let env = BrokerEnv::from_process(Some("codex"));
-        let state = Arc::new(Mutex::new(State {
-            backend: "codex".into(),
-            child_pid: 1,
-            broker_pid: 2,
-            cwd: dir.path().to_path_buf(),
-            start_ts: 1.0,
-            sock_path: dir.path().join("x.sock"),
-            session_path: None,
-            resume_session_id: None,
-            busy: true,
-            output_tail: "tail".into(),
-            token: None,
-            child_stdin: None,
-            pty_master: None,
-            pending_ui_requests: serde_json::Map::new(),
-            live_message_offset: 0,
-        }));
+        let mut env = BrokerEnv::from_process(Some("codex"));
+        env.backend = "codex".into();
+        let state = test_state(dir.path(), "codex");
         let stop = Arc::new(AtomicBool::new(false));
         start_socket_server(state, env, stop.clone()).unwrap();
         for _ in 0..20 {
