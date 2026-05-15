@@ -107,4 +107,4 @@
 - [x] 11.9 Line-count gate `find backend-rs/src -name '*.rs' -print0 | xargs -0 wc -l | awk '$1 > 800'` returns no source file over limit.
 - [x] 11.10 Manual or CI smoke: with `CODOXEAR_RUST_BROKER_BIN=$(pwd)/backend-rs/target/release/codoxear-broker-rs`, create Codex and Pi web-owned sessions, observe them in `/api/sessions`, send a prompt, interrupt/delete, then unset the env and verify new sessions use Python broker fallback.
 - [x] 11.11 macOS validation: `macos-latest` CI broker subset passes or handoff includes local macOS transcript covering PTY and `lsof` discovery.
-- [x] 11.12 Independent `code-reviewer` review completes with PASS or no HIGH findings before implementation is declared ready for merge.
+- [ ] 11.12 Independent `code-reviewer` review completes with PASS or no HIGH findings before implementation is declared ready for merge.
