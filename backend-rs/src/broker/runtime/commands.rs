@@ -68,10 +68,7 @@ pub(super) fn handle_keys(req: &Value, state: &Arc<Mutex<State>>) -> Value {
         if bytes != b"\x1b" {
             return json!({"error": format!("unsupported key sequence: {seq}")});
         }
-        let result = st
-            .pi_rpc
-            .as_ref()
-            .map(|rpc| rpc.abort(st.last_turn_id.as_deref()));
+        let result = st.pi_rpc.as_ref().map(|rpc| rpc.abort(None));
         match result {
             Some(Ok(_)) => {
                 st.busy = false;
