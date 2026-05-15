@@ -10,36 +10,36 @@
 
 - [x] 1.1 Replace `backend-rs/src/bin/codoxear-broker-rs.rs` placeholder with real CLI parsing for `--cwd`, optional `--session-file`, and post-`--` agent args.
 - [x] 1.2 Add broker modules under `backend-rs/src/broker/` or equivalent (`mod.rs`, `config.rs`, `meta.rs`, `ipc.rs`, `log_discovery.rs`, `codex.rs`, `pi.rs`, `pty.rs`) and export them from `backend-rs/src/lib.rs` as needed for tests.
-- [ ] 1.3 Choose and add PTY/process dependencies after a focused spike proves child pid, PTY read/write, resize, process group cleanup, and macOS support; document the choice in code comments or `design.md` if the final decision differs.
+- [x] 1.3 Choose and add PTY/process dependencies after a focused spike proves child pid, PTY read/write, resize, process group cleanup, and macOS support; document the choice in code comments or `design.md` if the final decision differs.
 - [x] 1.4 Add a line-count gate for new broker Rust source files and keep every `backend-rs/src/**/*.rs` file ≤ 800 lines.
-- [ ] 1.5 Add broker debug logging controlled by `CODEX_WEB_BROKER_DEBUG=1` without leaking secrets or full prompt text beyond existing Python behavior.
+- [x] 1.5 Add broker debug logging controlled by `CODEX_WEB_BROKER_DEBUG=1` without leaking secrets or full prompt text beyond existing Python behavior.
 
 ## 2. Shared broker config, env, and metadata writers
 
-- [ ] 2.1 Implement backend/env normalization matching Python: `CODEX_WEB_AGENT_BACKEND`, `CODEX_WEB_OWNER`, `CODEX_WEB_SPAWN_NONCE`, `CODEX_WEB_TRANSPORT`, `CODEX_WEB_TMUX_SESSION`, `CODEX_WEB_TMUX_WINDOW`, `CODEX_HOME`, `PI_HOME`, `CODEX_BIN`, `PI_BIN`, model/provider/reasoning/service-tier overrides.
-- [ ] 2.2 Implement app dir and socks dir resolution using the same `~/.local/share/codoxear` contract as `codoxear.util.default_app_dir()`.
+- [x] 2.1 Implement backend/env normalization matching Python: `CODEX_WEB_AGENT_BACKEND`, `CODEX_WEB_OWNER`, `CODEX_WEB_SPAWN_NONCE`, `CODEX_WEB_TRANSPORT`, `CODEX_WEB_TMUX_SESSION`, `CODEX_WEB_TMUX_WINDOW`, `CODEX_HOME`, `PI_HOME`, `CODEX_BIN`, `PI_BIN`, model/provider/reasoning/service-tier overrides.
+- [x] 2.2 Implement app dir and socks dir resolution using the same `~/.local/share/codoxear` contract as `codoxear.util.default_app_dir()`.
 - [x] 2.3 Implement Codex sidecar writer with all Python Codex keys, compact JSON-compatible schema, atomic same-dir temp+rename, and mode `0600`.
 - [x] 2.4 Implement Pi sidecar writer with all Python Pi keys, optional `session_path`, compatibility `codex_pid`, `agent_pid`, `supports_live_ui`, `ui_protocol_version`, `agent_backend:"pi"`, atomic rename, and mode `0600`.
-- [ ] 2.5 Add Rust unit tests that serialize Codex/Pi sidecars and assert exact field presence/nullability for web-owned, terminal-owned, tmux, resume, and Pi `--no-session` cases.
+- [x] 2.5 Add Rust unit tests that serialize Codex/Pi sidecars and assert exact field presence/nullability for web-owned, terminal-owned, tmux, resume, and Pi `--no-session` cases.
 - [ ] 2.6 Add cross-language sidecar tests proving Python discovery accepts Rust-written Codex/Pi sidecars and Rust session loader accepts Python-written sidecars.
 
 ## 3. Unix socket JSON-line server
 
-- [ ] 3.1 Implement Unix socket creation under `socks/`, cleanup of stale own socket path before bind, chmod `0600`, listen backlog compatible with Python, and one-request-per-connection JSON-line handling.
+- [x] 3.1 Implement Unix socket creation under `socks/`, cleanup of stale own socket path before bind, chmod `0600`, listen backlog compatible with Python, and one-request-per-connection JSON-line handling.
 - [x] 3.2 Implement shared command dispatch and JSON response writer with Python-equivalent malformed/unknown command behavior.
-- [ ] 3.3 Implement common commands `state`, `tail`, `send`, `keys`, `shutdown` for Codex and Pi; preserve validation error strings (`text required`, `seq required`, `no state`, `unknown cmd`).
-- [ ] 3.4 Implement Pi-only commands `live_messages`, `ui_state`, `commands`, `ui_response` with Python-equivalent request/response/error shape.
-- [ ] 3.5 Add broker socket server tests that connect via UnixStream and assert exact JSON responses for every supported command and unknown command.
-- [ ] 3.6 Add shutdown tests proving the broker returns `{"ok":true}`, stops accepting new socket requests, and terminates/closes the managed backend.
+- [x] 3.3 Implement common commands `state`, `tail`, `send`, `keys`, `shutdown` for Codex and Pi; preserve validation error strings (`text required`, `seq required`, `no state`, `unknown cmd`).
+- [x] 3.4 Implement Pi-only commands `live_messages`, `ui_state`, `commands`, `ui_response` with Python-equivalent request/response/error shape.
+- [x] 3.5 Add broker socket server tests that connect via UnixStream and assert exact JSON responses for every supported command and unknown command.
+- [x] 3.6 Add shutdown tests proving the broker returns `{"ok":true}`, stops accepting new socket requests, and terminates/closes the managed backend.
 
 ## 4. Codex PTY broker implementation
 
-- [ ] 4.1 Implement Codex child spawn in a PTY with cwd, `TERM`, `COLUMNS`, `LINES`, backend home env, configured `CODEX_BIN`, post-`--` args, and headless web-owned login-shell behavior matching Python.
+- [x] 4.1 Implement Codex child spawn in a PTY with cwd, `TERM`, `COLUMNS`, `LINES`, backend home env, configured `CODEX_BIN`, post-`--` args, and headless web-owned login-shell behavior matching Python.
 - [ ] 4.2 Implement terminal-owned stdin raw-mode forwarding, stdout forwarding, termios restore, and EOF handling.
 - [ ] 4.3 Implement SIGWINCH resize propagation to the PTY and add a test around the resize abstraction.
-- [ ] 4.4 Implement `send` prompt injection using the same bracketed paste / enter sequence behavior as Python; include optional `enter_seq` support.
-- [ ] 4.5 Implement `keys` raw sequence decoding compatible with Python unicode-escape handling and direct PTY write.
-- [ ] 4.6 Implement process-group and child cleanup for normal exit, socket shutdown, server delete, and broker crash paths; Linux may use pdeathsig where available.
+- [x] 4.4 Implement `send` prompt injection using the same bracketed paste / enter sequence behavior as Python; include optional `enter_seq` support.
+- [x] 4.5 Implement `keys` raw sequence decoding compatible with Python unicode-escape handling and direct PTY write.
+- [x] 4.6 Implement process-group and child cleanup for normal exit, socket shutdown, server delete, and broker crash paths; Linux may use pdeathsig where available.
 - [ ] 4.7 Add PTY/fake-PTY tests for send/keys/state/tail/busy transitions and cleanup; keep real Codex binary out of unit tests.
 
 ## 5. Codex rollout log discovery and state tracking
@@ -53,8 +53,8 @@
 
 ## 6. Pi RPC broker implementation
 
-- [ ] 6.1 Investigate `codoxear/pi_rpc.py` and document the minimal Rust Pi RPC operations needed: start session, prompt, abort, get_state, get_commands, send_ui_response, drain events/stderr, close.
-- [ ] 6.2 Implement or bridge Pi RPC startup with cwd, `--session-file`, `--session`, `--session-dir`, `--no-session`, `PI_BIN`, `PI_HOME`, and post-`--` args matching Python.
+- [x] 6.1 Investigate `codoxear/pi_rpc.py` and document the minimal Rust Pi RPC operations needed: start session, prompt, abort, get_state, get_commands, send_ui_response, drain events/stderr, close.
+- [x] 6.2 Implement or bridge Pi RPC startup with cwd, `--session-file`, `--session`, `--session-dir`, `--no-session`, `PI_BIN`, `PI_HOME`, and post-`--` args matching Python.
 - [ ] 6.3 Preserve AskUser extension injection semantics: Rust server create path passes `-e codoxear/pi_extensions/ask_user_bridge.ts`, and terminal Pi launches do not duplicate the arg if already present.
 - [ ] 6.4 Implement Pi state sync: busy extraction, prompt-sent grace, turn id tracking, session id update from RPC state, stderr/tail drain, live message coalescing, terminal turn completion clearing.
 - [ ] 6.5 Implement pending UI request tracking and `ui_response` forwarding with the same resolution/retry behavior and error strings as Python.
@@ -79,7 +79,7 @@
 
 ## 9. Contract and integration test matrix
 
-- [ ] 9.1 Add Rust broker unit tests for sidecar JSON, socket protocol, log discovery, PTY abstraction, Pi RPC abstraction, and process cleanup.
+- [x] 9.1 Add Rust broker unit tests for sidecar JSON, socket protocol, log discovery, PTY abstraction, Pi RPC abstraction, and process cleanup.
 - [x] 9.2 Add Python tests for `CODOXEAR_RUST_BROKER_BIN` spawn selection in Python server without launching real Codex/Pi.
 - [ ] 9.3 Extend `tests/contract` with Rust-brokered session fixtures: Rust sidecar → Python read, Python sidecar → Rust read, Rust broker socket → Rust/Python server mutation endpoints.
 - [ ] 9.4 Add smoke integration tests using fake Codex/Pi binaries that open/write fixture logs so Rust broker can discover logs and the server can list/send/delete sessions without real external CLIs.

@@ -1,4 +1,4 @@
-use codoxear_backend_rs::broker::{config, shim};
+use codoxear_backend_rs::broker::{config, runtime};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -9,5 +9,5 @@ fn main() {
             std::process::exit(2);
         }
     };
-    shim::exec_python_bridge(cli);
+    std::process::exit(runtime::run(cli));
 }

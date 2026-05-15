@@ -1,7 +1,6 @@
 use codoxear_backend_rs::session_create::selected_broker_argv;
 use codoxear_backend_rs::session_create_support::{
-    build_tmux_shell_command_for_tests, find_codex_resume_candidate_in,
-    find_pi_resume_session_file_in,
+    build_tmux_shell_command, find_codex_resume_candidate_in, find_pi_resume_session_file_in,
 };
 use serde_json::json;
 use std::fs;
@@ -142,7 +141,7 @@ fn tmux_shell_command_uses_selected_rust_broker_binary() {
         Some("/opt/bin/codoxear-broker-rs"),
     );
     argv.extend(["-e".to_string(), "/bridge/ask_user_bridge.ts".to_string()]);
-    let shell = build_tmux_shell_command_for_tests(
+    let shell = build_tmux_shell_command(
         &argv,
         &[
             ("CODEX_WEB_AGENT_BACKEND".to_string(), "pi".to_string()),
