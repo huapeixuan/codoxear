@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import threading
 import urllib.parse
@@ -124,11 +125,12 @@ def _write_contract_session(
     backend: str = "codex",
     log_path: Path | None = None,
     session_path: Path | None = None,
+    broker_handler: Any | None = None,
 ) -> None:
     socks = app_dir / "socks"
     socks.mkdir(parents=True, exist_ok=True)
     sock_path = socks / f"{session_id}.sock"
-    _start_stub_broker(sock_path)
+    _start_stub_broker(sock_path, broker_handler=broker_handler)
     payload: dict[str, Any] = {
         "session_id": f"thread-{session_id}",
         "agent_backend": backend,
@@ -152,7 +154,7 @@ def _write_contract_session(
     (socks / f"{session_id}.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _start_stub_broker(sock_path: Path) -> None:
+def _start_stub_broker(sock_path: Path, *, broker_handler: Any | None = None) -> None:
     sock_path.unlink(missing_ok=True)
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(str(sock_path))
@@ -176,13 +178,18 @@ def _start_stub_broker(sock_path: Path) -> None:
                     request = json.loads(data.split(b"\n", 1)[0].decode("utf-8"))
                 except Exception:
                     request = {}
-                cmd = request.get("cmd")
-                if cmd == "ui_state":
-                    response: dict[str, Any] = {"ok": True, "requests": []}
-                elif cmd == "commands":
-                    response = {"ok": True, "commands": []}
+                if broker_handler is not None:
+                    response = broker_handler(request)
                 else:
-                    response = {"busy": False, "queue_len": 0, "token": None}
+                    cmd = request.get("cmd")
+                    if cmd == "ui_state":
+                        response = {"ok": True, "requests": []}
+                    elif cmd == "commands":
+                        response = {"ok": True, "commands": []}
+                    elif cmd in {"send", "keys", "ui_response", "shutdown"}:
+                        response = {"ok": True, "queue_len": 0}
+                    else:
+                        response = {"busy": False, "queue_len": 0, "token": None}
                 conn.sendall(json.dumps(response).encode("utf-8") + b"\n")
 
     threading.Thread(target=serve, daemon=True).start()
@@ -802,18 +809,55 @@ def test_alias_sidebar_queue_harness_post_roundtrip_parity(
         (shared_app_dir / "session_sidebar.json").read_text(encoding="utf-8")
     )
     assert sidebar_on_disk["sess-contract"]["dependency_session_id"] == "sess-dep"
+    # Python keeps alias/sidebar state in memory, so the cross-server assertion here
+    # is on the shared Python-readable disk contract; Python-write -> Rust-read is
+    # asserted below through Rust's live GET path.
 
+    python_edit = _post_response(
+        python_server_url,
+        "/api/sessions/sess-contract/edit",
+        signed_auth_cookie,
+        {"name": "Python Edit", "priority_offset": -0.25},
+    )
+    assert python_edit.status == 200
+    rust_sessions = _get_json(rust_server_url, "/api/sessions", signed_auth_cookie)
+    assert any(
+        row["session_id"] == "sess-contract" and row["alias"] == "Python Edit"
+        for row in rust_sessions["sessions"]
+    )
+
+    for payload, expected in [
+        ({"priority_offset": 2}, "priority_offset must be within [-1, 1]"),
+        ({"dependency_session_id": "missing"}, "dependency session not found"),
+    ]:
+        invalid = _post_response(
+            rust_server_url,
+            "/api/sessions/sess-contract/edit",
+            signed_auth_cookie,
+            {"name": "bad", **payload},
+        )
+        assert invalid.status == 400
+        assert invalid.json()["error"] == expected
+    unknown_edit = _post_response(
+        rust_server_url,
+        "/api/sessions/missing/edit",
+        signed_auth_cookie,
+        {"name": "bad"},
+    )
+    assert unknown_edit.status == 404
+
+    img = {"file_name": "a.png", "mime_type": "image/png", "data_b64": "aGVsbG8="}
     enqueue = _post_response(
         rust_server_url,
         "/api/sessions/sess-contract/enqueue",
         signed_auth_cookie,
-        {"text": "queued"},
+        {"text": "queued", "images": [img]},
     )
     assert enqueue.status == 200
     queue_on_disk = json.loads(
         (shared_app_dir / "session_queues.json").read_text(encoding="utf-8")
     )
-    assert queue_on_disk["sess-contract"] == ["queued"]
+    assert queue_on_disk["sess-contract"] == [{"text": "queued", "images": [img]}]
 
     update = _post_response(
         rust_server_url,
@@ -822,6 +866,31 @@ def test_alias_sidebar_queue_harness_post_roundtrip_parity(
         {"index": 0, "text": "updated"},
     )
     assert update.status == 200
+    queue_on_disk = json.loads(
+        (shared_app_dir / "session_queues.json").read_text(encoding="utf-8")
+    )
+    assert queue_on_disk["sess-contract"] == [{"text": "updated", "images": [img]}]
+    invalid_queue = _post_response(
+        rust_server_url,
+        "/api/sessions/sess-contract/queue/update",
+        signed_auth_cookie,
+        {"index": 99, "text": "nope"},
+    )
+    assert invalid_queue.status == 502
+    empty_queue = _post_response(
+        rust_server_url,
+        "/api/sessions/sess-contract/enqueue",
+        signed_auth_cookie,
+        {"text": "   "},
+    )
+    assert empty_queue.status == 400
+    unknown_queue = _post_response(
+        rust_server_url,
+        "/api/sessions/missing/enqueue",
+        signed_auth_cookie,
+        {"text": "nope"},
+    )
+    assert unknown_queue.status == 404
     delete = _post_response(
         rust_server_url,
         "/api/sessions/sess-contract/queue/delete",
@@ -846,11 +915,47 @@ def test_alias_sidebar_queue_harness_post_roundtrip_parity(
         },
     )
     assert harness.status == 200
-    python_harness = json.loads(
+    # Python keeps harness state in memory; assert the Python-readable disk
+    # contract for Rust writes, and assert Python-write -> Rust-read below.
+    python_harness_on_disk = json.loads(
         (shared_app_dir / "harness.json").read_text(encoding="utf-8")
     )["sess-contract"]
-    assert python_harness["request"] == "inspect"
-    assert python_harness["remaining_injections"] == 2
+    assert python_harness_on_disk["request"] == "inspect"
+    assert python_harness_on_disk["remaining_injections"] == 2
+
+    python_harness_post = _post_response(
+        python_server_url,
+        "/api/sessions/sess-contract/harness",
+        signed_auth_cookie,
+        {"enabled": False, "cooldown_minutes": 4, "remaining_injections": 0},
+    )
+    assert python_harness_post.status == 200
+    rust_harness = _get_json(
+        rust_server_url, "/api/sessions/sess-contract/harness", signed_auth_cookie
+    )
+    assert rust_harness["enabled"] is False
+    assert rust_harness["cooldown_minutes"] == 4
+    assert rust_harness["remaining_injections"] == 0
+    for payload in [
+        {"text": "legacy"},
+        {"request": 1},
+        {"cooldown_minutes": 0},
+        {"remaining_injections": -1},
+    ]:
+        invalid = _post_response(
+            rust_server_url,
+            "/api/sessions/sess-contract/harness",
+            signed_auth_cookie,
+            payload,
+        )
+        assert invalid.status == 400
+    unknown_harness = _post_response(
+        rust_server_url,
+        "/api/sessions/missing/harness",
+        signed_auth_cookie,
+        {"enabled": True},
+    )
+    assert unknown_harness.status == 404
 
 
 @pytest.mark.post
@@ -862,8 +967,34 @@ def test_send_ui_interrupt_post_stub_broker_parity(
 ) -> None:
     cwd = tmp_path / "project"
     cwd.mkdir()
-    _write_contract_session(shared_app_dir, session_id="sess-codex", cwd=cwd)
-    _write_contract_session(shared_app_dir, session_id="sess-pi", cwd=cwd, backend="pi")
+
+    codex_requests: list[dict[str, Any]] = []
+
+    def codex_handler(request: dict[str, Any]) -> dict[str, Any]:
+        codex_requests.append(request)
+        if request.get("cmd") == "send":
+            return {"ok": True, "queue_len": 0}
+        if request.get("cmd") == "keys":
+            return {"ok": True}
+        return {"busy": False, "queue_len": 0, "token": None}
+
+    _write_contract_session(
+        shared_app_dir, session_id="sess-codex", cwd=cwd, broker_handler=codex_handler
+    )
+
+    pi_requests: list[dict[str, Any]] = []
+
+    def pi_handler(request: dict[str, Any]) -> dict[str, Any]:
+        pi_requests.append(request)
+        if request.get("cmd") == "ui_response":
+            return {"ok": True}
+        if request.get("cmd") in {"send", "keys"}:
+            return {"ok": True, "queue_len": 0}
+        return {"busy": False, "queue_len": 0, "token": None}
+
+    _write_contract_session(
+        shared_app_dir, session_id="sess-pi", cwd=cwd, backend="pi", broker_handler=pi_handler
+    )
 
     send = _post_response(
         rust_server_url,
@@ -873,6 +1004,62 @@ def test_send_ui_interrupt_post_stub_broker_parity(
     )
     assert send.status == 200
     assert send.json()["queue_len"] == 0
+    assert {"cmd": "send", "text": "hello"} in codex_requests
+
+    error_requests: list[dict[str, Any]] = []
+
+    def error_handler(request: dict[str, Any]) -> dict[str, Any]:
+        error_requests.append(request)
+        if request.get("cmd") == "send":
+            return {"error": "boom"}
+        return {"busy": False, "queue_len": 0, "token": None}
+
+    _write_contract_session(
+        shared_app_dir, session_id="sess-error", cwd=cwd, broker_handler=error_handler
+    )
+    send_error = _post_response(
+        rust_server_url,
+        "/api/sessions/sess-error/send",
+        signed_auth_cookie,
+        {"text": "hello"},
+    )
+    assert send_error.status == 502
+    assert send_error.json() == {"error": "boom"}
+
+    socks = shared_app_dir / "socks"
+    (socks / "sess-fallback.sock").write_text("stale", encoding="utf-8")
+    (socks / "sess-fallback.json").write_text(
+        json.dumps(
+            {
+                "session_id": "thread-sess-fallback",
+                "agent_backend": "codex",
+                "backend": "codex",
+                "owner": "web",
+                "transport": "pty",
+                "cwd": str(cwd),
+                "start_ts": 100.0,
+                "updated_ts": 200.0,
+                "broker_pid": os.getpid(),
+                "codex_pid": os.getpid(),
+                "busy": False,
+                "queue_len": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    fallback = _post_response(
+        rust_server_url,
+        "/api/sessions/sess-fallback/send",
+        signed_auth_cookie,
+        {"text": "queued fallback"},
+    )
+    assert fallback.status == 200
+    assert fallback.json() == {"queued": True, "queue_len": 1}
+    queue_on_disk = json.loads(
+        (shared_app_dir / "session_queues.json").read_text(encoding="utf-8")
+    )
+    assert queue_on_disk["sess-fallback"] == ["queued fallback"]
 
     interrupt = _post_response(
         rust_server_url,
@@ -882,6 +1069,7 @@ def test_send_ui_interrupt_post_stub_broker_parity(
     )
     assert interrupt.status == 200
     assert interrupt.json()["ok"] is True
+    assert {"cmd": "keys", "seq": "\\x1b"} in codex_requests
 
     ui = _post_response(
         rust_server_url,
@@ -891,6 +1079,54 @@ def test_send_ui_interrupt_post_stub_broker_parity(
     )
     assert ui.status == 200
     assert ui.json() == {"ok": True}
+    assert {"cmd": "ui_response", "id": "q1", "value": "yes", "confirmed": True} in pi_requests
+
+    legacy_requests: list[dict[str, Any]] = []
+
+    def legacy_handler(request: dict[str, Any]) -> dict[str, Any]:
+        legacy_requests.append(request)
+        if request.get("cmd") == "ui_response":
+            return {"error": "unknown cmd"}
+        if request.get("cmd") in {"send", "keys"}:
+            return {"ok": True, "queue_len": 0}
+        return {"busy": False, "queue_len": 0, "token": None}
+
+    _write_contract_session(
+        shared_app_dir, session_id="sess-legacy", cwd=cwd, backend="pi", broker_handler=legacy_handler
+    )
+    legacy = _post_response(
+        rust_server_url,
+        "/api/sessions/sess-legacy/ui_response",
+        signed_auth_cookie,
+        {"id": "q2", "value": ["a", "b"]},
+    )
+    assert legacy.status == 200
+    assert legacy.json() == {"ok": True, "legacy_fallback": True}
+    assert {"cmd": "send", "text": "a, b"} in legacy_requests
+    cancelled = _post_response(
+        rust_server_url,
+        "/api/sessions/sess-legacy/ui_response",
+        signed_auth_cookie,
+        {"id": "q3", "cancelled": True},
+    )
+    assert cancelled.status == 200
+    assert {"cmd": "keys", "seq": "\\x1b"} in legacy_requests
+
+    heartbeat = _post_response(
+        rust_server_url,
+        "/api/sessions/sess-pi/heartbeat",
+        signed_auth_cookie,
+        {},
+    )
+    assert heartbeat.status == 200
+    assert heartbeat.json()["session_id"] == "sess-pi"
+    unsupported_heartbeat = _post_response(
+        rust_server_url,
+        "/api/sessions/sess-codex/heartbeat",
+        signed_auth_cookie,
+        {},
+    )
+    assert unsupported_heartbeat.status == 409
 
 
 @pytest.mark.post

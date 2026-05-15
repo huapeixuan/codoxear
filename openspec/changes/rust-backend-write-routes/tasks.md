@@ -33,21 +33,21 @@
 - [x] 4.2 Implement `POST /api/sessions/{id}/rename`: `session_aliases.json` update/removal and response `ok/alias` parity.
 - [x] 4.3 Implement `POST /api/sessions/{id}/edit`: update alias plus `session_sidebar.json` fields `priority_offset`, `snooze_until`, `dependency_session_id`; validate dependency exists and is not self.
 - [x] 4.4 Add Rust unit tests for JSON write shape and key ordering for `cwd_groups.json`, `session_aliases.json`, and `session_sidebar.json`.
-- [ ] 4.5 Add contract tests: Rust edit → Python GET `/ui_state`/`/sessions`; Python edit → Rust GET `/ui_state`/`/sessions`; include invalid field 400 and unknown session 404.
+- [x] 4.5 Add contract tests: Rust edit → Python GET `/ui_state`/`/sessions`; Python edit → Rust GET `/ui_state`/`/sessions`; include invalid field 400 and unknown session 404.
 
 ## 5. Queue mutation endpoints
 
 - [x] 5.1 Implement queue item read-modify-write helpers preserving Python schema: text-only as string, image queue item as `{text, images}`.
 - [x] 5.2 Implement `POST /api/sessions/{id}/enqueue` with text/images validation, Pi session file touch behavior where applicable, `queued/queue_len` response.
 - [x] 5.3 Implement `POST /api/sessions/{id}/queue/delete` and `/queue/update`, including index required, out-of-range mapping, image preservation on update, empty queue cleanup.
-- [ ] 5.4 Add contract tests for enqueue text, enqueue images, update preserves images, delete last item removes session key, invalid index/text, unknown session.
+- [x] 5.4 Add contract tests for enqueue text, enqueue images, update preserves images, delete last item removes session key, invalid index/text, unknown session.
 - [ ] 5.5 Add a concurrent enqueue Rust test to ensure no lost update under multiple simultaneous requests to the same queue file.
 
 ## 6. Harness config endpoint
 
 - [x] 6.1 Implement harness config normalization and `harness.json` writer matching Python `_save_harness` (`sort_keys=True`, indent=2, trailing newline).
 - [x] 6.2 Implement `POST /api/sessions/{id}/harness`, including unknown legacy `text` rejection, cooldown/remaining validation, missing session behavior, and normalized response.
-- [ ] 6.3 Add contract tests: Rust write → Python GET `/harness`; Python write → Rust GET `/harness`; invalid `text`, cooldown, remaining, and unknown session cases.
+- [x] 6.3 Add contract tests: Rust write → Python GET `/harness`; Python write → Rust GET `/harness`; invalid `text`, cooldown, remaining, and unknown session cases.
 
 ## 7. Send, ui_response, interrupt, heartbeat
 
@@ -55,7 +55,7 @@
 - [x] 7.2 Implement `POST /api/sessions/{id}/ui_response`: Pi-only validation, forward allowed fields (`id`, `value`, `confirmed`, `cancelled`), live UI success, `unknown cmd` legacy fallback via ESC/text, and matching 404/502 errors.
 - [x] 7.3 Implement `POST /api/sessions/{id}/interrupt`: broker `keys` with ESC and response `ok/broker` parity.
 - [x] 7.4 Implement `POST /api/sessions/{id}/heartbeat`: update web activity for supported web-owned pi-rpc sessions and return `session_id`, `idle_timeout_seconds`, `last_web_activity_ts`; unsupported sessions return 409.
-- [ ] 7.5 Add stub-broker contract tests for send success, send broker-error, send fallback enqueue, ui_response success/fallback/cancelled, interrupt ESC payload, heartbeat supported/unsupported.
+- [x] 7.5 Add stub-broker contract tests for send success, send broker-error, send fallback enqueue, ui_response success/fallback/cancelled, interrupt ESC payload, heartbeat supported/unsupported.
 
 ## 8. File write, global file POST, and attachment injection
 

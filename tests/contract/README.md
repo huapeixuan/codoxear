@@ -27,9 +27,10 @@ readonly endpoint tests are unlocked wave-by-wave by
 Phase 3 POST parity uses the same dual-server fixture for disk-writing routes
 and lightweight Rust-only stub broker coverage for live broker mutations. The
 `post` selector covers auth, cwd group edits, alias/sidebar writes, queue and
-harness mutations, send/ui/interrupt socket calls, file write/read/inspect,
-attachment rejection boundaries, voice/subscription/listener writes, feature-
-disabled voice debug endpoints, hooks no-auth behavior, and session-create
+harness mutations, send/ui/interrupt/heartbeat socket calls including broker
+error and legacy fallback branches, file write/read/inspect, attachment
+rejection boundaries, voice/subscription/listener writes, feature-disabled
+voice debug endpoints, hooks no-auth behavior, and session-create
 validation/tmux-unavailable boundaries.
 
 Queue and harness workers remain opt-in during Phase 3. To test or operate Rust
@@ -57,8 +58,11 @@ run `(cd backend-rs && cargo build --release --bins)`.
   random localhost port with the same password and HOME.
 - `signed_auth_cookie`: lazily creates/loads
   `<shared_app_home>/.local/share/codoxear/hmac_secret` and signs a
-  `codoxear_auth` cookie directly. Phase 1 does this because `/api/login` is out
-  of scope for the Rust skeleton.
+  `codoxear_auth` cookie directly. Login parity is now covered separately by
+  cross-authenticating Python-issued and Rust-issued cookies.
+- `_write_contract_session`: creates a sidecar plus a configurable Unix-socket
+  stub broker. Tests can pass `broker_handler` to assert exact write commands or
+  force broker errors/legacy fallbacks without starting real Codex/Pi brokers.
 
 Common fail modes:
 
