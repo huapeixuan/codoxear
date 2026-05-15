@@ -3,16 +3,60 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from codoxear.server import _download_disposition
-from codoxear.server import _inspect_client_path
-from codoxear.server import _inspect_openable_file
-from codoxear.server import _read_client_file_view
-from codoxear.server import _read_text_file_for_client
-from codoxear.server import _read_text_file_for_write
-from codoxear.server import _read_text_or_image
-from codoxear.server import _read_downloadable_file
-from codoxear.server import _write_new_text_file_atomic
-from codoxear.server import _write_text_file_atomic
+from codoxear import server
+from codoxear import workspace_files
+
+
+def _download_disposition(path):
+    return workspace_files.download_disposition(path)
+
+
+def _read_text_file_for_client(path, *, max_bytes):
+    return workspace_files.read_text_file_for_client(path, max_bytes=max_bytes)
+
+
+def _read_text_file_for_write(path, *, max_bytes):
+    return workspace_files.read_text_file_for_write(path, max_bytes=max_bytes)
+
+
+def _read_downloadable_file(path):
+    return workspace_files.read_downloadable_file(path)
+
+
+def _read_client_file_view(path):
+    return workspace_files.read_client_file_view(
+        path, max_bytes=server.FILE_READ_MAX_BYTES, file_kind=server._file_kind
+    )
+
+
+def _inspect_client_path(path):
+    return workspace_files.inspect_client_path(
+        path, max_bytes=server.FILE_READ_MAX_BYTES, file_kind=server._file_kind
+    )
+
+
+def _inspect_openable_file(path):
+    return workspace_files.inspect_openable_file(
+        path, max_bytes=server.FILE_READ_MAX_BYTES, file_kind=server._file_kind
+    )
+
+
+def _read_text_or_image(path):
+    return workspace_files.read_text_or_image(
+        path, max_bytes=server.FILE_READ_MAX_BYTES, file_kind=server._file_kind
+    )
+
+
+def _write_text_file_atomic(path, *, text):
+    return workspace_files.write_text_file_atomic(
+        path, text=text, max_bytes=server.FILE_READ_MAX_BYTES
+    )
+
+
+def _write_new_text_file_atomic(path, *, text):
+    return workspace_files.write_new_text_file_atomic(
+        path, text=text, max_bytes=server.FILE_READ_MAX_BYTES
+    )
 
 
 class TestInspectOpenableFile(unittest.TestCase):

@@ -15,7 +15,7 @@ class TestStageUploadedFile(unittest.TestCase):
             with patch("codoxear.server.UPLOAD_DIR", upload_root), patch("codoxear.server._now", return_value=1234.567):
                 path = _stage_uploaded_file("sess-1", "../../payload.tar.gz", b"\x00\x01payload")
 
-            self.assertEqual(path, upload_root / "sess-1" / "1234567_payload.tar.gz")
+            self.assertEqual(path, (upload_root / "sess-1" / "1234567_payload.tar.gz").resolve())
             self.assertEqual(path.read_bytes(), b"\x00\x01payload")
 
     def test_stage_uploaded_file_falls_back_to_generic_name(self) -> None:
@@ -25,7 +25,7 @@ class TestStageUploadedFile(unittest.TestCase):
                 path = _stage_uploaded_file("sess-2", "///", b"abc")
 
             self.assertEqual(path.name, "2000_file")
-            self.assertEqual(path.parent, upload_root / "sess-2")
+            self.assertEqual(path.parent, (upload_root / "sess-2").resolve())
 
     def test_stage_uploaded_file_rejects_oversize_payload(self) -> None:
         with tempfile.TemporaryDirectory() as td:

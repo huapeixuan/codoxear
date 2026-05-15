@@ -41,6 +41,21 @@ Currently supported agent backends:
 - Powers the `pr_summary` field returned in `GET /api/sessions` and the new detail endpoint `GET /api/sessions/<id>/repo` (honors `?refresh=1`).
 - Degrades to `availability: "no-gh" | "no-pr" | "not-a-repo" | "error"` when `gh` is missing, the branch has no PR, the cwd is not a git tree, or a subprocess fails/timeouts.
 
+### `codoxear.session_list`
+
+- Owns frontend session-list projection for `GET /api/sessions` and recent/directories views.
+- Keep row slimming, grouping, hidden cwd filtering, ordering, and pagination here rather than re-embedding that logic in `server.py`.
+
+### `codoxear.workspace_files`
+
+- Owns session-relative path validation, directory listing, root `.gitignore` filtering, text/image/pdf inspection, safe reads/writes, download metadata, and git file path resolution helpers.
+- Routes in `server.py` should parse params and map errors to HTTP responses, then delegate file/path behavior here so path-safety semantics stay single-sourced.
+
+### `codoxear.session_state_store`
+
+- Owns JSON load/save/clean helpers for `SessionManager` persisted runtime state (`session_aliases.json`, `session_files.json`, `recent_cwds.json`, `cwd_groups.json`, hidden sessions, and shared atomic JSON writes).
+- Preserve existing filenames and JSON shapes; lifecycle decisions (when to prune/delete/drain) remain in `SessionManager`.
+
 ### `codoxear.rollout_log` and `codoxear.pi_log`
 
 - Shared normalization layer that turns backend-native logs into the UI’s common event/token/busy model.
@@ -67,6 +82,7 @@ Currently supported agent backends:
 - Do not commit secrets: `.env`, `env`, keys, tokens, logs.
 - Do not commit runtime artifacts: `codex-homes/`, `socks/`, `root-repo/`, `server.log`, `hmac_secret`, `__pycache__/`.
 - Keep shared helpers in `codoxear/util.py` (avoid duplicating log-scan and app-dir logic across modules).
+- Do not put new session-list projection, workspace/file path logic, or runtime JSON persistence logic back into `codoxear/server.py`; use the focused modules above.
 - When a subsystem is semantically wrong, replace it instead of layering more patches onto the broken structure.
 - Prefer the smallest invariant-preserving model over incremental adaptation of an already confused implementation.
 - Do not let internal pipeline stages redefine user-facing semantics. Define the semantic invariant first, then make the implementation mechanically preserve it.
