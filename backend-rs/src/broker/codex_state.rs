@@ -1,4 +1,5 @@
-use crate::broker::runtime::{write_meta, BrokerEnv, BrokerStateHandle};
+use crate::broker::runtime::{BrokerEnv, BrokerStateHandle};
+use crate::broker::runtime_support::write_meta;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::fs;
@@ -334,7 +335,7 @@ mod tests {
             last_turn_id: None,
             pty_master: None,
             pending_ui_requests: serde_json::Map::new(),
-            live_message_offset: 0,
+            pi_live: crate::broker::pi_live::PiLiveState::default(),
         }))
     }
 

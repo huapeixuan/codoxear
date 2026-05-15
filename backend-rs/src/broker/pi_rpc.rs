@@ -202,6 +202,10 @@ while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   typ=$(printf '%s' "$line" | sed -n 's/.*"type":"\([^"]*\)".*/\1/p')
   if [ "$typ" = "prompt" ]; then
+    if printf '%s' "$line" | grep -q 'fail-prompt'; then
+      printf '{"type":"response","id":"%s","success":false,"error":"prompt failed"}\n' "$id"
+      continue
+    fi
     printf '{"type":"response","id":"%s","success":true,"data":{"turn_id":"turn-1"}}\n' "$id"
     printf '{"type":"event","event":"message.delta","delta":"hi","turn_id":"turn-1"}\n'
   elif [ "$typ" = "get_state" ]; then
@@ -230,6 +234,10 @@ done
             .unwrap();
         let rpc = PiRpcClient::from_child(&mut child).unwrap();
         assert_eq!(rpc.prompt("hello", None).unwrap()["turn_id"], "turn-1");
+        assert_eq!(
+            rpc.prompt("fail-prompt", None).unwrap_err(),
+            "prompt failed"
+        );
         assert_eq!(rpc.get_state().unwrap()["session_id"], "sess-1");
         assert_eq!(rpc.get_commands().unwrap()[0]["name"], "ask");
         assert!(rpc
