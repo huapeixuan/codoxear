@@ -28,7 +28,7 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _wait_for_http(url: str, *, timeout: float = 10.0) -> None:
+def _wait_for_http(url: str, *, timeout: float = 30.0) -> None:
     import urllib.error
     import urllib.request
 
@@ -178,6 +178,16 @@ def _contract_server_env(shared_app_home: Path, port: int) -> dict[str, str]:
             "CODEX_WEB_HOST": "127.0.0.1",
             "CODEX_WEB_PORT": str(port),
             "CODEX_WEB_DISCOVER_MIN_INTERVAL_SECONDS": "0",
+            # Avoid a best-effort `tailscale status --json` probe during Python
+            # VoicePushCoordinator startup.  GitHub-hosted macOS runners can have
+            # a slow/non-responsive tailscale binary, which makes the readiness
+            # probe race the previous 10s fixture timeout before the HTTP server
+            # starts serving requests.
+            "CODEX_WEB_PUSH_VAPID_SUBJECT": "https://localhost",
+            # Contract tests do not assert Python's background voice scan loop;
+            # disabling it keeps fixture startup deterministic while preserving
+            # request/response and disk-state parity for voice endpoints.
+            "CODOXEAR_ENABLE_VOICE_SCAN": "1",
             "CODOXEAR_APP_DIR": str(shared_app_home / ".local/share/codoxear"),
         }
     )
