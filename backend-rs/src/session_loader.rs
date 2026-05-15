@@ -639,7 +639,10 @@ fn pid_alive(pid: i64) -> bool {
     }
     #[cfg(unix)]
     {
-        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+        match unsafe { libc::kill(pid as libc::pid_t, 0) } {
+            0 => true,
+            _ => std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM),
+        }
     }
     #[cfg(not(unix))]
     {

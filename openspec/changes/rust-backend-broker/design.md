@@ -117,3 +117,10 @@ Phase 4 的入口事实：
 1. **Rust Pi RPC 实现方式**：直接 Rust 实现 Pi RPC protocol，还是用很小的 Python/Node helper bridge？建议 coding-agent 先调查 `codoxear/pi_rpc.py` 和 Pi CLI protocol 后选择；但最终 socket/sidecar contract 不得变化。
 2. **PTY crate 选择**：`portable-pty` vs `nix::pty::forkpty`。建议以 pid/process-group/resize 能力为准，而不是 API 易用性。
 3. **CI macOS 成本**：如果 GitHub Actions quota 不适合每次跑完整 suite，至少 broker smoke + log discovery subset 必须跑；完整真实 Codex/Pi 可作为手动验证。
+
+## Implementation Notes (Phase 4 landing)
+
+- Final PTY implementation uses direct `libc::forkpty`/`ioctl`/termios primitives instead of adding a higher-level PTY crate. This keeps child pid/process-group cleanup and `TIOCSWINSZ` resize behavior explicit for macOS/Linux parity.
+- Pi RPC is implemented directly in Rust (`backend-rs/src/broker/pi_rpc.rs`) as a JSON-line client for `prompt`, `abort`, `get_state`, `get_commands`, `send_ui_response`, and event/stderr drains. No Python/Node helper bridge is required for the Rust broker path.
+- macOS `lsof`/`pgrep` discovery uses injectable command-runner functions in `broker::log_discovery`, so Linux CI can cover parsing/traversal with fixture output. Real macOS validation remains a required handoff item unless a `macos-latest` broker subset is added.
+- The rollout remains explicitly opt-in: neither docs nor code make Rust broker the default unless `CODOXEAR_RUST_BROKER_BIN` is set; Python fallback remains available by unsetting it.

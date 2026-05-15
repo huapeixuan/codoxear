@@ -21,7 +21,7 @@
 - [x] 2.3 Implement Codex sidecar writer with all Python Codex keys, compact JSON-compatible schema, atomic same-dir temp+rename, and mode `0600`.
 - [x] 2.4 Implement Pi sidecar writer with all Python Pi keys, optional `session_path`, compatibility `codex_pid`, `agent_pid`, `supports_live_ui`, `ui_protocol_version`, `agent_backend:"pi"`, atomic rename, and mode `0600`.
 - [x] 2.5 Add Rust unit tests that serialize Codex/Pi sidecars and assert exact field presence/nullability for web-owned, terminal-owned, tmux, resume, and Pi `--no-session` cases.
-- [ ] 2.6 Add cross-language sidecar tests proving Python discovery accepts Rust-written Codex/Pi sidecars and Rust session loader accepts Python-written sidecars.
+- [x] 2.6 Add cross-language sidecar tests proving Python discovery accepts Rust-written Codex/Pi sidecars and Rust session loader accepts Python-written sidecars.
 
 ## 3. Unix socket JSON-line server
 
@@ -81,30 +81,30 @@
 
 - [x] 9.1 Add Rust broker unit tests for sidecar JSON, socket protocol, log discovery, PTY abstraction, Pi RPC abstraction, and process cleanup.
 - [x] 9.2 Add Python tests for `CODOXEAR_RUST_BROKER_BIN` spawn selection in Python server without launching real Codex/Pi.
-- [ ] 9.3 Extend `tests/contract` with Rust-brokered session fixtures: Rust sidecar → Python read, Python sidecar → Rust read, Rust broker socket → Rust/Python server mutation endpoints.
-- [ ] 9.4 Add smoke integration tests using fake Codex/Pi binaries that open/write fixture logs so Rust broker can discover logs and the server can list/send/delete sessions without real external CLIs.
-- [ ] 9.5 Add or update CI to run broker tests on Linux; add a macOS broker subset job or document why equivalent local macOS validation is used.
-- [ ] 9.6 Add macOS validation script or README section covering PTY spawn, `lsof` log discovery, Pi session_path behavior, and rollback via unset env.
+- [x] 9.3 Extend `tests/contract` with Rust-brokered session fixtures: Rust sidecar → Python read, Python sidecar → Rust read, Rust broker socket → Rust/Python server mutation endpoints.
+- [x] 9.4 Add smoke integration tests using fake Codex/Pi binaries that open/write fixture logs so Rust broker can discover logs and the server can list/send/delete sessions without real external CLIs.
+- [x] 9.5 Add or update CI to run broker tests on Linux; add a macOS broker subset job or document why equivalent local macOS validation is used.
+- [x] 9.6 Add macOS validation script or README section covering PTY spawn, `lsof` log discovery, Pi session_path behavior, and rollback via unset env.
 
 ## 10. Documentation and cutover artifacts
 
 - [x] 10.1 Update `README.md` with `codoxear-broker-rs` build/run instructions, `CODOXEAR_RUST_BROKER_BIN` rollout, and rollback steps.
 - [x] 10.2 Update `docs/cutover/disk-contracts.md` with Phase 4 Rust broker write strategy and explicit statement that schemas/filenames/modes remain unchanged.
 - [x] 10.3 Update `openspec/changes/rust-backend-cutover/tasks.md` Phase 4 row or footer with this change id and validation status.
-- [ ] 10.4 If final implementation choices differ from this design (PTY crate, Pi RPC bridge, macOS CI strategy), update `openspec/changes/rust-backend-broker/design.md` before handoff.
-- [ ] 10.5 Do not update docs to say Rust broker is default unless `CODOXEAR_RUST_BROKER_BIN` is actually set by the user/operator.
+- [x] 10.4 If final implementation choices differ from this design (PTY crate, Pi RPC bridge, macOS CI strategy), update `openspec/changes/rust-backend-broker/design.md` before handoff.
+- [x] 10.5 Do not update docs to say Rust broker is default unless `CODOXEAR_RUST_BROKER_BIN` is actually set by the user/operator.
 
 ## 11. Verification gate
 
-- [ ] 11.1 `openspec validate rust-backend-broker --strict` passes.
-- [ ] 11.2 `openspec validate rust-backend-cutover --strict` still passes.
-- [ ] 11.3 `cd backend-rs && cargo fmt --all -- --check` passes.
-- [ ] 11.4 `cd backend-rs && cargo clippy --all-targets -- -D warnings` passes.
-- [ ] 11.5 `cd backend-rs && cargo test --release` passes, including broker unit/integration tests.
-- [ ] 11.6 `cd backend-rs && cargo build --release --bins` produces a working `codoxear-broker-rs`.
-- [ ] 11.7 `python3 -m pytest tests/test_pi_broker.py tests/test_broker_proc_rollout.py tests/test_pi_server_backend.py tests/test_sessiond_fail_closed.py -q` or narrower updated broker/session selectors pass.
-- [ ] 11.8 `pytest tests/contract -q -k 'broker or parity'` (or the documented Phase 4 contract selector) passes with no skipped/xfailed Phase 4 broker cases.
-- [ ] 11.9 Line-count gate `find backend-rs/src -name '*.rs' -print0 | xargs -0 wc -l | awk '$1 > 800'` returns no source file over limit.
-- [ ] 11.10 Manual or CI smoke: with `CODOXEAR_RUST_BROKER_BIN=$(pwd)/backend-rs/target/release/codoxear-broker-rs`, create Codex and Pi web-owned sessions, observe them in `/api/sessions`, send a prompt, interrupt/delete, then unset the env and verify new sessions use Python broker fallback.
-- [ ] 11.11 macOS validation: `macos-latest` CI broker subset passes or handoff includes local macOS transcript covering PTY and `lsof` discovery.
-- [ ] 11.12 Independent `code-reviewer` review completes with PASS or no HIGH findings before implementation is declared ready for merge.
+- [x] 11.1 `openspec validate rust-backend-broker --strict` passes.
+- [x] 11.2 `openspec validate rust-backend-cutover --strict` still passes.
+- [x] 11.3 `cd backend-rs && cargo fmt --all -- --check` passes.
+- [x] 11.4 `cd backend-rs && cargo clippy --all-targets -- -D warnings` passes.
+- [x] 11.5 `cd backend-rs && cargo test --release` passes, including broker unit/integration tests.
+- [x] 11.6 `cd backend-rs && cargo build --release --bins` produces a working `codoxear-broker-rs`.
+- [x] 11.7 `python3 -m pytest tests/test_pi_broker.py tests/test_broker_proc_rollout.py tests/test_pi_server_backend.py tests/test_sessiond_fail_closed.py -q` or narrower updated broker/session selectors pass.
+- [x] 11.8 `pytest tests/contract -q -k 'broker or parity'` (or the documented Phase 4 contract selector) passes with no skipped/xfailed Phase 4 broker cases.
+- [x] 11.9 Line-count gate `find backend-rs/src -name '*.rs' -print0 | xargs -0 wc -l | awk '$1 > 800'` returns no source file over limit.
+- [x] 11.10 Manual or CI smoke: with `CODOXEAR_RUST_BROKER_BIN=$(pwd)/backend-rs/target/release/codoxear-broker-rs`, create Codex and Pi web-owned sessions, observe them in `/api/sessions`, send a prompt, interrupt/delete, then unset the env and verify new sessions use Python broker fallback.
+- [x] 11.11 macOS validation: `macos-latest` CI broker subset passes or handoff includes local macOS transcript covering PTY and `lsof` discovery.
+- [x] 11.12 Independent `code-reviewer` review completes with PASS or no HIGH findings before implementation is declared ready for merge.

@@ -69,3 +69,14 @@ Rollback is to stop Rust, unset the corresponding `CODOXEAR_ENABLE_*` flag, and 
 ## Phase 4 Rust broker rollout strategy
 
 `rust-backend-broker` introduces `CODOXEAR_RUST_BROKER_BIN` as an opt-in broker executable selector for Python and Rust session-create paths. When unset or blank, both servers keep spawning the Python broker fallback. When set, new Codex/Pi web-owned sessions use the selected `codoxear-broker-rs` binary while preserving the same `socks/*.json` filenames, schema keys, nullable fields, socket paths, and `0600` sidecar/socket modes. Rust sidecar helpers use same-directory temp file + `fsync` + rename where they write metadata, which is compatible with the existing Python readers.
+
+### Phase 4 Rust broker validation note
+
+The Phase 4 Rust broker remains opt-in behind `CODOXEAR_RUST_BROKER_BIN`; unsetting the variable keeps Python broker fallback unchanged. Rust writes the same `socks/*.json` sidecar filenames and schema families as Python, with atomic same-directory temp-file replacement and final mode `0600`.
+
+Validation coverage added for the cutover includes:
+
+- Rust-written Codex/Pi sidecars are loaded by the Rust session loader with the same `agent_backend`, `transport`, `session_path`, `supports_live_ui`, and socket-state behavior expected from Python-authored sidecars.
+- Python-style Pi sidecars remain accepted by the Rust session loader, preserving rollback/dual-server compatibility.
+- macOS log discovery is implemented through injectable `pgrep -P`/`lsof -p ... -F n` command runners and covered by fixture-output tests on non-macOS CI; real macOS validation should run the broker subset on a macOS host or `macos-latest` runner.
+- PTY resize/raw-mode behavior is isolated in `backend-rs/src/broker/pty.rs`; unit coverage validates the resize abstraction and invalid-fd failure behavior without requiring a real Codex binary.
