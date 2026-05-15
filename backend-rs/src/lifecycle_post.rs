@@ -73,6 +73,11 @@ pub(crate) fn heartbeat_impl(
 }
 
 fn delete_session_impl(state: &AppState, session_id: &str) -> Result<Value, (StatusCode, String)> {
+    if parse_historical_session_id(session_id).is_some() {
+        hide_session_id(&state.config.app_dir, session_id)?;
+        clear_session_state(&state.config.app_dir, session_id)?;
+        return Ok(json!({"ok": true}));
+    }
     let row = session_or_404(state, session_id)?;
     let sock = row_sock_path(&state.config.app_dir, &row);
     let shutdown_ok = broker_shutdown(&sock, Duration::from_secs_f64(1.0))
@@ -85,7 +90,13 @@ fn delete_session_impl(state: &AppState, session_id: &str) -> Result<Value, (Sta
     }
     let _ = fs::remove_file(&sock);
     let _ = fs::remove_file(sock.with_extension("json"));
-    let hidden_path = state.config.app_dir.join("hidden_sessions.json");
+    hide_session_id(&state.config.app_dir, session_id)?;
+    clear_session_state(&state.config.app_dir, session_id)?;
+    Ok(json!({"ok": true}))
+}
+
+fn hide_session_id(app_dir: &FsPath, session_id: &str) -> Result<(), (StatusCode, String)> {
+    let hidden_path = app_dir.join("hidden_sessions.json");
     with_state_file_lock(&hidden_path, || {
         let mut hidden = match read_value(&hidden_path)? {
             Some(Value::Array(items)) => items,
@@ -96,9 +107,16 @@ fn delete_session_impl(state: &AppState, session_id: &str) -> Result<Value, (Sta
         }
         hidden.sort_by_key(|a| a.to_string());
         write_value(&hidden_path, &Value::Array(hidden))
-    })?;
-    clear_session_state(&state.config.app_dir, session_id)?;
-    Ok(json!({"ok": true}))
+    })
+}
+
+fn parse_historical_session_id(session_id: &str) -> Option<(&str, &str)> {
+    let rest = session_id.trim().strip_prefix("history:")?;
+    let (backend, resume_id) = rest.split_once(':')?;
+    if !matches!(backend, "codex" | "pi") || resume_id.trim().is_empty() {
+        return None;
+    }
+    Some((backend, resume_id))
 }
 
 fn clear_session_state(app_dir: &FsPath, session_id: &str) -> Result<(), (StatusCode, String)> {

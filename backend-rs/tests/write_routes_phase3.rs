@@ -498,6 +498,29 @@ async fn delete_hides_session_and_clears_sidecar_state() {
 }
 
 #[tokio::test]
+async fn delete_historical_session_id_hides_without_live_sidecar() {
+    let (home, app) = test_app();
+    let cookie = signed_cookie(&home);
+    let historical_id = "history:pi:resume-123";
+
+    let (status, body) = post_json(
+        app,
+        "/api/sessions/history:pi:resume-123/delete",
+        &cookie,
+        json!({}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body, json!({"ok": true}));
+    let hidden: Value = serde_json::from_str(
+        &fs::read_to_string(app_dir(&home).join("hidden_sessions.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(hidden.as_array().unwrap().contains(&json!(historical_id)));
+}
+
+#[tokio::test]
 async fn heartbeat_preserves_sidecar_private_file_mode() {
     let (home, app) = test_app();
     write_session(&home, "sid-a", "pi");
