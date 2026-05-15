@@ -67,7 +67,7 @@
 - [x] 7.2 Modify Codex `SessionManager.spawn_web_session` argv construction so non-tmux and tmux inline commands use Rust broker binary when the helper returns a path; otherwise use `[sys.executable, "-m", "codoxear.broker"]`.
 - [x] 7.3 Modify Pi web-owned spawn path so non-tmux and tmux inline commands use Rust broker binary with `--cwd`, `--session-file`, `--`, AskUser extension args when the helper returns a path; otherwise use `[sys.executable, "-m", "codoxear.pi_broker"]`.
 - [x] 7.4 Preserve all existing env values for owner, backend, spawn_nonce, tmux, model/provider/reasoning/service-tier, homes, resume id, and worktree behavior.
-- [ ] 7.5 Add Python tests for argv/env selection: unset flag uses Python broker, set flag uses Rust broker for Codex, set flag uses Rust broker + `--session-file` for Pi, and tmux inline shell command contains the selected broker.
+- [x] 7.5 Add Python tests for argv/env selection: unset flag uses Python broker, set flag uses Rust broker for Codex, set flag uses Rust broker + `--session-file` for Pi, and tmux inline shell command contains the selected broker.
 
 ## 8. Broker selection rollout in Rust server
 
@@ -75,12 +75,12 @@
 - [x] 8.2 Modify Rust Codex create path to build argv with Rust broker binary when set and Python fallback when unset; keep trust/model/resume/worktree args after `--` unchanged.
 - [x] 8.3 Modify Rust Pi create path to build argv with Rust broker binary + `--session-file` when set and Python `codoxear.pi_broker` fallback when unset; keep AskUser extension and requested Pi args unchanged.
 - [x] 8.4 Ensure tmux create path uses the selected broker executable and inline env, not a hard-coded Python module.
-- [ ] 8.5 Add Rust tests for session_create argv/env in fake spawn mode or by factoring argv builder functions: Codex fallback, Codex Rust broker, Pi fallback, Pi Rust broker, tmux Rust broker.
+- [x] 8.5 Add Rust tests for session_create argv/env in fake spawn mode or by factoring argv builder functions: Codex fallback, Codex Rust broker, Pi fallback, Pi Rust broker, tmux Rust broker.
 
 ## 9. Contract and integration test matrix
 
 - [ ] 9.1 Add Rust broker unit tests for sidecar JSON, socket protocol, log discovery, PTY abstraction, Pi RPC abstraction, and process cleanup.
-- [ ] 9.2 Add Python tests for `CODOXEAR_RUST_BROKER_BIN` spawn selection in Python server without launching real Codex/Pi.
+- [x] 9.2 Add Python tests for `CODOXEAR_RUST_BROKER_BIN` spawn selection in Python server without launching real Codex/Pi.
 - [ ] 9.3 Extend `tests/contract` with Rust-brokered session fixtures: Rust sidecar → Python read, Python sidecar → Rust read, Rust broker socket → Rust/Python server mutation endpoints.
 - [ ] 9.4 Add smoke integration tests using fake Codex/Pi binaries that open/write fixture logs so Rust broker can discover logs and the server can list/send/delete sessions without real external CLIs.
 - [ ] 9.5 Add or update CI to run broker tests on Linux; add a macOS broker subset job or document why equivalent local macOS validation is used.

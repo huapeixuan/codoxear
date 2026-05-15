@@ -867,6 +867,50 @@ class TestSpawnWebSessionResume(unittest.TestCase):
         self.assertIn("codoxear.broker", shell_cmd)
         wait_mock.assert_called_once()
 
+    def test_spawn_web_session_tmux_uses_rust_broker_bin_when_enabled(self) -> None:
+        manager = SessionManager.__new__(SessionManager)
+
+        with (
+            TemporaryDirectory() as td,
+            patch.dict(
+                "os.environ",
+                {"CODOXEAR_RUST_BROKER_BIN": " /tmp/codoxear-broker-rs "},
+                clear=False,
+            ),
+            patch("codoxear.server.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "codoxear.server._wait_for_spawned_broker_meta",
+                return_value={"broker_pid": 7778},
+            ),
+            patch(
+                "codoxear.server.subprocess.run",
+                side_effect=[
+                    subprocess.CompletedProcess(
+                        ["/usr/bin/tmux", "has-session", "-t", "codoxear"],
+                        1,
+                        stdout="",
+                        stderr="",
+                    ),
+                    subprocess.CompletedProcess(
+                        ["/usr/bin/tmux", "new-session"], 0, stdout="%8\n", stderr=""
+                    ),
+                ],
+            ) as run_mock,
+        ):
+            SessionManager.spawn_web_session(
+                manager,
+                cwd=td,
+                create_in_tmux=True,
+            )
+
+        shell_cmd = run_mock.call_args_list[1].args[0][-1]
+        self.assertIn("/tmp/codoxear-broker-rs", shell_cmd)
+        self.assertIn("--cwd", shell_cmd)
+        self.assertIn(str(Path(td).resolve()), shell_cmd)
+        self.assertIn("CODEX_WEB_AGENT_BACKEND=codex", shell_cmd)
+        self.assertIn("CODEX_WEB_TRANSPORT=tmux", shell_cmd)
+        self.assertNotIn("codoxear.broker", shell_cmd)
+
     def test_spawn_web_session_rejects_tmux_when_unavailable(self) -> None:
         manager = SessionManager.__new__(SessionManager)
         with (

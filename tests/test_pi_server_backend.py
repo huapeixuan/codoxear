@@ -1250,6 +1250,54 @@ class TestPiBackendRouting(unittest.TestCase):
         self.assertIn("codoxear.pi_broker", shell_cmd)
         wait_mock.assert_called_once()
 
+    def test_spawn_web_session_pi_tmux_uses_rust_broker_bin_when_enabled(self) -> None:
+        manager = SessionManager.__new__(SessionManager)
+
+        with (
+            tempfile.TemporaryDirectory() as td,
+            patch.dict(
+                "os.environ",
+                {"CODOXEAR_RUST_BROKER_BIN": "/tmp/codoxear-broker-rs"},
+                clear=False,
+            ),
+            patch("codoxear.server.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "codoxear.server._wait_for_spawned_broker_meta",
+                return_value={"broker_pid": 7778, "backend": "pi"},
+            ),
+            patch(
+                "codoxear.server.subprocess.run",
+                side_effect=[
+                    __import__("subprocess").CompletedProcess(
+                        ["/usr/bin/tmux", "has-session", "-t", "codoxear"],
+                        1,
+                        stdout="",
+                        stderr="",
+                    ),
+                    __import__("subprocess").CompletedProcess(
+                        ["/usr/bin/tmux", "new-session"],
+                        0,
+                        stdout="%8\n",
+                        stderr="",
+                    ),
+                ],
+            ) as run_mock,
+        ):
+            SessionManager.spawn_web_session(
+                manager,
+                cwd=td,
+                backend="pi",
+                create_in_tmux=True,
+            )
+
+        shell_cmd = run_mock.call_args_list[1].args[0][-1]
+        self.assertIn("/tmp/codoxear-broker-rs", shell_cmd)
+        self.assertIn("--session-file", shell_cmd)
+        self.assertIn("CODEX_WEB_AGENT_BACKEND=pi", shell_cmd)
+        self.assertIn("CODEX_WEB_TRANSPORT=tmux", shell_cmd)
+        self.assertIn("ask_user_bridge.ts", shell_cmd)
+        self.assertNotIn("codoxear.pi_broker", shell_cmd)
+
     def test_tmux_takeover_descriptor_for_live_pi_tmux_session(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             sock = Path(td) / "pi.sock"

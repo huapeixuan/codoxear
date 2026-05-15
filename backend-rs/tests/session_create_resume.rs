@@ -1,6 +1,7 @@
 use codoxear_backend_rs::session_create::selected_broker_argv;
 use codoxear_backend_rs::session_create_support::{
-    find_codex_resume_candidate_in, find_pi_resume_session_file_in,
+    build_tmux_shell_command_for_tests, find_codex_resume_candidate_in,
+    find_pi_resume_session_file_in,
 };
 use serde_json::json;
 use std::fs;
@@ -130,6 +131,30 @@ fn selected_broker_argv_keeps_python_fallback_when_rust_bin_blank() {
     );
     assert!(argv.iter().any(|arg| arg == "codoxear.pi_broker"));
     assert_eq!(argv[argv.len() - 1], "--");
+}
+
+#[test]
+fn tmux_shell_command_uses_selected_rust_broker_binary() {
+    let mut argv = selected_broker_argv(
+        "pi",
+        Path::new("/repo with spaces"),
+        Some(Path::new("/tmp/pi session.jsonl")),
+        Some("/opt/bin/codoxear-broker-rs"),
+    );
+    argv.extend(["-e".to_string(), "/bridge/ask_user_bridge.ts".to_string()]);
+    let shell = build_tmux_shell_command_for_tests(
+        &argv,
+        &[
+            ("CODEX_WEB_AGENT_BACKEND".to_string(), "pi".to_string()),
+            ("CODEX_WEB_TRANSPORT".to_string(), "tmux".to_string()),
+        ],
+    );
+
+    assert!(shell.contains("/opt/bin/codoxear-broker-rs"));
+    assert!(shell.contains("--session-file"));
+    assert!(shell.contains("ask_user_bridge.ts"));
+    assert!(shell.contains("CODEX_WEB_AGENT_BACKEND=pi"));
+    assert!(!shell.contains("codoxear.pi_broker"));
 }
 
 #[test]

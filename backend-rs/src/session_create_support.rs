@@ -754,6 +754,10 @@ fn run_tmux_launch(tmux_window: &str, shell_cmd: &str) -> Result<(), (StatusCode
     }
 }
 
+pub fn build_tmux_shell_command_for_tests(argv: &[String], envs: &[(String, String)]) -> String {
+    build_tmux_shell_command(argv, envs)
+}
+
 fn build_tmux_shell_command(argv: &[String], envs: &[(String, String)]) -> String {
     let mut parts = vec![
         "cd".to_string(),
