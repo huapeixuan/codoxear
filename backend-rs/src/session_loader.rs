@@ -108,6 +108,9 @@ pub fn load_session_rows(config: &RuntimeConfig) -> Result<Vec<SessionRow>, Stri
             let meta: SessionMeta = read_json_file(&meta_path)?;
             if let Some(row) = session_from_meta(session_id, &sock_path, meta, &context)? {
                 rows.push(row);
+            } else {
+                let _ = fs::remove_file(&sock_path);
+                let _ = fs::remove_file(&meta_path);
             }
         }
     }

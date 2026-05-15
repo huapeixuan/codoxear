@@ -124,6 +124,33 @@ fn load_session_rows_falls_back_to_sidecar_when_broker_is_down() {
 }
 
 #[test]
+fn load_session_rows_prunes_dead_sidecar_when_all_recorded_pids_are_gone() {
+    let dir = TempDir::new().unwrap();
+    let config = config(&dir);
+    let cwd = dir.path().join("project");
+    fs::create_dir(&cwd).unwrap();
+    let sock_path = config.app_dir.join("socks/s1.sock");
+    fs::write(&sock_path, b"").unwrap();
+    write_json(
+        sock_path.with_extension("json"),
+        json!({
+            "session_id": "thread-s1",
+            "agent_backend": "codex",
+            "owner": "web",
+            "cwd": cwd,
+            "broker_pid": 0,
+            "codex_pid": 0,
+            "start_ts": 100.0,
+            "updated_ts": 101.0
+        }),
+    );
+
+    assert!(load_session_rows(&config).unwrap().is_empty());
+    assert!(!sock_path.exists());
+    assert!(!sock_path.with_extension("json").exists());
+}
+
+#[test]
 fn load_session_rows_skips_hidden_sessions() {
     let dir = TempDir::new().unwrap();
     let config = config(&dir);
