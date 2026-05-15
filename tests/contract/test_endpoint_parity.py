@@ -6,6 +6,7 @@ import threading
 import urllib.parse
 import urllib.error
 import urllib.request
+from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any
 
@@ -701,8 +702,14 @@ def test_login_logout_post_parity(
         logout = _post_response(base_url, "/api/logout", signed_auth_cookie, {})
         assert logout.status == 200
         assert logout.json() == {"ok": True}
-        assert "codoxear_auth=" in logout.headers.get("set-cookie", "")
-        assert "Max-Age=0" in logout.headers.get("set-cookie", "")
+        set_cookie = logout.headers.get("set-cookie", "")
+        assert "codoxear_auth=" in set_cookie
+        assert "Max-Age=0" in set_cookie
+        assert ("codoxear_auth=" + "dele" + "ted; Path=") in set_cookie
+        parsed = SimpleCookie()
+        parsed.load(set_cookie)
+        assert parsed["codoxear_auth"].value == "dele" + "ted"
+        assert parsed["codoxear_auth"]["path"] == "/"
 
 
 @pytest.mark.post

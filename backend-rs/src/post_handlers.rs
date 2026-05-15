@@ -76,7 +76,7 @@ pub(crate) async fn logout() -> Response {
         StatusCode::OK,
         json!({"ok": true}),
         &format!(
-            "codoxear_auth={} Path={path}; Max-Age=0; HttpOnly; SameSite=Strict",
+            "codoxear_auth={}; Path={path}; Max-Age=0; HttpOnly; SameSite=Strict",
             "delet".to_string() + "ed"
         ),
     )

@@ -1,5 +1,5 @@
 use axum::body::Body;
-use axum::http::{header, Method, Request, StatusCode};
+use axum::http::{header, HeaderMap, Method, Request, StatusCode};
 use base64::Engine;
 use codoxear_backend_rs::app_state::AppState;
 use codoxear_backend_rs::routes::router;
@@ -173,6 +173,57 @@ async fn post_json_no_cookie(app: axum::Router, uri: &str, value: Value) -> (Sta
     let json = serde_json::from_slice(&body)
         .unwrap_or_else(|_| json!({"raw": String::from_utf8_lossy(&body)}));
     (status, json)
+}
+
+async fn post_json_with_headers(
+    app: axum::Router,
+    uri: &str,
+    cookie: &str,
+    value: Value,
+) -> (StatusCode, HeaderMap, Value) {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(uri)
+                .header(header::COOKIE, cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(&value).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json = serde_json::from_slice(&body)
+        .unwrap_or_else(|_| json!({"raw": String::from_utf8_lossy(&body)}));
+    (status, headers, json)
+}
+
+#[tokio::test]
+async fn logout_cookie_uses_python_compatible_path_attribute_separator() {
+    let (home, app) = test_app();
+    let cookie = signed_cookie(&home);
+
+    let (status, headers, body) =
+        post_json_with_headers(app, "/api/logout", &cookie, json!({})).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({"ok": true}));
+    let set_cookie = headers
+        .get(header::SET_COOKIE)
+        .expect("logout Set-Cookie")
+        .to_str()
+        .expect("ascii Set-Cookie");
+    let expected_prefix = String::from("codoxear_auth=") + "dele" + "ted; Path=";
+    assert!(
+        set_cookie.starts_with(&expected_prefix),
+        "logout cookie must separate value and Path attribute with '; ': {set_cookie}"
+    );
+    assert!(set_cookie.contains("; Max-Age=0"));
+    assert!(set_cookie.contains("; HttpOnly"));
+    assert!(set_cookie.contains("; SameSite=Strict"));
 }
 
 #[tokio::test]
