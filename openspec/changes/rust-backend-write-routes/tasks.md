@@ -124,4 +124,4 @@
 - [x] 14.8 Python worker handoff tests pass with truthy and falsy `CODOXEAR_ENABLE_*` env flags.
 - [x] 14.9 `openspec validate rust-backend-write-routes --strict` returns valid.
 - [x] 14.10 `openspec validate rust-backend-cutover --strict` still returns valid.
-- [ ] 14.11 Independent `code-reviewer` review completes with PASS or no HIGH findings before implementation is declared ready for merge.
+- [x] 14.11 Independent `code-reviewer` review completes with PASS or no HIGH findings before implementation is declared ready for merge. _(code-reviewer PASS on `cf72280`, comment `5f228437-338f-4b04-88e3-05acad910d11`)_
