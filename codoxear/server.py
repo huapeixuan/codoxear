@@ -1038,6 +1038,23 @@ def _write_new_text_file_atomic(path: Path, *, text: str) -> tuple[int, str]:
     return size, _file_content_version(data)
 
 
+def _write_json_state_atomic(path: Path, value: Any, *, sort_keys: bool = True) -> None:
+    os.makedirs(path.parent, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    try:
+        tmp.write_text(
+            json.dumps(value, ensure_ascii=False, sort_keys=sort_keys, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(tmp, path)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+
+
 def _resolve_under(base: Path, rel: str) -> Path:
     if not isinstance(rel, str) or not rel.strip():
         raise ValueError("path required")
@@ -4479,13 +4496,7 @@ class SessionManager:
     def _save_harness(self) -> None:
         with self._lock:
             obj = dict(self._harness)
-        os.makedirs(APP_DIR, exist_ok=True)
-        tmp = HARNESS_PATH.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(tmp, HARNESS_PATH)
+        _write_json_state_atomic(HARNESS_PATH, obj)
 
     def _load_aliases(self) -> None:
         try:
@@ -4510,13 +4521,7 @@ class SessionManager:
     def _save_aliases(self) -> None:
         with self._lock:
             obj = dict(self._aliases)
-        os.makedirs(APP_DIR, exist_ok=True)
-        tmp = ALIAS_PATH.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(tmp, ALIAS_PATH)
+        _write_json_state_atomic(ALIAS_PATH, obj)
 
     def _load_sidebar_meta(self) -> None:
         try:
@@ -4549,13 +4554,7 @@ class SessionManager:
     def _save_sidebar_meta(self) -> None:
         with self._lock:
             obj = dict(self._sidebar_meta)
-        os.makedirs(APP_DIR, exist_ok=True)
-        tmp = SIDEBAR_META_PATH.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(tmp, SIDEBAR_META_PATH)
+        _write_json_state_atomic(SIDEBAR_META_PATH, obj)
 
     def _load_hidden_sessions(self) -> None:
         try:
@@ -4601,12 +4600,7 @@ class SessionManager:
                 obj.append(key)
                 continue
             obj.append({"id": key, "cutoff_ts": cutoff_ts})
-        os.makedirs(APP_DIR, exist_ok=True)
-        tmp = HIDDEN_SESSIONS_PATH.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
-        os.replace(tmp, HIDDEN_SESSIONS_PATH)
+        _write_json_state_atomic(HIDDEN_SESSIONS_PATH, obj, sort_keys=False)
 
     def _hidden_session_keys(
         self,
@@ -4958,13 +4952,7 @@ class SessionManager:
     def _save_files(self) -> None:
         with self._lock:
             obj = dict(self._files)
-        os.makedirs(APP_DIR, exist_ok=True)
-        tmp = FILE_HISTORY_PATH.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(tmp, FILE_HISTORY_PATH)
+        _write_json_state_atomic(FILE_HISTORY_PATH, obj)
 
     def _load_queues(self) -> None:
         try:
@@ -4998,13 +4986,7 @@ class SessionManager:
     def _save_queues(self) -> None:
         with self._lock:
             obj = dict(self._queues)
-        os.makedirs(APP_DIR, exist_ok=True)
-        tmp = QUEUE_PATH.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(tmp, QUEUE_PATH)
+        _write_json_state_atomic(QUEUE_PATH, obj)
 
     def _load_recent_cwds(self) -> None:
         try:
@@ -5041,13 +5023,7 @@ class SessionManager:
                 key=lambda item: (-float(item[1]), item[0]),
             )[:RECENT_CWD_MAX]
         obj = {cwd: ts for cwd, ts in items}
-        os.makedirs(APP_DIR, exist_ok=True)
-        tmp = RECENT_CWD_PATH.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(tmp, RECENT_CWD_PATH)
+        _write_json_state_atomic(RECENT_CWD_PATH, obj)
 
     def _load_cwd_groups(self) -> None:
         cleaned: dict[str, dict[str, Any]] = {}
@@ -5098,13 +5074,7 @@ class SessionManager:
     def _save_cwd_groups(self) -> None:
         with self._lock:
             obj = dict(self._cwd_groups)
-        os.makedirs(APP_DIR, exist_ok=True)
-        tmp = CWD_GROUPS_PATH.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(tmp, CWD_GROUPS_PATH)
+        _write_json_state_atomic(CWD_GROUPS_PATH, obj)
 
     def cwd_groups_get(self) -> dict[str, dict[str, Any]]:
         self._prune_stale_workspace_dirs()
