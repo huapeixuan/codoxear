@@ -1,0 +1,61 @@
+[
+  {
+    "subscription": {
+      "endpoint": "https://push.example/older",
+      "keys": {
+        "p256dh": "p-old",
+        "auth": "a-old"
+      }
+    },
+    "notifications_enabled": true,
+    "created_ts": 1.0,
+    "updated_ts": 10.0,
+    "last_success_ts": 11.0,
+    "last_failure_ts": null,
+    "last_error": "",
+    "user_agent": "Mozilla/5.0 (iPhone)",
+    "device_label": "Phone"
+  },
+  {
+    "subscription": {
+      "endpoint": "https://push.example/newer",
+      "keys": {
+        "p256dh": "p-new",
+        "auth": "a-new"
+      }
+    },
+    "notifications_enabled": true,
+    "created_ts": 2.0,
+    "updated_ts": 30.0,
+    "last_success_ts": null,
+    "last_failure_ts": 31.0,
+    "last_error": "temporary",
+    "user_agent": "Desktop Browser",
+    "device_label": "Laptop",
+    "device_class": "desktop"
+  },
+  {
+    "subscription": {
+      "endpoint": "https://push.example/disabled-mobile",
+      "keys": {
+        "p256dh": "p-disabled",
+        "auth": "a-disabled"
+      }
+    },
+    "notifications_enabled": false,
+    "created_ts": 3.0,
+    "updated_ts": 5.0,
+    "user_agent": "Android",
+    "device_label": "Tablet"
+  },
+  {
+    "subscription": {
+      "endpoint": "",
+      "keys": {
+        "p256dh": "",
+        "auth": ""
+      }
+    },
+    "updated_ts": 99.0
+  }
+]

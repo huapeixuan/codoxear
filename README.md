@@ -87,6 +87,50 @@ If you are running from a source checkout and want the latest frontend bundle, b
    - Harness runs in the server process (not the browser tab), so it continues even if you close the web page.
    - Settings are per session; each injection decrements the remaining count and harness turns itself off at zero. Enabled sessions show a `harness` badge in the sidebar.
 
+### Rust backend (Phase 1 preview)
+
+`backend-rs/` is the in-progress Rust port of the Codoxear backend. Phase 1 is a preview skeleton only: it serves `/api/health`, `/api/me`, and `/api/sessions/bootstrap` (plus canonical `/api/v1/*` aliases) and does not replace the Python backend.
+
+Build it with:
+
+```sh
+cd backend-rs && cargo build --release --bins
+```
+
+Run the HTTP server from the repository root with:
+
+```sh
+./backend-rs/target/release/codoxear-backend-rs
+```
+
+By default it binds to `[::]:8743`, matching the Python server. Rollback is simply not running the Rust binary (or reverting the additive Phase 1 files); the Python backend remains unchanged.
+
+### Rust worker handoff flags (cutover preview)
+
+The Rust backend can own selected background sweeps only when explicitly enabled. By default these flags are unset, so the Python server remains the writer for the same state files.
+
+- `CODOXEAR_ENABLE_QUEUE_SWEEP=1` — Rust drains `session_queues.json` after broker/log idle plus `CODEX_WEB_QUEUE_IDLE_GRACE_SECONDS`; Python does not start its queue sweep thread when this flag is truthy.
+- `CODOXEAR_ENABLE_HARNESS_SWEEP=1` — Rust performs harness injections and writes `harness.json`; Python does not start its harness sweep thread when this flag is truthy.
+- `CODOXEAR_ENABLE_VOICE_SCAN=1` — reserved for the later Rust voice scan/worker path; Python yields its voice scan thread when truthy, but Phase 3 Rust does not implement WebPush/HLS/TTS delivery.
+
+Safe handoff order:
+
+1. Stop the currently running Codoxear server.
+2. Set only the Rust worker flag(s) you want Rust to own.
+3. Start the Rust backend.
+4. Verify the Python server is not running with the same writer enabled.
+
+Rollback order:
+
+1. Stop the Rust backend.
+2. Unset the corresponding `CODOXEAR_ENABLE_*` flag(s).
+3. Restart `codoxear-server` (Python).
+4. Confirm the Python worker thread is active by observing normal queue/harness behavior and that no Rust backend process is still running.
+
+Never run Python and Rust with the same queue/harness/voice writer enabled at the same time; `session_queues.json`, `harness.json`, and voice state files are single-writer during the cutover.
+
+Phase 3 POST contract selector: `pytest tests/contract -q -k 'parity and post'`.
+
 ## Tailscale HTTPS
 
 If you want browser notifications or iOS Web Push, use HTTPS instead of plain `http://<host>:8743`.
@@ -198,6 +242,9 @@ Set these in `.env` (or in the process environment):
 - `CODEX_WEB_GIT_DIFF_MAX_BYTES` (default `819200`)
 - `CODEX_WEB_GIT_DIFF_TIMEOUT_SECONDS` (default `4.0`)
 - `CODEX_WEB_GIT_CHANGED_FILES_MAX` (default `400`)
+- `CODEX_WEB_BRANCH_TIMEOUT_S` (default `2.0`) - git branch subprocess timeout for session repo badges
+- `CODEX_WEB_PR_TIMEOUT_S` (default `4.0`) - `gh pr view` subprocess timeout for session repo badges
+- `CODEX_WEB_GH_AUTH_TTL_S` (default `300`) - GitHub CLI auth/error cache TTL used by repo summary resolution
 - `CODEX_WEB_FD_POLL_SECONDS` (default `1.0`) - how often the broker scans `/proc` to detect the active `rollout-*.jsonl`
 
 Runtime state is stored under `~/.local/share/codoxear` (legacy `~/.local/share/codex-web` is no longer used).

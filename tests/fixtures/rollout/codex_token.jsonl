@@ -1,0 +1,4 @@
+{"type":"event_msg","timestamp":"2026-05-09T10:01:00Z","payload":{"type":"user_message","message":"Count"}}
+{"type":"event_msg","timestamp":"2026-05-09T10:01:01Z","payload":{"type":"token_count","info":{"model_context_window":200000,"last_token_usage":{"total_tokens":100000}}}}
+{"type":"event_msg","timestamp":"2026-05-09T10:01:01Z","payload":{"type":"user_message","message":"Follow-up"}}
+{"type":"event_msg","timestamp":"2026-05-09T10:01:02Z","payload":{"type":"agent_message","phase":"final_answer","message":"Done"}}
