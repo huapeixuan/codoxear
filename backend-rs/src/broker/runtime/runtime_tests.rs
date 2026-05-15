@@ -235,6 +235,7 @@ fn pi_send_propagates_prompt_error_and_clears_busy() {
     );
     assert!(!state.lock().unwrap().busy);
     let _ = child.kill();
+    let _ = child.wait();
 }
 
 #[test]
@@ -265,6 +266,7 @@ fn pi_escape_keys_calls_abort_rpc() {
     assert!(marker.exists());
     assert_eq!(state.lock().unwrap().last_turn_id, None);
     let _ = child.kill();
+    let _ = child.wait();
 }
 
 #[test]
@@ -295,4 +297,5 @@ fn pi_live_messages_coalesce_stream_deltas() {
         .iter()
         .any(|event| event["text"] == "Hello" && event["completed"] == true));
     let _ = child.kill();
+    let _ = child.wait();
 }
