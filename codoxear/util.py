@@ -429,7 +429,7 @@ def proc_open_rollout_logs_for_backend(
     proc_root: Path, root_pid: int, *, agent_backend: str
 ) -> set[Path]:
     backend_name = normalize_agent_backend(agent_backend)
-    if sys.platform == "darwin":
+    if sys.platform == "darwin" and proc_root == Path("/proc"):
         return _macos_open_rollout_logs(root_pid)
     uid = int(os.getuid())
     sessions_dir = get_agent_backend(backend_name).sessions_dir()
@@ -477,7 +477,7 @@ def proc_open_writable_rollout_logs_for_backend(
     proc_root: Path, root_pid: int, *, agent_backend: str
 ) -> set[Path]:
     backend_name = normalize_agent_backend(agent_backend)
-    if sys.platform == "darwin":
+    if sys.platform == "darwin" and proc_root == Path("/proc"):
         return _macos_open_rollout_logs(root_pid)
     uid = int(os.getuid())
     sessions_dir = get_agent_backend(backend_name).sessions_dir()

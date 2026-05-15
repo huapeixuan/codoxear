@@ -65,3 +65,7 @@ Rollback is to stop Rust, unset the corresponding `CODOXEAR_ENABLE_*` flag, and 
 ## Phase 3 Rust write strategy
 
 `rust-backend-write-routes` writes Phase 3 JSON state through `backend-rs/src/state_files.rs` helpers: read/modify/write operations take a per-file lock, serialize pretty JSON with sorted keys and trailing newline where Python does, write a temp file in the same directory, `fsync` the temp file, rename it over the target, and best-effort `fsync` the parent directory. This intentionally hardens the atomicity relative to some Python direct-write paths while preserving filenames, schemas, key names, and normal JSON file modes.
+
+## Phase 4 Rust broker rollout strategy
+
+`rust-backend-broker` introduces `CODOXEAR_RUST_BROKER_BIN` as an opt-in broker executable selector for Python and Rust session-create paths. When unset or blank, both servers keep spawning the Python broker fallback. When set, new Codex/Pi web-owned sessions use the selected `codoxear-broker-rs` binary while preserving the same `socks/*.json` filenames, schema keys, nullable fields, socket paths, and `0600` sidecar/socket modes. Rust sidecar helpers use same-directory temp file + `fsync` + rename where they write metadata, which is compatible with the existing Python readers.

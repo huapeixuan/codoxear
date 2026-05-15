@@ -1,3 +1,4 @@
+use codoxear_backend_rs::session_create::selected_broker_argv;
 use codoxear_backend_rs::session_create_support::{
     find_codex_resume_candidate_in, find_pi_resume_session_file_in,
 };
@@ -92,6 +93,43 @@ fn pi_resume_file_requires_id_and_cwd_to_match_same_header() {
         "missing"
     )
     .is_none());
+}
+
+#[test]
+fn selected_broker_argv_uses_rust_bin_for_codex_and_pi_when_set() {
+    let cwd = Path::new("/repo");
+    assert_eq!(
+        selected_broker_argv("codex", cwd, None, Some(" /tmp/codoxear-broker-rs ")),
+        vec!["/tmp/codoxear-broker-rs", "--cwd", "/repo", "--"]
+    );
+    assert_eq!(
+        selected_broker_argv(
+            "pi",
+            cwd,
+            Some(Path::new("/tmp/pi.jsonl")),
+            Some("/tmp/codoxear-broker-rs"),
+        ),
+        vec![
+            "/tmp/codoxear-broker-rs",
+            "--cwd",
+            "/repo",
+            "--session-file",
+            "/tmp/pi.jsonl",
+            "--",
+        ]
+    );
+}
+
+#[test]
+fn selected_broker_argv_keeps_python_fallback_when_rust_bin_blank() {
+    let argv = selected_broker_argv(
+        "pi",
+        Path::new("/repo"),
+        Some(Path::new("/tmp/pi.jsonl")),
+        Some("  "),
+    );
+    assert!(argv.iter().any(|arg| arg == "codoxear.pi_broker"));
+    assert_eq!(argv[argv.len() - 1], "--");
 }
 
 #[test]

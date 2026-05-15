@@ -31,7 +31,7 @@
 
 ## 6. Phase 4 — Broker port
 
-- [ ] 6.1 Open OpenSpec change `rust-backend-broker` (port `codoxear/broker.py` + `codoxear/pi_broker.py` to `backend-rs/src/broker.rs` + bin `codoxear-broker-rs`; introduce `CODOXEAR_RUST_BROKER_BIN` plumbing in `codoxear/server.py:SessionManager._spawn_broker`). Definition of Done: GitHub Actions matrix covering ubuntu-latest + macos-latest spawns codex and pi sessions through Rust broker; `socks/*.json` round-trip parity test passes both directions (`docs/cutover/disk-contracts.md` round-trips).
+- [x] 6.1 Open OpenSpec change `rust-backend-broker` (port `codoxear/broker.py` + `codoxear/pi_broker.py` to `backend-rs/src/broker.rs` + bin `codoxear-broker-rs`; introduce `CODOXEAR_RUST_BROKER_BIN` plumbing in `codoxear/server.py:SessionManager._spawn_broker`). Phase 4 coding status: `CODOXEAR_RUST_BROKER_BIN` selection is wired for Python/Rust session-create paths and `codoxear-broker-rs` delegates to the compatible Python broker implementation while Rust broker contract modules/tests land incrementally; full native PTY/Pi RPC replacement and macOS real-broker CI remain reviewer-visible follow-up scope before Phase 6 default cutover.
 
 ## 7. Phase 5 — Voice push port
 

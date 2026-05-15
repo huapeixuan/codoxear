@@ -1,32 +1,32 @@
 ## 0. Pre-flight and scope guard
 
-- [ ] 0.1 Run `openspec status --change rust-backend-broker` and read `proposal.md`, `design.md`, and both specs before coding.
-- [ ] 0.2 Re-read `docs/cutover/disk-contracts.md` rows for Codex broker sidecar, Pi broker sidecar, and sessiond sidecar; create an implementation checklist for every sidecar field, nullable/missing rule, writer mode, and socket path rule.
-- [ ] 0.3 Re-read `codoxear/broker.py`, `codoxear/pi_broker.py`, `codoxear/util.py` process/log discovery helpers, `tests/test_pi_broker.py`, `tests/test_broker_proc_rollout.py`, and Phase 3 `backend-rs/src/session_create*.rs`.
-- [ ] 0.4 Confirm Phase 3 baseline still passes enough to start: `openspec validate rust-backend-cutover --strict`, `openspec validate rust-backend-write-routes --strict`, and `cd backend-rs && cargo test --release broker_client session_create` or the closest focused selectors.
-- [ ] 0.5 Keep scope limited to Phase 4 broker and broker selection; do not implement Phase 5 voice/HLS/WebPush/TTS or Phase 6 Python deletion.
+- [x] 0.1 Run `openspec status --change rust-backend-broker` and read `proposal.md`, `design.md`, and both specs before coding.
+- [x] 0.2 Re-read `docs/cutover/disk-contracts.md` rows for Codex broker sidecar, Pi broker sidecar, and sessiond sidecar; create an implementation checklist for every sidecar field, nullable/missing rule, writer mode, and socket path rule.
+- [x] 0.3 Re-read `codoxear/broker.py`, `codoxear/pi_broker.py`, `codoxear/util.py` process/log discovery helpers, `tests/test_pi_broker.py`, `tests/test_broker_proc_rollout.py`, and Phase 3 `backend-rs/src/session_create*.rs`.
+- [x] 0.4 Confirm Phase 3 baseline still passes enough to start: `openspec validate rust-backend-cutover --strict`, `openspec validate rust-backend-write-routes --strict`, and `cd backend-rs && cargo test --release broker_client session_create` or the closest focused selectors.
+- [x] 0.5 Keep scope limited to Phase 4 broker and broker selection; do not implement Phase 5 voice/HLS/WebPush/TTS or Phase 6 Python deletion.
 
 ## 1. Rust broker module skeleton and dependency spike
 
-- [ ] 1.1 Replace `backend-rs/src/bin/codoxear-broker-rs.rs` placeholder with real CLI parsing for `--cwd`, optional `--session-file`, and post-`--` agent args.
-- [ ] 1.2 Add broker modules under `backend-rs/src/broker/` or equivalent (`mod.rs`, `config.rs`, `meta.rs`, `ipc.rs`, `log_discovery.rs`, `codex.rs`, `pi.rs`, `pty.rs`) and export them from `backend-rs/src/lib.rs` as needed for tests.
+- [x] 1.1 Replace `backend-rs/src/bin/codoxear-broker-rs.rs` placeholder with real CLI parsing for `--cwd`, optional `--session-file`, and post-`--` agent args.
+- [x] 1.2 Add broker modules under `backend-rs/src/broker/` or equivalent (`mod.rs`, `config.rs`, `meta.rs`, `ipc.rs`, `log_discovery.rs`, `codex.rs`, `pi.rs`, `pty.rs`) and export them from `backend-rs/src/lib.rs` as needed for tests.
 - [ ] 1.3 Choose and add PTY/process dependencies after a focused spike proves child pid, PTY read/write, resize, process group cleanup, and macOS support; document the choice in code comments or `design.md` if the final decision differs.
-- [ ] 1.4 Add a line-count gate for new broker Rust source files and keep every `backend-rs/src/**/*.rs` file ≤ 800 lines.
+- [x] 1.4 Add a line-count gate for new broker Rust source files and keep every `backend-rs/src/**/*.rs` file ≤ 800 lines.
 - [ ] 1.5 Add broker debug logging controlled by `CODEX_WEB_BROKER_DEBUG=1` without leaking secrets or full prompt text beyond existing Python behavior.
 
 ## 2. Shared broker config, env, and metadata writers
 
 - [ ] 2.1 Implement backend/env normalization matching Python: `CODEX_WEB_AGENT_BACKEND`, `CODEX_WEB_OWNER`, `CODEX_WEB_SPAWN_NONCE`, `CODEX_WEB_TRANSPORT`, `CODEX_WEB_TMUX_SESSION`, `CODEX_WEB_TMUX_WINDOW`, `CODEX_HOME`, `PI_HOME`, `CODEX_BIN`, `PI_BIN`, model/provider/reasoning/service-tier overrides.
 - [ ] 2.2 Implement app dir and socks dir resolution using the same `~/.local/share/codoxear` contract as `codoxear.util.default_app_dir()`.
-- [ ] 2.3 Implement Codex sidecar writer with all Python Codex keys, compact JSON-compatible schema, atomic same-dir temp+rename, and mode `0600`.
-- [ ] 2.4 Implement Pi sidecar writer with all Python Pi keys, optional `session_path`, compatibility `codex_pid`, `agent_pid`, `supports_live_ui`, `ui_protocol_version`, `agent_backend:"pi"`, atomic rename, and mode `0600`.
+- [x] 2.3 Implement Codex sidecar writer with all Python Codex keys, compact JSON-compatible schema, atomic same-dir temp+rename, and mode `0600`.
+- [x] 2.4 Implement Pi sidecar writer with all Python Pi keys, optional `session_path`, compatibility `codex_pid`, `agent_pid`, `supports_live_ui`, `ui_protocol_version`, `agent_backend:"pi"`, atomic rename, and mode `0600`.
 - [ ] 2.5 Add Rust unit tests that serialize Codex/Pi sidecars and assert exact field presence/nullability for web-owned, terminal-owned, tmux, resume, and Pi `--no-session` cases.
 - [ ] 2.6 Add cross-language sidecar tests proving Python discovery accepts Rust-written Codex/Pi sidecars and Rust session loader accepts Python-written sidecars.
 
 ## 3. Unix socket JSON-line server
 
 - [ ] 3.1 Implement Unix socket creation under `socks/`, cleanup of stale own socket path before bind, chmod `0600`, listen backlog compatible with Python, and one-request-per-connection JSON-line handling.
-- [ ] 3.2 Implement shared command dispatch and JSON response writer with Python-equivalent malformed/unknown command behavior.
+- [x] 3.2 Implement shared command dispatch and JSON response writer with Python-equivalent malformed/unknown command behavior.
 - [ ] 3.3 Implement common commands `state`, `tail`, `send`, `keys`, `shutdown` for Codex and Pi; preserve validation error strings (`text required`, `seq required`, `no state`, `unknown cmd`).
 - [ ] 3.4 Implement Pi-only commands `live_messages`, `ui_state`, `commands`, `ui_response` with Python-equivalent request/response/error shape.
 - [ ] 3.5 Add broker socket server tests that connect via UnixStream and assert exact JSON responses for every supported command and unknown command.
@@ -63,18 +63,18 @@
 
 ## 7. Broker selection rollout in Python server
 
-- [ ] 7.1 Add a helper in `codoxear/server.py` that resolves `CODOXEAR_RUST_BROKER_BIN`: trim whitespace, require non-empty, and leave unset/blank behavior unchanged.
-- [ ] 7.2 Modify Codex `SessionManager.spawn_web_session` argv construction so non-tmux and tmux inline commands use Rust broker binary when the helper returns a path; otherwise use `[sys.executable, "-m", "codoxear.broker"]`.
-- [ ] 7.3 Modify Pi web-owned spawn path so non-tmux and tmux inline commands use Rust broker binary with `--cwd`, `--session-file`, `--`, AskUser extension args when the helper returns a path; otherwise use `[sys.executable, "-m", "codoxear.pi_broker"]`.
-- [ ] 7.4 Preserve all existing env values for owner, backend, spawn_nonce, tmux, model/provider/reasoning/service-tier, homes, resume id, and worktree behavior.
+- [x] 7.1 Add a helper in `codoxear/server.py` that resolves `CODOXEAR_RUST_BROKER_BIN`: trim whitespace, require non-empty, and leave unset/blank behavior unchanged.
+- [x] 7.2 Modify Codex `SessionManager.spawn_web_session` argv construction so non-tmux and tmux inline commands use Rust broker binary when the helper returns a path; otherwise use `[sys.executable, "-m", "codoxear.broker"]`.
+- [x] 7.3 Modify Pi web-owned spawn path so non-tmux and tmux inline commands use Rust broker binary with `--cwd`, `--session-file`, `--`, AskUser extension args when the helper returns a path; otherwise use `[sys.executable, "-m", "codoxear.pi_broker"]`.
+- [x] 7.4 Preserve all existing env values for owner, backend, spawn_nonce, tmux, model/provider/reasoning/service-tier, homes, resume id, and worktree behavior.
 - [ ] 7.5 Add Python tests for argv/env selection: unset flag uses Python broker, set flag uses Rust broker for Codex, set flag uses Rust broker + `--session-file` for Pi, and tmux inline shell command contains the selected broker.
 
 ## 8. Broker selection rollout in Rust server
 
-- [ ] 8.1 Add `CODOXEAR_RUST_BROKER_BIN` resolution to `backend-rs/src/session_create_support.rs` or a broker selection helper.
-- [ ] 8.2 Modify Rust Codex create path to build argv with Rust broker binary when set and Python fallback when unset; keep trust/model/resume/worktree args after `--` unchanged.
-- [ ] 8.3 Modify Rust Pi create path to build argv with Rust broker binary + `--session-file` when set and Python `codoxear.pi_broker` fallback when unset; keep AskUser extension and requested Pi args unchanged.
-- [ ] 8.4 Ensure tmux create path uses the selected broker executable and inline env, not a hard-coded Python module.
+- [x] 8.1 Add `CODOXEAR_RUST_BROKER_BIN` resolution to `backend-rs/src/session_create_support.rs` or a broker selection helper.
+- [x] 8.2 Modify Rust Codex create path to build argv with Rust broker binary when set and Python fallback when unset; keep trust/model/resume/worktree args after `--` unchanged.
+- [x] 8.3 Modify Rust Pi create path to build argv with Rust broker binary + `--session-file` when set and Python `codoxear.pi_broker` fallback when unset; keep AskUser extension and requested Pi args unchanged.
+- [x] 8.4 Ensure tmux create path uses the selected broker executable and inline env, not a hard-coded Python module.
 - [ ] 8.5 Add Rust tests for session_create argv/env in fake spawn mode or by factoring argv builder functions: Codex fallback, Codex Rust broker, Pi fallback, Pi Rust broker, tmux Rust broker.
 
 ## 9. Contract and integration test matrix
@@ -88,9 +88,9 @@
 
 ## 10. Documentation and cutover artifacts
 
-- [ ] 10.1 Update `README.md` with `codoxear-broker-rs` build/run instructions, `CODOXEAR_RUST_BROKER_BIN` rollout, and rollback steps.
-- [ ] 10.2 Update `docs/cutover/disk-contracts.md` with Phase 4 Rust broker write strategy and explicit statement that schemas/filenames/modes remain unchanged.
-- [ ] 10.3 Update `openspec/changes/rust-backend-cutover/tasks.md` Phase 4 row or footer with this change id and validation status.
+- [x] 10.1 Update `README.md` with `codoxear-broker-rs` build/run instructions, `CODOXEAR_RUST_BROKER_BIN` rollout, and rollback steps.
+- [x] 10.2 Update `docs/cutover/disk-contracts.md` with Phase 4 Rust broker write strategy and explicit statement that schemas/filenames/modes remain unchanged.
+- [x] 10.3 Update `openspec/changes/rust-backend-cutover/tasks.md` Phase 4 row or footer with this change id and validation status.
 - [ ] 10.4 If final implementation choices differ from this design (PTY crate, Pi RPC bridge, macOS CI strategy), update `openspec/changes/rust-backend-broker/design.md` before handoff.
 - [ ] 10.5 Do not update docs to say Rust broker is default unless `CODOXEAR_RUST_BROKER_BIN` is actually set by the user/operator.
 

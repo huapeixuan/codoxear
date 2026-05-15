@@ -254,6 +254,24 @@ Backend-specific session logs live under the backend home:
 - Codex: `~/.codex/sessions/rollout-*.jsonl`
 - Pi: `~/.pi/agent/sessions/*.jsonl`
 
+### Rust broker rollout (Phase 4)
+
+The Rust broker binary builds as part of the Rust backend bins:
+
+```sh
+cd backend-rs
+cargo build --release --bins
+```
+
+Set `CODOXEAR_RUST_BROKER_BIN` to grey-release new web-owned sessions through the Rust broker path from either the Python server or the Rust server:
+
+```sh
+export CODOXEAR_RUST_BROKER_BIN="$(pwd)/target/release/codoxear-broker-rs"
+codoxear-server
+```
+
+Rollback is intentionally simple: unset `CODOXEAR_RUST_BROKER_BIN` and restart the server. Existing broker sessions can be deleted/shutdown normally; new sessions return to the Python broker fallback. The Python broker entry points remain supported in this phase.
+
 ### Frontend development
 
 1. Start the Python server: `python3 -m codoxear.server`

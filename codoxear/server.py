@@ -884,6 +884,14 @@ def _env_flag_truthy(name: str) -> bool:
     return bool(trimmed) and trimmed != "0" and trimmed.lower() != "false"
 
 
+def _rust_broker_bin() -> str | None:
+    value = os.environ.get("CODOXEAR_RUST_BROKER_BIN")
+    if value is None:
+        return None
+    trimmed = str(value).strip()
+    return trimmed or None
+
+
 def _safe_read_text(path: Path, max_bytes: int = 512 * 1024) -> str:
     try:
         b = path.read_bytes()
@@ -7710,22 +7718,31 @@ class SessionManager:
             else:
                 session_path = _pi_new_session_file_for_cwd(cwd_path)
             session_path.parent.mkdir(parents=True, exist_ok=True)
-            argv = [
-                sys.executable,
-                "-m",
-                "codoxear.pi_broker",
-                "--cwd",
-                str(cwd_path),
-                "--session-file",
-                str(session_path),
-                "--",
-                "-e",
-                str(
-                    Path(__file__).resolve().parent
-                    / "pi_extensions"
-                    / "ask_user_bridge.ts"
-                ),
-            ]
+            rust_broker_bin = _rust_broker_bin()
+            argv = (
+                [rust_broker_bin, "--cwd", str(cwd_path)]
+                if rust_broker_bin is not None
+                else [
+                    sys.executable,
+                    "-m",
+                    "codoxear.pi_broker",
+                    "--cwd",
+                    str(cwd_path),
+                ]
+            )
+            argv.extend(
+                [
+                    "--session-file",
+                    str(session_path),
+                    "--",
+                    "-e",
+                    str(
+                        Path(__file__).resolve().parent
+                        / "pi_extensions"
+                        / "ask_user_bridge.ts"
+                    ),
+                ]
+            )
             env = dict(os.environ)
             if _DOTENV.exists():
                 for k, v in _load_env_file(_DOTENV).items():
@@ -7837,7 +7854,19 @@ class SessionManager:
         if worktree_branch is not None:
             spawn_cwd = _create_git_worktree(cwd_path, worktree_branch)
 
-        argv = [sys.executable, "-m", "codoxear.broker", "--cwd", str(spawn_cwd), "--"]
+        rust_broker_bin = _rust_broker_bin()
+        argv = (
+            [rust_broker_bin, "--cwd", str(spawn_cwd), "--"]
+            if rust_broker_bin is not None
+            else [
+                sys.executable,
+                "-m",
+                "codoxear.broker",
+                "--cwd",
+                str(spawn_cwd),
+                "--",
+            ]
+        )
         codex_args: list[str] = []
         resume_row: dict[str, Any] | None = None
         if backend_name == "codex":

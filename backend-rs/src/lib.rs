@@ -1,4 +1,5 @@
 pub mod app_state;
+pub mod broker;
 pub mod broker_client;
 pub mod file_post;
 pub mod git_context;
@@ -22,5 +23,4 @@ pub mod voice_state;
 pub mod workers;
 pub mod write_cleaners;
 
-// Phase 4 will add: pub mod broker;
 // Phase 5 will add: pub mod voice_worker;

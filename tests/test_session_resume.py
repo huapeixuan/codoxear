@@ -523,6 +523,43 @@ class TestSpawnWebSessionResume(unittest.TestCase):
         self.assertEqual(result, {"broker_pid": 3210})
         self.assertEqual(thread_calls, ["start"])
 
+    def test_spawn_web_session_uses_rust_broker_bin_when_enabled(self) -> None:
+        manager = SessionManager.__new__(SessionManager)
+
+        class _Proc:
+            pid = 3220
+            stderr = None
+
+            def wait(self) -> int:
+                return 0
+
+        with (
+            TemporaryDirectory() as td,
+            patch.dict(
+                "os.environ",
+                {"CODOXEAR_RUST_BROKER_BIN": " /tmp/codoxear-broker-rs "},
+                clear=False,
+            ),
+            patch("codoxear.server._wait_or_raise", return_value=None),
+            patch(
+                "codoxear.server._wait_for_spawned_broker_meta",
+                return_value={"broker_pid": 3220},
+            ),
+            patch(
+                "codoxear.server.subprocess.Popen", return_value=_Proc()
+            ) as popen_mock,
+            patch.object(threading.Thread, "start", lambda self: None),
+        ):
+            SessionManager.spawn_web_session(manager, cwd=td, args=["--search"])
+
+        argv = popen_mock.call_args.args[0]
+        self.assertEqual(
+            argv[:4],
+            ["/tmp/codoxear-broker-rs", "--cwd", str(Path(td).resolve()), "--"],
+        )
+        self.assertIn("--dangerously-bypass-approvals-and-sandbox", argv)
+        self.assertNotIn("codoxear.broker", argv)
+
     def test_spawn_web_session_passes_resume_id_to_broker(self) -> None:
         manager = SessionManager.__new__(SessionManager)
         manager._aliases = {}
@@ -657,6 +694,44 @@ class TestSpawnWebSessionResume(unittest.TestCase):
         )
         self.assertEqual(result, {"broker_pid": 5321, "backend": "pi"})
         self.assertEqual(thread_calls, ["start"])
+
+    def test_spawn_web_session_uses_rust_broker_bin_for_pi_when_enabled(self) -> None:
+        manager = SessionManager.__new__(SessionManager)
+
+        class _Proc:
+            pid = 5322
+            stderr = None
+
+            def wait(self) -> int:
+                return 0
+
+        with (
+            TemporaryDirectory() as td,
+            patch.dict(
+                "os.environ",
+                {"CODOXEAR_RUST_BROKER_BIN": "/tmp/codoxear-broker-rs"},
+                clear=False,
+            ),
+            patch("codoxear.server._wait_or_raise", return_value=None),
+            patch(
+                "codoxear.server._wait_for_spawned_broker_meta",
+                return_value={"broker_pid": 5322, "backend": "pi"},
+            ),
+            patch(
+                "codoxear.server.subprocess.Popen", return_value=_Proc()
+            ) as popen_mock,
+            patch.object(threading.Thread, "start", lambda self: None),
+        ):
+            SessionManager.spawn_web_session(manager, cwd=td, backend="pi")
+
+        argv = popen_mock.call_args.args[0]
+        self.assertEqual(
+            argv[:3], ["/tmp/codoxear-broker-rs", "--cwd", str(Path(td).resolve())]
+        )
+        self.assertEqual(argv[3], "--session-file")
+        self.assertIn("--", argv)
+        self.assertIn("-e", argv)
+        self.assertNotIn("codoxear.pi_broker", argv)
 
     def test_spawn_web_session_passes_model_and_reasoning_to_broker(self) -> None:
         manager = SessionManager.__new__(SessionManager)

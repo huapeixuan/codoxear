@@ -7,8 +7,8 @@ use crate::session_create_support::{
     find_codex_resume_candidate_in, find_pi_resume_session_file, internal_error,
     normalize_agent_backend, normalize_preferred_auth_method, normalize_reasoning_effort,
     normalize_requested_model, normalize_service_tier, parse_args, parse_optional_bool, pi_home,
-    pi_new_session_file_for_cwd, python_exe, repo_root, resolve_dir_target, spawn_nonce,
-    spawn_python_broker,
+    pi_new_session_file_for_cwd, python_exe, repo_root, resolve_dir_target, rust_broker_bin,
+    spawn_nonce, spawn_python_broker,
 };
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -21,6 +21,45 @@ use std::path::Path;
 const SUPPORTED_REASONING_EFFORTS: &[&str] = &["xhigh", "high", "medium", "low"];
 const SUPPORTED_PI_REASONING_EFFORTS: &[&str] =
     &["off", "minimal", "low", "medium", "high", "xhigh"];
+
+pub fn selected_broker_argv(
+    backend: &str,
+    cwd: &Path,
+    session_file: Option<&Path>,
+    rust_bin: Option<&str>,
+) -> Vec<String> {
+    let mut argv = if let Some(rust_bin) = rust_bin.map(str::trim).filter(|value| !value.is_empty())
+    {
+        vec![
+            rust_bin.to_string(),
+            "--cwd".to_string(),
+            cwd.to_string_lossy().to_string(),
+        ]
+    } else {
+        let module = if backend == "pi" {
+            "codoxear.pi_broker"
+        } else {
+            "codoxear.broker"
+        };
+        vec![
+            python_exe(),
+            "-m".to_string(),
+            module.to_string(),
+            "--cwd".to_string(),
+            cwd.to_string_lossy().to_string(),
+        ]
+    };
+    if backend == "pi" {
+        if let Some(session_file) = session_file {
+            argv.extend([
+                "--session-file".to_string(),
+                session_file.to_string_lossy().to_string(),
+            ]);
+        }
+    }
+    argv.push("--".to_string());
+    argv
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateSessionRequest {
@@ -184,18 +223,13 @@ fn spawn_pi_session(
         fs::create_dir_all(parent).map_err(internal_error)?;
     }
     let extension = repo_root().join("codoxear/pi_extensions/ask_user_bridge.ts");
-    let argv = vec![
-        python_exe(),
-        "-m".to_string(),
-        "codoxear.pi_broker".to_string(),
-        "--cwd".to_string(),
-        cwd_path.to_string_lossy().to_string(),
-        "--session-file".to_string(),
-        session_file.to_string_lossy().to_string(),
-        "--".to_string(),
-        "-e".to_string(),
-        extension.to_string_lossy().to_string(),
-    ];
+    let mut argv = selected_broker_argv(
+        "pi",
+        cwd_path,
+        Some(&session_file),
+        rust_broker_bin().as_deref(),
+    );
+    argv.extend(["-e".to_string(), extension.to_string_lossy().to_string()]);
     let mut envs = base_spawn_env("pi", spawn_nonce);
     envs.push((
         "PI_HOME".to_string(),
@@ -235,17 +269,12 @@ fn spawn_codex_session(
         None
     };
 
-    let mut argv = vec![
-        python_exe(),
-        "-m".to_string(),
-        "codoxear.broker".to_string(),
-        "--cwd".to_string(),
-        spawn_cwd.to_string_lossy().to_string(),
-        "--".to_string(),
+    let mut argv = selected_broker_argv("codex", &spawn_cwd, None, rust_broker_bin().as_deref());
+    argv.extend([
         "-c".to_string(),
         codex_trust_override_for_path(&spawn_cwd),
         "--dangerously-bypass-approvals-and-sandbox".to_string(),
-    ];
+    ]);
     if let Some(model) = &request.model {
         argv.extend(["--model".to_string(), model.clone()]);
     }

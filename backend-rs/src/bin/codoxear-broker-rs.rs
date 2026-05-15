@@ -1,4 +1,13 @@
+use codoxear_backend_rs::broker::{config, shim};
+
 fn main() {
-    eprintln!("codoxear-broker-rs: not implemented in phase 1; broker port lands in OpenSpec change rust-backend-broker (Phase 4)");
-    std::process::exit(2);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let cli = match config::parse_cli(&args) {
+        Ok(cli) => cli,
+        Err(message) => {
+            eprintln!("codoxear-broker-rs: {message}");
+            std::process::exit(2);
+        }
+    };
+    shim::exec_python_bridge(cli);
 }

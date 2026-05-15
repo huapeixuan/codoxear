@@ -387,6 +387,13 @@ pub(crate) fn python_exe() -> String {
     std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_string())
 }
 
+pub(crate) fn rust_broker_bin() -> Option<String> {
+    std::env::var("CODOXEAR_RUST_BROKER_BIN")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 pub(crate) fn codex_home() -> PathBuf {
     std::env::var("CODEX_HOME")
         .ok()
