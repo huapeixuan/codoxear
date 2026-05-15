@@ -58,7 +58,7 @@
 - [x] 6.3 Preserve AskUser extension injection semantics: Rust server create path passes `-e codoxear/pi_extensions/ask_user_bridge.ts`, and terminal Pi launches do not duplicate the arg if already present.
 - [x] 6.4 Implement Pi state sync: busy extraction, prompt-sent grace, turn id tracking, session id update from RPC state, stderr/tail drain, live message coalescing, terminal turn completion clearing.
 - [x] 6.5 Implement pending UI request tracking and `ui_response` forwarding with the same resolution/retry behavior and error strings as Python.
-- [ ] 6.6 Implement foreground Pi stdin/stdout/SIGINT behavior for terminal-owned sessions, including abort-on-SIGINT while busy and delegation to previous handler when idle.
+- [x] 6.6 Implement foreground Pi stdin/stdout/SIGINT behavior for terminal-owned sessions, including abort-on-SIGINT while busy and delegation to previous handler when idle.
 - [x] 6.7 Add fake Pi RPC tests covering prompt success/error, images validation, commands, ui_state, ui_response success/unknown/already-resolved, live_messages offsets, shutdown, explicit session path drift prevention, and `--no-session` support.
 
 ## 7. Broker selection rollout in Python server

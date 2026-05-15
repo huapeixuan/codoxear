@@ -208,6 +208,8 @@ while IFS= read -r line; do
     printf '{"type":"response","id":"%s","success":true,"data":{"busy":true,"turn_id":"turn-1","session_id":"sess-1"}}\n' "$id"
   elif [ "$typ" = "get_commands" ]; then
     printf '{"type":"response","id":"%s","success":true,"data":{"commands":[{"name":"ask"}]}}\n' "$id"
+  elif [ "$typ" = "abort" ]; then
+    printf '{"type":"response","id":"%s","success":true,"data":{"aborted":true}}\n' "$id"
   fi
 done
 "#).unwrap();

@@ -200,6 +200,9 @@ fn run_inner(cli: BrokerCli, env: BrokerEnv) -> Result<i32, String> {
         }
         crate::broker::pty::install_sigwinch_resize(master.as_raw_fd());
     }
+    if env.backend == "pi" {
+        crate::broker::pty::install_pi_sigint_handler(state.clone());
+    }
     if env.backend == "codex" {
         start_codex_log_watcher(state.clone(), env.clone(), stop.clone());
     }

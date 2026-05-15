@@ -6,6 +6,49 @@ use std::thread;
 
 static SIGWINCH_MASTER_FD: OnceLock<i32> = OnceLock::new();
 
+static PI_SIGINT_STATE: OnceLock<usize> = OnceLock::new();
+
+#[derive(Debug)]
+pub struct PiSigintState {
+    pub state: BrokerStateHandle,
+    pub previous: libc::sighandler_t,
+}
+
+pub fn install_pi_sigint_handler(state: BrokerStateHandle) {
+    let previous = unsafe { libc::signal(libc::SIGINT, handle_pi_sigint as libc::sighandler_t) };
+    let boxed = Box::new(PiSigintState { state, previous });
+    let _ = PI_SIGINT_STATE.set(Box::into_raw(boxed) as usize);
+}
+
+extern "C" fn handle_pi_sigint(sig: libc::c_int) {
+    if let Some(ptr) = PI_SIGINT_STATE.get().copied() {
+        let sig_state = unsafe { &*(ptr as *const PiSigintState) };
+        let mut handled = false;
+        if let Ok(st) = sig_state.state.lock() {
+            if st.busy {
+                if let Some(rpc) = &st.pi_rpc {
+                    let _ = rpc.abort(st.last_turn_id.as_deref());
+                    handled = true;
+                }
+            }
+        }
+        if handled {
+            return;
+        }
+        delegate_signal(sig, sig_state.previous);
+    }
+}
+
+fn delegate_signal(sig: libc::c_int, previous: libc::sighandler_t) {
+    if previous == libc::SIG_IGN {
+        return;
+    }
+    unsafe {
+        libc::signal(sig, previous);
+        libc::raise(sig);
+    }
+}
+
 pub fn start_terminal_bridge(
     mut master: std::fs::File,
     state: BrokerStateHandle,
