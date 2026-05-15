@@ -2832,6 +2832,111 @@ class TestPiBackendRouting(unittest.TestCase):
                 manager.get_session.assert_called_once_with("pi-session")
                 manager.inject_keys.assert_not_called()
 
+
+    def test_file_list_route_returns_directory_entries_and_cwd_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "src").mkdir()
+            (root / "src" / "app.py").write_text("print('ok')\n", encoding="utf-8")
+            session = Session(
+                session_id="pi-session",
+                thread_id="pi-thread-001",
+                agent_backend="pi",
+                backend="pi",
+                broker_pid=3333,
+                codex_pid=4444,
+                owned=True,
+                start_ts=123.0,
+                cwd=str(root),
+                log_path=None,
+                sock_path=Path("/tmp/pi.sock"),
+                session_path=Path("/tmp/pi-session.jsonl"),
+            )
+            handler = _HandlerHarness("/api/sessions/pi-session/file/list?path=src")
+            with (
+                patch("codoxear.server._require_auth", return_value=True),
+                patch("codoxear.server.MANAGER") as manager,
+            ):
+                manager.get_session.return_value = session
+
+                Handler.do_GET(handler)  # type: ignore[arg-type]
+
+        payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
+        self.assertEqual(handler.status, 200)
+        self.assertEqual(payload["ok"], True)
+        self.assertEqual(payload["cwd"], str(root))
+        self.assertEqual(payload["path"], "src")
+        self.assertEqual(
+            payload["entries"],
+            [{"name": "app.py", "path": "src/app.py", "kind": "file"}],
+        )
+        manager.refresh_session_meta.assert_called_once_with("pi-session", strict=False)
+        manager.get_session.assert_called_once_with("pi-session")
+
+    def test_file_list_route_preserves_path_escape_error_code(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            session = Session(
+                session_id="pi-session",
+                thread_id="pi-thread-001",
+                agent_backend="pi",
+                backend="pi",
+                broker_pid=3333,
+                codex_pid=4444,
+                owned=True,
+                start_ts=123.0,
+                cwd=str(root),
+                log_path=None,
+                sock_path=Path("/tmp/pi.sock"),
+                session_path=Path("/tmp/pi-session.jsonl"),
+            )
+            handler = _HandlerHarness("/api/sessions/pi-session/file/list?path=..")
+            with (
+                patch("codoxear.server._require_auth", return_value=True),
+                patch("codoxear.server.MANAGER") as manager,
+            ):
+                manager.get_session.return_value = session
+
+                Handler.do_GET(handler)  # type: ignore[arg-type]
+
+        payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
+        self.assertEqual(handler.status, 400)
+        self.assertEqual(payload, {"error": "path escapes session cwd"})
+
+    def test_file_read_route_returns_download_only_for_too_large_file(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "large.md").write_text("a" * (2 * 1024 * 1024 + 1), encoding="utf-8")
+            session = Session(
+                session_id="pi-session",
+                thread_id="pi-thread-001",
+                agent_backend="pi",
+                backend="pi",
+                broker_pid=3333,
+                codex_pid=4444,
+                owned=True,
+                start_ts=123.0,
+                cwd=str(root),
+                log_path=None,
+                sock_path=Path("/tmp/pi.sock"),
+                session_path=Path("/tmp/pi-session.jsonl"),
+            )
+            handler = _HandlerHarness("/api/sessions/pi-session/file/read?path=large.md")
+            with (
+                patch("codoxear.server._require_auth", return_value=True),
+                patch("codoxear.server.MANAGER") as manager,
+            ):
+                manager.get_session.return_value = session
+
+                Handler.do_GET(handler)  # type: ignore[arg-type]
+
+        payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
+        self.assertEqual(handler.status, 200)
+        self.assertEqual(payload["kind"], "download_only")
+        self.assertEqual(payload["reason"], "too_large")
+        self.assertEqual(payload["viewer_max_bytes"], 2 * 1024 * 1024)
+        manager.files_add.assert_called_once()
+
     def test_sessions_bootstrap_returns_cwd_groups(self) -> None:
         handler = _HandlerHarness("/api/sessions/bootstrap")
         cwd_groups = {

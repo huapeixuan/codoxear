@@ -19,8 +19,8 @@ def _make_session(session_id: str, cwd: str) -> Session:
     return Session(
         session_id=session_id,
         thread_id=f"thread-{session_id}",
-        broker_pid=1,
-        codex_pid=2,
+        broker_pid=999_999_001,
+        codex_pid=999_999_002,
         agent_backend="codex",
         owned=False,
         start_ts=0.0,

@@ -40,6 +40,9 @@ from typing import Any
 from .agent_backend import get_agent_backend
 from .agent_backend import infer_agent_backend_from_log_path
 from .agent_backend import normalize_agent_backend
+from . import session_list as _session_list
+from . import session_state_store as _session_state_store
+from . import workspace_files as _workspace_files
 from . import pi_messages as _pi_messages
 from . import pi_messages as _pi_messages
 from . import rollout_log as _rollout_log
@@ -267,66 +270,10 @@ ATTACH_UPLOAD_BODY_MAX_BYTES = int(
         str((4 * ((ATTACH_UPLOAD_MAX_BYTES + 2) // 3)) + (64 * 1024)),
     )
 )
-FILE_LIST_IGNORED_DIRS = frozenset(
-    {
-        ".git",
-        ".hg",
-        ".mypy_cache",
-        ".pytest_cache",
-        ".svn",
-        "__pycache__",
-        "build",
-        "dist",
-        "node_modules",
-        "venv",
-        ".venv",
-    }
-)
-MARKDOWN_EXTENSIONS = frozenset({"md", "markdown", "mdown", "mkd"})
-TEXTUAL_EXTENSIONS = frozenset(
-    {
-        "bash",
-        "c",
-        "cc",
-        "cfg",
-        "conf",
-        "cpp",
-        "css",
-        "csv",
-        "diff",
-        "go",
-        "h",
-        "hpp",
-        "htm",
-        "html",
-        "ini",
-        "java",
-        "js",
-        "json",
-        "jsonl",
-        "log",
-        "md",
-        "markdown",
-        "mdown",
-        "mkd",
-        "patch",
-        "py",
-        "rs",
-        "scss",
-        "sh",
-        "sql",
-        "svg",
-        "toml",
-        "ts",
-        "tsx",
-        "txt",
-        "xml",
-        "yaml",
-        "yml",
-        "zsh",
-    }
-)
-TEXTUAL_FILENAMES = frozenset({"dockerfile", "license", "makefile", "readme"})
+FILE_LIST_IGNORED_DIRS = _workspace_files.FILE_LIST_IGNORED_DIRS
+MARKDOWN_EXTENSIONS = _workspace_files.MARKDOWN_EXTENSIONS
+TEXTUAL_EXTENSIONS = _workspace_files.TEXTUAL_EXTENSIONS
+TEXTUAL_FILENAMES = _workspace_files.TEXTUAL_FILENAMES
 SIDEBAR_PRIORITY_HALF_LIFE_SECONDS = 8.0 * 3600.0
 SIDEBAR_PRIORITY_LAMBDA = math.log(2.0) / SIDEBAR_PRIORITY_HALF_LIFE_SECONDS
 RECENT_CWD_MAX = int(os.environ.get("CODEX_WEB_RECENT_CWD_MAX", "256"))
@@ -887,211 +834,84 @@ def _safe_read_text(path: Path, max_bytes: int = 512 * 1024) -> str:
 
 
 def _read_text_file_strict(path: Path, *, max_bytes: int) -> tuple[str, int]:
-    st = path.stat()
-    size = int(st.st_size)
-    if size > max_bytes:
-        raise ValueError(f"file too large (max {max_bytes} bytes)")
-    data = path.read_bytes()
-    if b"\x00" in data:
-        raise ValueError("binary file not supported")
-    text = data.decode("utf-8", errors="replace")
-    return text, size
+    return _workspace_files.read_text_file_strict(path, max_bytes=max_bytes)
 
 
 def _file_content_version(raw: bytes) -> str:
-    return hashlib.sha256(raw).hexdigest()
+    return _workspace_files.file_content_version(raw)
 
 
 def _file_extension(path: Path) -> str:
-    suffix = str(path.suffix or "").lower()
-    if not suffix.startswith("."):
-        return ""
-    return suffix[1:]
+    return _workspace_files.file_extension(path)
 
 
 def _markdown_kind(path: Path) -> str:
-    return "markdown" if _file_extension(path) in MARKDOWN_EXTENSIONS else "text"
+    return _workspace_files.markdown_kind(path)
 
 
 def _path_looks_textual(path: Path) -> bool:
-    ext = _file_extension(path)
-    if ext in TEXTUAL_EXTENSIONS:
-        return True
-    return str(path.name or "").strip().lower() in TEXTUAL_FILENAMES
+    return _workspace_files.path_looks_textual(path)
 
 
 def _looks_like_text_bytes(raw: bytes) -> bool:
-    if b"\x00" in raw:
-        return False
-    for b in raw:
-        if b < 32 and b not in (9, 10, 12, 13, 27):
-            return False
-    return True
+    return _workspace_files.looks_like_text_bytes(raw)
 
 
 def _decode_text_for_client(raw: bytes) -> tuple[str, bool]:
-    try:
-        return raw.decode("utf-8"), True
-    except UnicodeDecodeError:
-        return raw.decode("utf-8", errors="replace"), False
+    return _workspace_files.decode_text_for_client(raw)
 
 
 def _decode_text_view_for_client(
     path: Path, raw: bytes
 ) -> tuple[str, bool, str] | None:
-    if b"\x00" in raw:
-        return None
-    try:
-        text = raw.decode("utf-8")
-        editable = True
-    except UnicodeDecodeError:
-        if not _path_looks_textual(path) and not _looks_like_text_bytes(raw):
-            return None
-        text = raw.decode("utf-8", errors="replace")
-        editable = False
-    return text, editable, _file_content_version(raw)
+    return _workspace_files.decode_text_view_for_client(path, raw)
 
 
 def _read_text_file_for_client(
     path: Path, *, max_bytes: int
 ) -> tuple[str, int, bool, str]:
-    st = path.stat()
-    size = int(st.st_size)
-    if size > max_bytes:
-        raise ValueError(f"file too large (max {max_bytes} bytes)")
-    data = path.read_bytes()
-    if b"\x00" in data:
-        raise ValueError("binary file not supported")
-    text, editable = _decode_text_for_client(data)
-    return text, size, editable, _file_content_version(data)
+    return _workspace_files.read_text_file_for_client(path, max_bytes=max_bytes)
 
 
 def _read_text_file_for_write(path: Path, *, max_bytes: int) -> tuple[str, int, str]:
-    st = path.stat()
-    size = int(st.st_size)
-    if size > max_bytes:
-        raise ValueError(f"file too large (max {max_bytes} bytes)")
-    data = path.read_bytes()
-    if b"\x00" in data:
-        raise ValueError("binary file not supported")
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError as e:
-        raise ValueError("file is not editable as utf-8 text") from e
-    return text, size, _file_content_version(data)
+    return _workspace_files.read_text_file_for_write(path, max_bytes=max_bytes)
 
 
 def _write_text_file_atomic(path: Path, *, text: str) -> tuple[int, str]:
-    if not isinstance(text, str):
-        raise ValueError("text must be a string")
-    if path.is_symlink():
-        raise ValueError("symlink file not supported")
-    data = text.encode("utf-8")
-    size = len(data)
-    if size > FILE_READ_MAX_BYTES:
-        raise ValueError(f"file too large (max {FILE_READ_MAX_BYTES} bytes)")
-    st = path.stat()
-    tmp = path.with_name(f".{path.name}.codoxear-tmp-{secrets.token_hex(6)}")
-    try:
-        tmp.write_bytes(data)
-        os.chmod(tmp, st.st_mode & 0o777)
-        os.replace(tmp, path)
-    finally:
-        try:
-            if tmp.exists():
-                tmp.unlink()
-        except OSError:
-            pass
-    return size, _file_content_version(data)
+    return _workspace_files.write_text_file_atomic(
+        path, text=text, max_bytes=FILE_READ_MAX_BYTES
+    )
 
 
 def _write_new_text_file_atomic(path: Path, *, text: str) -> tuple[int, str]:
-    if not isinstance(text, str):
-        raise ValueError("text must be a string")
-    if path.is_symlink():
-        raise ValueError("symlink file not supported")
-    parent = path.parent
-    if not parent.exists():
-        raise FileNotFoundError("parent directory not found")
-    if not parent.is_dir():
-        raise ValueError("parent path is not a directory")
-    if parent.is_symlink():
-        raise ValueError("symlink parent directory not supported")
-    if path.exists():
-        raise FileExistsError("file already exists")
-    data = text.encode("utf-8")
-    size = len(data)
-    if size > FILE_READ_MAX_BYTES:
-        raise ValueError(f"file too large (max {FILE_READ_MAX_BYTES} bytes)")
-    tmp = path.with_name(f".{path.name}.codoxear-tmp-{secrets.token_hex(6)}")
-    try:
-        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(data)
-        os.link(str(tmp), str(path))
-    finally:
-        try:
-            if tmp.exists():
-                tmp.unlink()
-        except OSError:
-            pass
-    return size, _file_content_version(data)
+    return _workspace_files.write_new_text_file_atomic(
+        path, text=text, max_bytes=FILE_READ_MAX_BYTES
+    )
 
 
 def _resolve_under(base: Path, rel: str) -> Path:
-    if not isinstance(rel, str) or not rel.strip():
-        raise ValueError("path required")
-    if "\x00" in rel:
-        raise ValueError("invalid path")
-    p = Path(rel)
-    if p.is_absolute():
-        raise ValueError("path must be relative")
-    resolved_base = base.resolve()
-    resolved = (resolved_base / p).resolve()
-    if (
-        not str(resolved).startswith(str(resolved_base) + os.sep)
-        and resolved != resolved_base
-    ):
-        raise ValueError("path escapes session cwd")
-    return resolved
+    return _workspace_files.resolve_under(base, rel)
 
 
 def _safe_expanduser(p: Path) -> Path:
-    try:
-        return p.expanduser()
-    except RuntimeError:
-        return p
+    return _workspace_files.safe_expanduser(p)
 
 
 def _resolve_session_path(base: Path, raw_path: str) -> Path:
-    if not isinstance(raw_path, str) or not raw_path.strip():
-        raise ValueError("path required")
-    if "\x00" in raw_path:
-        raise ValueError("invalid path")
-    p = Path(raw_path)
-    if p.is_absolute():
-        return _safe_expanduser(p).resolve()
-    resolved_base = _safe_expanduser(base)
-    if not resolved_base.is_absolute():
-        resolved_base = resolved_base.resolve()
-    return (resolved_base / p).resolve()
+    return _workspace_files.resolve_session_path(base, raw_path)
 
 
 def _resolve_git_path(cwd: Path, raw_path: str) -> tuple[Path, Path, str]:
-    repo_root = Path(
-        _run_git(
-            cwd,
-            ["rev-parse", "--show-toplevel"],
+    return _workspace_files.resolve_git_path(
+        cwd,
+        raw_path,
+        run_git=lambda git_cwd, args: _run_git(
+            git_cwd,
+            args,
             timeout_s=GIT_DIFF_TIMEOUT_SECONDS,
             max_bytes=64 * 1024,
-        ).strip()
-    ).resolve()
-    target = _resolve_session_path(cwd, raw_path)
-    try:
-        rel = str(target.relative_to(repo_root))
-    except ValueError as e:
-        raise ValueError("path is outside git repo") from e
-    return target, repo_root, rel
+        ),
+    )
 
 
 def _resolve_unique_bare_filename(search_root: Path, raw_path: str) -> Path | None:
@@ -1150,112 +970,36 @@ def _resolve_tracked_file_by_basename(session_id: str, raw_path: str) -> Path | 
 
 
 def _resolve_session_relative_child(base: Path, raw_path: str) -> Path:
-    rel = str(raw_path or "").strip()
-    if not rel:
-        return base.resolve()
-    if "\x00" in rel:
-        raise ValueError("invalid path")
-    p = Path(rel)
-    if p.is_absolute():
-        raise ValueError("path must be relative")
-    resolved_base = base.resolve()
-    resolved = (resolved_base / p).resolve()
-    if (
-        not str(resolved).startswith(str(resolved_base) + os.sep)
-        and resolved != resolved_base
-    ):
-        raise ValueError("path escapes session cwd")
-    return resolved
+    return _workspace_files.resolve_session_relative_child(base, raw_path)
 
 
 def _load_root_gitignore_patterns(root: Path) -> list[str]:
-    path = root / ".gitignore"
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return []
-    except OSError:
-        return []
-    patterns: list[str] = []
-    for line in raw.splitlines():
-        pattern = line.strip()
-        if not pattern or pattern.startswith("#") or pattern.startswith("!"):
-            continue
-        patterns.append(pattern)
-    return patterns
+    return _workspace_files.load_root_gitignore_patterns(root)
 
 
 def _gitignore_matches(rel_path: str, *, is_dir: bool, pattern: str) -> bool:
-    candidate = rel_path.strip("/")
-    if not candidate:
-        return False
-    rule = pattern.strip()
-    if not rule:
-        return False
-    dir_only = rule.endswith("/")
-    if dir_only and not is_dir:
-        return False
-    rule = rule.rstrip("/")
-    if not rule:
-        return False
-    anchored = rule.startswith("/")
-    rule = rule.lstrip("/")
-    if not rule:
-        return False
-
-    if "/" in rule:
-        return fnmatch.fnmatchcase(candidate, rule)
-
-    parts = candidate.split("/")
-    if anchored:
-        return fnmatch.fnmatchcase(parts[0], rule)
-    return any(fnmatch.fnmatchcase(part, rule) for part in parts)
+    return _workspace_files.gitignore_matches(rel_path, is_dir=is_dir, pattern=pattern)
 
 
 def _is_ignored_session_relpath(
     rel_path: str, *, is_dir: bool, patterns: list[str]
 ) -> bool:
-    return any(
-        _gitignore_matches(rel_path, is_dir=is_dir, pattern=pattern)
-        for pattern in patterns
+    return _workspace_files.is_ignored_session_relpath(
+        rel_path, is_dir=is_dir, patterns=patterns
     )
 
 
 def _session_entry_sort_key(entry: dict[str, str]) -> tuple[int, str]:
-    return (0 if entry.get("kind") == "dir" else 1, entry.get("name", ""))
+    return _workspace_files.session_entry_sort_key(entry)
 
 
 def _list_session_directory_entries(
     base: Path, raw_path: str = ""
 ) -> list[dict[str, str]]:
-    root = _safe_expanduser(base).resolve()
-    if not root.exists():
-        raise FileNotFoundError("session cwd not found")
-    if not root.is_dir():
-        raise ValueError("session cwd is not a directory")
-    target = _resolve_session_relative_child(root, raw_path)
-    if not target.exists():
-        raise FileNotFoundError("path not found")
-    if not target.is_dir():
-        raise ValueError("path is not a directory")
+    return _workspace_files.list_session_directory_entries(
+        base, raw_path, ignored_dirs=FILE_LIST_IGNORED_DIRS
+    )
 
-    patterns = _load_root_gitignore_patterns(root)
-    out: list[dict[str, str]] = []
-    for child in target.iterdir():
-        rel = child.relative_to(root).as_posix()
-        if child.is_dir() and child.name in FILE_LIST_IGNORED_DIRS:
-            continue
-        if _is_ignored_session_relpath(rel, is_dir=child.is_dir(), patterns=patterns):
-            continue
-        out.append(
-            {
-                "name": child.name,
-                "path": rel,
-                "kind": "dir" if child.is_dir() else "file",
-            }
-        )
-    out.sort(key=_session_entry_sort_key)
-    return out
 
 
 def _run_git(cwd: Path, args: list[str], *, timeout_s: float, max_bytes: int) -> str:
@@ -1274,7 +1018,6 @@ def _run_git(cwd: Path, args: list[str], *, timeout_s: float, max_bytes: int) ->
     if len(proc.stdout) > max_bytes:
         raise ValueError(f"git output too large (max {max_bytes} bytes)")
     return proc.stdout.decode("utf-8", errors="replace")
-
 
 def _expand_user_path(raw: str) -> Path:
     home = str(Path.home())
@@ -1786,92 +1529,19 @@ def _canonical_session_cwd(cwd: Any) -> str | None:
         return trimmed
 
 
-SESSION_LIST_ROW_KEYS = (
-    "session_id",
-    "thread_id",
-    "title",
-    "alias",
-    "first_user_message",
-    "cwd",
-    "agent_backend",
-    "owned",
-    "busy",
-    "queue_len",
-    "git_branch",
-    "pr_summary",
-    "transport",
-    "blocked",
-    "snoozed",
-    "historical",
-)
-SESSION_LIST_GROUP_PAGE_SIZE = 5
-SESSION_LIST_RECENT_GROUP_LIMIT = 3
-SESSION_LIST_RECENT_PAGE_SIZE = 20
-SESSION_LIST_FALLBACK_GROUP_KEY = "__no_working_directory__"
+SESSION_LIST_ROW_KEYS = _session_list.SESSION_LIST_ROW_KEYS
+SESSION_LIST_GROUP_PAGE_SIZE = _session_list.SESSION_LIST_GROUP_PAGE_SIZE
+SESSION_LIST_RECENT_GROUP_LIMIT = _session_list.SESSION_LIST_RECENT_GROUP_LIMIT
+SESSION_LIST_RECENT_PAGE_SIZE = _session_list.SESSION_LIST_RECENT_PAGE_SIZE
+SESSION_LIST_FALLBACK_GROUP_KEY = _session_list.SESSION_LIST_FALLBACK_GROUP_KEY
 
 
 def _normalize_session_cwd_row(row: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(row, dict) or "cwd" not in row:
-        return row
-    canonical_cwd = _canonical_session_cwd(row.get("cwd"))
-    if canonical_cwd is None:
-        return row
-    normalized = dict(row)
-    normalized["cwd"] = canonical_cwd
-    return normalized
+    return _session_list.normalize_session_cwd_row(row)
 
 
 def _frontend_session_list_row(row: dict[str, Any]) -> dict[str, Any]:
-    normalized = _normalize_session_cwd_row(row)
-    if not isinstance(normalized, dict):
-        return normalized
-    return {key: normalized[key] for key in SESSION_LIST_ROW_KEYS if key in normalized}
-
-
-def _session_list_group_key(row: dict[str, Any]) -> str:
-    cwd = _canonical_session_cwd(row.get("cwd"))
-    return cwd or SESSION_LIST_FALLBACK_GROUP_KEY
-
-
-def _session_list_visible_grouped_rows(
-    rows: list[dict[str, Any]],
-    *,
-    cwd_groups: dict[str, dict[str, Any]] | None = None,
-) -> dict[str, list[dict[str, Any]]]:
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for row in rows:
-        key = _session_list_group_key(row)
-        if key not in grouped:
-            grouped[key] = []
-        grouped[key].append(row)
-
-    hidden_group_keys = {
-        str(cwd)
-        for cwd, entry in (cwd_groups or {}).items()
-        if isinstance(entry, dict) and bool(entry.get("hidden"))
-    }
-    if hidden_group_keys:
-        grouped = {
-            key: group_rows
-            for key, group_rows in grouped.items()
-            if key not in hidden_group_keys
-        }
-
-    return {
-        key: group_rows
-        for key, group_rows in grouped.items()
-        if key == SESSION_LIST_FALLBACK_GROUP_KEY
-        or _existing_workspace_dir(key) is not None
-    }
-
-
-def _session_list_group_sort_key(
-    grouped: dict[str, list[dict[str, Any]]], key: str
-) -> tuple[int, float]:
-    group_rows = grouped[key]
-    busy = any(bool(row.get("busy")) for row in group_rows)
-    latest_updated = max(float(row.get("updated_ts") or 0.0) for row in group_rows)
-    return (0 if busy else 1, -latest_updated)
+    return _session_list.frontend_session_list_row(row)
 
 
 def _session_list_payload(
@@ -1884,64 +1554,16 @@ def _session_list_payload(
     group_offset: int = 0,
     group_limit: int = SESSION_LIST_RECENT_GROUP_LIMIT,
 ) -> dict[str, Any]:
-    grouped = _session_list_visible_grouped_rows(rows, cwd_groups=cwd_groups)
-    group_order = sorted(
-        grouped.keys(), key=lambda key: _session_list_group_sort_key(grouped, key)
+    return _session_list.session_list_payload(
+        rows,
+        cwd_groups=cwd_groups,
+        group_key=group_key,
+        offset=offset,
+        limit=limit,
+        group_offset=group_offset,
+        group_limit=group_limit,
+        existing_workspace_dir_fn=_existing_workspace_dir,
     )
-
-    if group_key is not None:
-        group_rows = grouped.get(group_key, [])
-        start = max(0, int(offset))
-        stop = start + max(1, int(limit))
-        page_rows = [_frontend_session_list_row(row) for row in group_rows[start:stop]]
-        remaining = max(0, len(group_rows) - stop)
-        return {
-            "sessions": page_rows,
-            "remaining_by_group": {group_key: remaining} if remaining > 0 else {},
-        }
-
-    selected_group_keys = set(group_order[:SESSION_LIST_RECENT_GROUP_LIMIT])
-    omitted_group_count = 0
-    for key, group_rows in grouped.items():
-        if any(bool(row.get("busy")) for row in group_rows):
-            selected_group_keys.add(key)
-
-    if group_offset > 0 or group_limit != SESSION_LIST_RECENT_GROUP_LIMIT:
-        group_stop = max(group_offset, 0) + max(1, int(group_limit))
-        extra_group_order = group_order[group_offset:group_stop]
-        selected_group_keys = set(extra_group_order)
-        omitted_group_count = max(0, len(group_order) - group_stop)
-
-    sessions: list[dict[str, Any]] = []
-    remaining_by_group: dict[str, int] = {}
-    for key in group_order:
-        if key not in selected_group_keys:
-            continue
-        group_rows = grouped[key]
-        page_rows = group_rows[:SESSION_LIST_GROUP_PAGE_SIZE]
-        sessions.extend(_frontend_session_list_row(row) for row in page_rows)
-        remaining = len(group_rows) - len(page_rows)
-        if remaining > 0:
-            remaining_by_group[key] = remaining
-    payload: dict[str, Any] = {
-        "sessions": sessions,
-        "remaining_by_group": remaining_by_group,
-    }
-    if group_offset <= 0 and group_limit == SESSION_LIST_RECENT_GROUP_LIMIT:
-        omitted_group_count = max(0, len(group_order) - len(selected_group_keys))
-    payload["omitted_group_count"] = omitted_group_count
-    return payload
-
-
-def _session_recent_sort_key(
-    row: dict[str, Any], row_index: int
-) -> tuple[int, float, float, int]:
-    updated_raw = row.get("updated_ts")
-    start_raw = row.get("start_ts")
-    updated_ts = float(updated_raw) if isinstance(updated_raw, (int, float)) else 0.0
-    start_ts = float(start_raw) if isinstance(start_raw, (int, float)) else 0.0
-    busy = bool(row.get("busy"))
-    return (0 if busy else 1, -updated_ts, -start_ts, row_index)
 
 
 def _session_recent_payload(
@@ -1951,29 +1573,13 @@ def _session_recent_payload(
     offset: int = 0,
     limit: int = SESSION_LIST_RECENT_PAGE_SIZE,
 ) -> dict[str, Any]:
-    grouped = _session_list_visible_grouped_rows(rows, cwd_groups=cwd_groups)
-    ordered_rows = [
-        row
-        for _group_key in sorted(
-            grouped.keys(), key=lambda key: _session_list_group_sort_key(grouped, key)
-        )
-        for row in grouped[_group_key]
-    ]
-    recent_rows = [
-        row
-        for _, row in sorted(
-            enumerate(ordered_rows),
-            key=lambda item: _session_recent_sort_key(item[1], item[0]),
-        )
-    ]
-    start = max(0, int(offset))
-    stop = start + max(1, int(limit))
-    page_rows = [_frontend_session_list_row(row) for row in recent_rows[start:stop]]
-    remaining = max(0, len(recent_rows) - stop)
-    return {
-        "sessions": page_rows,
-        "remaining": remaining,
-    }
+    return _session_list.session_recent_payload(
+        rows,
+        cwd_groups=cwd_groups,
+        offset=offset,
+        limit=limit,
+        existing_workspace_dir_fn=_existing_workspace_dir,
+    )
 
 
 def _session_details_payload(
@@ -2000,26 +1606,15 @@ def _session_details_payload(
 
 
 def _clean_recent_cwd(value: Any) -> str | None:
-    if not isinstance(value, str):
-        return None
-    out = value.strip()
-    return out or None
+    return _session_state_store.clean_recent_cwd(value)
 
 
 def _clean_hidden_after_live_start_ts(value: Any) -> float | None:
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        out = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(out) or out <= 0:
-        return None
-    return out
+    return _session_state_store.clean_hidden_after_live_start_ts(value)
 
 
 def _clean_hidden_session_cutoff_ts(value: Any) -> float | None:
-    return _clean_hidden_after_live_start_ts(value)
+    return _session_state_store.clean_hidden_session_cutoff_ts(value)
 
 
 def _cwd_group_entry(
@@ -2325,15 +1920,9 @@ def _resolve_client_file_path(*, session_id: str, raw_path: str) -> Path:
 
 
 def _inspect_openable_file(path_obj: Path) -> tuple[bytes, int, str, str | None]:
-    view = _read_client_file_view(path_obj)
-    if view.kind == "directory":
-        raise ValueError("path is not a file")
-    if view.kind == "download_only":
-        if view.blocked_reason == "too_large":
-            raise ValueError(f"file too large (max {FILE_READ_MAX_BYTES} bytes)")
-        raise ValueError("binary file not supported")
-    raw = path_obj.read_bytes()
-    return raw, view.size, view.kind, view.content_type
+    return _workspace_files.inspect_openable_file(
+        path_obj, max_bytes=FILE_READ_MAX_BYTES, file_kind=_file_kind
+    )
 
 
 def _inspect_path_metadata(path_obj: Path) -> tuple[int, str, str | None]:
@@ -2342,69 +1931,29 @@ def _inspect_path_metadata(path_obj: Path) -> tuple[int, str, str | None]:
 
 
 def _read_client_file_view(path_obj: Path) -> ClientFileView:
-    if not path_obj.exists():
-        raise FileNotFoundError("file not found")
-    if path_obj.is_dir():
-        return ClientFileView(kind="directory", size=0)
-    if not path_obj.is_file():
-        raise ValueError("path is not a file")
-    try:
-        size = int(path_obj.stat().st_size)
-        with path_obj.open("rb") as f:
-            prefix = f.read(4096)
-    except PermissionError as e:
-        raise PermissionError("permission denied") from e
-    kind, content_type = _file_kind(path_obj, prefix)
-    if kind in {"image", "pdf"}:
-        return ClientFileView(kind=kind, size=size, content_type=content_type)
-    if size > FILE_READ_MAX_BYTES:
-        return ClientFileView(
-            kind="download_only",
-            size=size,
-            blocked_reason="too_large",
-            viewer_max_bytes=FILE_READ_MAX_BYTES,
-        )
-    raw = path_obj.read_bytes()
-    text_payload = _decode_text_view_for_client(path_obj, raw)
-    if text_payload is None:
-        return ClientFileView(kind="download_only", size=size, blocked_reason="binary")
-    text, editable, version = text_payload
-    return ClientFileView(
-        kind=_markdown_kind(path_obj),
-        size=size,
-        text=text,
-        editable=editable,
-        version=version,
+    return _workspace_files.read_client_file_view(
+        path_obj, max_bytes=FILE_READ_MAX_BYTES, file_kind=_file_kind
     )
 
 
 def _read_text_or_image(path_obj: Path) -> tuple[str, int, str | None, bytes | None]:
-    view = _read_client_file_view(path_obj)
-    if view.kind in {"image", "pdf", "download_only", "directory"}:
-        return view.kind, view.size, view.content_type, None
-    raw = path_obj.read_bytes()
-    return view.kind, view.size, view.content_type, raw
+    return _workspace_files.read_text_or_image(
+        path_obj, max_bytes=FILE_READ_MAX_BYTES, file_kind=_file_kind
+    )
 
 
 def _read_downloadable_file(path_obj: Path) -> tuple[bytes, int]:
-    if not path_obj.exists():
-        raise FileNotFoundError("file not found")
-    if not path_obj.is_file():
-        raise ValueError("path is not a file")
-    try:
-        raw = path_obj.read_bytes()
-    except PermissionError as e:
-        raise PermissionError("permission denied") from e
-    return raw, len(raw)
+    return _workspace_files.read_downloadable_file(path_obj)
 
 
 def _inspect_client_path(path_obj: Path) -> tuple[int, str, str | None]:
-    view = _read_client_file_view(path_obj)
-    return view.size, view.kind, view.content_type
+    return _workspace_files.inspect_client_path(
+        path_obj, max_bytes=FILE_READ_MAX_BYTES, file_kind=_file_kind
+    )
 
 
 def _download_disposition(path_obj: Path) -> str:
-    return f"attachment; filename*=UTF-8''{urllib.parse.quote(path_obj.name, safe='')}"
+    return _workspace_files.download_disposition(path_obj)
 
 
 def _iter_session_logs(*, agent_backend: str = "codex") -> list[Path]:
@@ -4479,44 +4028,21 @@ class SessionManager:
     def _save_harness(self) -> None:
         with self._lock:
             obj = dict(self._harness)
-        os.makedirs(APP_DIR, exist_ok=True)
-        tmp = HARNESS_PATH.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(tmp, HARNESS_PATH)
+        _session_state_store.save_mapping(HARNESS_PATH, obj)
 
     def _load_aliases(self) -> None:
-        try:
-            raw = ALIAS_PATH.read_text(encoding="utf-8")
-        except FileNotFoundError:
+        cleaned = _session_state_store.load_aliases(
+            ALIAS_PATH, clean_alias=_clean_alias
+        )
+        if cleaned is None:
             return
-        obj = json.loads(raw)
-        if not isinstance(obj, dict):
-            raise ValueError("invalid session_aliases.json (expected object)")
-        cleaned: dict[str, str] = {}
-        for sid, v in obj.items():
-            if not isinstance(sid, str) or not sid:
-                continue
-            if not isinstance(v, str):
-                continue
-            alias = _clean_alias(v)
-            if alias:
-                cleaned[sid] = alias
         with self._lock:
             self._aliases = cleaned
 
     def _save_aliases(self) -> None:
         with self._lock:
             obj = dict(self._aliases)
-        os.makedirs(APP_DIR, exist_ok=True)
-        tmp = ALIAS_PATH.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(tmp, ALIAS_PATH)
+        _session_state_store.save_mapping(ALIAS_PATH, obj)
 
     def _load_sidebar_meta(self) -> None:
         try:
@@ -4549,64 +4075,25 @@ class SessionManager:
     def _save_sidebar_meta(self) -> None:
         with self._lock:
             obj = dict(self._sidebar_meta)
-        os.makedirs(APP_DIR, exist_ok=True)
-        tmp = SIDEBAR_META_PATH.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(tmp, SIDEBAR_META_PATH)
+        _session_state_store.save_mapping(SIDEBAR_META_PATH, obj)
 
     def _load_hidden_sessions(self) -> None:
-        try:
-            raw = HIDDEN_SESSIONS_PATH.read_text(encoding="utf-8")
-        except FileNotFoundError:
+        loaded = _session_state_store.load_hidden_sessions(HIDDEN_SESSIONS_PATH)
+        if loaded is None:
             return
-        obj = json.loads(raw)
-        if not isinstance(obj, list):
-            raise ValueError("invalid hidden_sessions.json (expected list)")
-        cleaned: set[str] = set()
-        cutoffs: dict[str, float] = {}
-        for entry in obj:
-            if isinstance(entry, str):
-                sid = entry.strip()
-                if sid:
-                    cleaned.add(sid)
-                continue
-            if not isinstance(entry, dict):
-                continue
-            sid_raw = entry.get("id")
-            if not isinstance(sid_raw, str):
-                continue
-            sid = sid_raw.strip()
-            if not sid:
-                continue
-            cutoff_ts = _clean_hidden_session_cutoff_ts(entry.get("cutoff_ts"))
-            if cutoff_ts is None:
-                cleaned.add(sid)
-            else:
-                cutoffs[sid] = cutoff_ts
+        cleaned, cutoffs = loaded
         with self._lock:
             self._hidden_sessions = cleaned
             self._hidden_session_cutoffs = cutoffs
 
     def _save_hidden_sessions(self) -> None:
         with self._lock:
-            hidden = sorted(getattr(self, "_hidden_sessions", set()))
+            hidden = set(getattr(self, "_hidden_sessions", set()))
             cutoffs = dict(getattr(self, "_hidden_session_cutoffs", {}))
-        obj: list[Any] = list(hidden)
-        for key in sorted(cutoffs):
-            cutoff_ts = _clean_hidden_session_cutoff_ts(cutoffs.get(key))
-            if cutoff_ts is None:
-                obj.append(key)
-                continue
-            obj.append({"id": key, "cutoff_ts": cutoff_ts})
-        os.makedirs(APP_DIR, exist_ok=True)
-        tmp = HIDDEN_SESSIONS_PATH.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        obj = _session_state_store.hidden_sessions_save_payload(hidden, cutoffs)
+        _session_state_store.write_json_atomic(
+            HIDDEN_SESSIONS_PATH, obj, sort_keys=False
         )
-        os.replace(tmp, HIDDEN_SESSIONS_PATH)
 
     def _hidden_session_keys(
         self,
@@ -4924,47 +4411,18 @@ class SessionManager:
             self._save_queues()
 
     def _load_files(self) -> None:
-        try:
-            raw = FILE_HISTORY_PATH.read_text(encoding="utf-8")
-        except FileNotFoundError:
+        cleaned = _session_state_store.load_files(
+            FILE_HISTORY_PATH, file_history_max=FILE_HISTORY_MAX
+        )
+        if cleaned is None:
             return
-        obj = json.loads(raw)
-        if not isinstance(obj, dict):
-            raise ValueError("invalid session_files.json (expected object)")
-        cleaned: dict[str, list[str]] = {}
-        for sid, arr in obj.items():
-            if not isinstance(sid, str) or not sid:
-                continue
-            if sid.startswith("cwd:"):
-                continue
-            key = sid if sid.startswith("sid:") else f"sid:{sid}"
-            if not isinstance(arr, list):
-                continue
-            out: list[str] = []
-            for v in arr:
-                if not isinstance(v, str):
-                    continue
-                p = v.strip()
-                if not p or p in out:
-                    continue
-                out.append(p)
-                if len(out) >= FILE_HISTORY_MAX:
-                    break
-            if out:
-                cleaned[key] = out
         with self._lock:
             self._files = cleaned
 
     def _save_files(self) -> None:
         with self._lock:
             obj = dict(self._files)
-        os.makedirs(APP_DIR, exist_ok=True)
-        tmp = FILE_HISTORY_PATH.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(tmp, FILE_HISTORY_PATH)
+        _session_state_store.save_mapping(FILE_HISTORY_PATH, obj)
 
     def _load_queues(self) -> None:
         try:
@@ -4998,97 +4456,33 @@ class SessionManager:
     def _save_queues(self) -> None:
         with self._lock:
             obj = dict(self._queues)
-        os.makedirs(APP_DIR, exist_ok=True)
-        tmp = QUEUE_PATH.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(tmp, QUEUE_PATH)
+        _session_state_store.save_mapping(QUEUE_PATH, obj)
 
     def _load_recent_cwds(self) -> None:
-        try:
-            raw = RECENT_CWD_PATH.read_text(encoding="utf-8")
-        except FileNotFoundError:
+        cleaned = _session_state_store.load_recent_cwds(
+            RECENT_CWD_PATH, recent_cwd_max=RECENT_CWD_MAX
+        )
+        if cleaned is None:
             return
-        obj = json.loads(raw)
-        if not isinstance(obj, dict):
-            raise ValueError("invalid recent_cwds.json (expected object)")
-        cleaned: dict[str, float] = {}
-        for raw_cwd, raw_ts in obj.items():
-            cwd = _clean_recent_cwd(raw_cwd)
-            if cwd is None or isinstance(raw_ts, bool):
-                continue
-            try:
-                ts = float(raw_ts)
-            except (TypeError, ValueError):
-                continue
-            if not math.isfinite(ts) or ts <= 0:
-                continue
-            prev = cleaned.get(cwd)
-            if prev is None or ts > prev:
-                cleaned[cwd] = ts
-        top = sorted(cleaned.items(), key=lambda item: (-item[1], item[0]))[
-            :RECENT_CWD_MAX
-        ]
         with self._lock:
-            self._recent_cwds = dict(top)
+            self._recent_cwds = cleaned
 
     def _save_recent_cwds(self) -> None:
         with self._lock:
-            items = sorted(
-                getattr(self, "_recent_cwds", {}).items(),
-                key=lambda item: (-float(item[1]), item[0]),
-            )[:RECENT_CWD_MAX]
-        obj = {cwd: ts for cwd, ts in items}
-        os.makedirs(APP_DIR, exist_ok=True)
-        tmp = RECENT_CWD_PATH.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
+            recent_cwds = dict(getattr(self, "_recent_cwds", {}))
+        obj = _session_state_store.recent_cwds_save_payload(
+            recent_cwds, recent_cwd_max=RECENT_CWD_MAX
         )
-        os.replace(tmp, RECENT_CWD_PATH)
+        _session_state_store.save_mapping(RECENT_CWD_PATH, obj)
 
     def _load_cwd_groups(self) -> None:
-        cleaned: dict[str, dict[str, Any]] = {}
         try:
-            raw = CWD_GROUPS_PATH.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            with self._lock:
-                self._cwd_groups = cleaned
-            return
-        try:
-            obj = json.loads(raw)
-            if not isinstance(obj, dict):
-                raise ValueError("invalid cwd_groups.json (expected object)")
-            for cwd, v in obj.items():
-                try:
-                    normalized_cwd = _normalize_cwd_group_key(cwd)
-                except ValueError:
-                    continue
-                if not isinstance(v, dict):
-                    continue
-                label = _clean_alias(v.get("label", ""))
-                persisted_collapsed = v.get("collapsed", False)
-                collapsed = (
-                    persisted_collapsed
-                    if isinstance(persisted_collapsed, bool)
-                    else False
-                )
-                persisted_hidden = v.get("hidden", False)
-                hidden = (
-                    persisted_hidden if isinstance(persisted_hidden, bool) else False
-                )
-                hidden_after_live_start_ts = _clean_hidden_after_live_start_ts(
-                    v.get("hidden_after_live_start_ts")
-                )
-                if label or collapsed or hidden:
-                    cleaned[normalized_cwd] = _cwd_group_entry(
-                        label=label,
-                        collapsed=collapsed,
-                        hidden=hidden,
-                        hidden_after_live_start_ts=hidden_after_live_start_ts,
-                    )
+            cleaned = _session_state_store.load_cwd_groups(
+                CWD_GROUPS_PATH,
+                normalize_cwd_group_key=_normalize_cwd_group_key,
+                clean_alias=_clean_alias,
+                cwd_group_entry=_cwd_group_entry,
+            )
         except (json.JSONDecodeError, TypeError, ValueError) as e:
             LOG.warning("recovering malformed cwd_groups.json as empty state: %s", e)
             cleaned = {}
@@ -5098,13 +4492,7 @@ class SessionManager:
     def _save_cwd_groups(self) -> None:
         with self._lock:
             obj = dict(self._cwd_groups)
-        os.makedirs(APP_DIR, exist_ok=True)
-        tmp = CWD_GROUPS_PATH.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(tmp, CWD_GROUPS_PATH)
+        _session_state_store.save_mapping(CWD_GROUPS_PATH, obj)
 
     def cwd_groups_get(self) -> dict[str, dict[str, Any]]:
         self._prune_stale_workspace_dirs()
@@ -8651,6 +8039,156 @@ def _cache_control_for_path(path: Path) -> str:
     return "no-store"
 
 
+
+def _send_file_blob_response(
+    handler: http.server.BaseHTTPRequestHandler,
+    *,
+    path_obj: Path,
+    content_type: str,
+    disposition: str,
+    raw: bytes,
+) -> None:
+    handler.send_response(200)
+    handler.send_header("Content-Type", content_type)
+    handler.send_header("Content-Length", str(len(raw)))
+    handler.send_header("Content-Disposition", disposition)
+    handler.send_header("Cache-Control", "no-store")
+    handler.send_header("Pragma", "no-cache")
+    handler.send_header("Expires", "0")
+    handler.end_headers()
+    handler.wfile.write(raw)
+
+
+def _session_route_id(path: str, suffix: str) -> str | None:
+    if not path.startswith("/api/sessions/") or not path.endswith(suffix):
+        return None
+    parts = path.split("/")
+    session_id = parts[3] if len(parts) >= 4 else ""
+    return session_id or None
+
+
+def handle_sessions_bootstrap_get(handler: http.server.BaseHTTPRequestHandler) -> bool:
+    if not _require_auth(handler):
+        handler._unauthorized()  # type: ignore[attr-defined]
+        return True
+    _json_response(
+        handler,
+        200,
+        {
+            "recent_cwds": MANAGER.recent_cwds(),
+            "cwd_groups": MANAGER.cwd_groups_get(),
+            "new_session_defaults": _read_new_session_defaults(),
+            "tmux_available": _tmux_available(),
+        },
+    )
+    return True
+
+
+def handle_sessions_get(
+    handler: http.server.BaseHTTPRequestHandler, parsed_url: urllib.parse.ParseResult
+) -> bool:
+    if not _require_auth(handler):
+        handler._unauthorized()  # type: ignore[attr-defined]
+        return True
+    t0 = time.perf_counter()
+    qs = urllib.parse.parse_qs(parsed_url.query)
+    view = str(qs.get("view", ["directories"])[0] or "directories").strip().lower()
+    if view not in {"directories", "recent"}:
+        _json_response(handler, 400, {"error": "unsupported sessions view", "view": view})
+        return True
+    group_key_q = qs.get("group_key")
+    group_key = group_key_q[0] if group_key_q else None
+    offset = max(0, int(qs.get("offset", ["0"])[0] or "0"))
+    limit = max(
+        1,
+        min(
+            50,
+            int(
+                qs.get("limit", [str(SESSION_LIST_RECENT_PAGE_SIZE)])[0]
+                or str(SESSION_LIST_RECENT_PAGE_SIZE)
+            ),
+        ),
+    )
+    group_offset = max(0, int(qs.get("group_offset", ["0"])[0] or "0"))
+    group_limit = max(
+        1,
+        min(
+            20,
+            int(
+                qs.get("group_limit", [str(SESSION_LIST_RECENT_GROUP_LIMIT)])[0]
+                or str(SESSION_LIST_RECENT_GROUP_LIMIT)
+            ),
+        ),
+    )
+    rows = MANAGER.list_sessions()
+    cwd_groups = MANAGER.cwd_groups_get()
+    if view == "recent":
+        if group_key is not None or group_offset > 0 or "group_limit" in qs:
+            _json_response(
+                handler,
+                400,
+                {"error": "group pagination is not supported for recent view"},
+            )
+            return True
+        payload = _session_recent_payload(
+            rows, cwd_groups=cwd_groups, offset=offset, limit=limit
+        )
+    else:
+        payload = _session_list_payload(
+            rows,
+            cwd_groups=cwd_groups,
+            group_key=group_key,
+            offset=offset,
+            limit=max(1, min(50, limit or SESSION_LIST_GROUP_PAGE_SIZE)),
+            group_offset=group_offset,
+            group_limit=group_limit,
+        )
+    dt_ms = (time.perf_counter() - t0) * 1000.0
+    _record_metric("api_sessions_ms", dt_ms)
+    _json_response(handler, 200, payload)
+    return True
+
+
+def handle_session_file_list_get(
+    handler: http.server.BaseHTTPRequestHandler,
+    *,
+    session_id: str,
+    parsed_url: urllib.parse.ParseResult,
+) -> bool:
+    if not _require_auth(handler):
+        handler._unauthorized()  # type: ignore[attr-defined]
+        return True
+    MANAGER.refresh_session_meta(session_id, strict=False)
+    s = MANAGER.get_session(session_id)
+    if not s:
+        _json_response(handler, 404, {"error": "unknown session"})
+        return True
+    qs = urllib.parse.parse_qs(parsed_url.query)
+    raw_rel = qs.get("path", [""])[0]
+    base = _safe_expanduser(Path(s.cwd))
+    if not base.is_absolute():
+        base = base.resolve()
+    try:
+        entries = _workspace_files.list_session_directory_entries(
+            base, raw_rel, ignored_dirs=FILE_LIST_IGNORED_DIRS
+        )
+    except FileNotFoundError as e:
+        _json_response(handler, 404, {"error": str(e)})
+        return True
+    except PermissionError as e:
+        _json_response(handler, 403, {"error": str(e)})
+        return True
+    except ValueError as e:
+        _json_response(handler, 400, {"error": str(e)})
+        return True
+    _json_response(
+        handler,
+        200,
+        {"ok": True, "cwd": str(base), "path": str(raw_rel or ""), "entries": entries},
+    )
+    return True
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version = "codoxear/0.1"
 
@@ -8867,94 +8405,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
             if path == "/api/sessions/bootstrap":
-                if not _require_auth(self):
-                    self._unauthorized()
-                    return
-                _json_response(
-                    self,
-                    200,
-                    {
-                        "recent_cwds": MANAGER.recent_cwds(),
-                        "cwd_groups": MANAGER.cwd_groups_get(),
-                        "new_session_defaults": _read_new_session_defaults(),
-                        "tmux_available": _tmux_available(),
-                    },
-                )
+                handle_sessions_bootstrap_get(self)
                 return
 
             if path == "/api/sessions":
-                if not _require_auth(self):
-                    self._unauthorized()
-                    return
-                t0 = time.perf_counter()
-                qs = urllib.parse.parse_qs(u.query)
-                view = (
-                    str(qs.get("view", ["directories"])[0] or "directories")
-                    .strip()
-                    .lower()
-                )
-                if view not in {"directories", "recent"}:
-                    _json_response(
-                        self, 400, {"error": "unsupported sessions view", "view": view}
-                    )
-                    return
-                group_key_q = qs.get("group_key")
-                group_key = group_key_q[0] if group_key_q else None
-                offset = max(0, int(qs.get("offset", ["0"])[0] or "0"))
-                limit = max(
-                    1,
-                    min(
-                        50,
-                        int(
-                            qs.get("limit", [str(SESSION_LIST_RECENT_PAGE_SIZE)])[0]
-                            or str(SESSION_LIST_RECENT_PAGE_SIZE)
-                        ),
-                    ),
-                )
-                group_offset = max(0, int(qs.get("group_offset", ["0"])[0] or "0"))
-                group_limit = max(
-                    1,
-                    min(
-                        20,
-                        int(
-                            qs.get(
-                                "group_limit", [str(SESSION_LIST_RECENT_GROUP_LIMIT)]
-                            )[0]
-                            or str(SESSION_LIST_RECENT_GROUP_LIMIT)
-                        ),
-                    ),
-                )
-                rows = MANAGER.list_sessions()
-                cwd_groups = MANAGER.cwd_groups_get()
-                if view == "recent":
-                    if group_key is not None or group_offset > 0 or "group_limit" in qs:
-                        _json_response(
-                            self,
-                            400,
-                            {
-                                "error": "group pagination is not supported for recent view"
-                            },
-                        )
-                        return
-                    payload = _session_recent_payload(
-                        rows,
-                        cwd_groups=cwd_groups,
-                        offset=offset,
-                        limit=limit,
-                    )
-                else:
-                    payload = _session_list_payload(
-                        rows,
-                        cwd_groups=cwd_groups,
-                        group_key=group_key,
-                        offset=offset,
-                        limit=max(1, min(50, limit or SESSION_LIST_GROUP_PAGE_SIZE)),
-                        group_offset=group_offset,
-                        group_limit=group_limit,
-                    )
-                dt_ms = (time.perf_counter() - t0) * 1000.0
-                _record_metric("api_sessions_ms", dt_ms)
-                _json_response(self, 200, payload)
+                handle_sessions_get(self, u)
                 return
 
             if path == "/api/session_resume_candidates":
@@ -9309,7 +8764,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 base = _safe_expanduser(Path(s.cwd))
                 if not base.is_absolute():
                     base = base.resolve()
-                p = _resolve_session_path(base, rel)
+                p = _workspace_files.resolve_session_path(base, rel)
                 if not p.exists():
                     _json_response(self, 404, {"error": "file not found"})
                     return
@@ -9317,7 +8772,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     _json_response(self, 400, {"error": "path is not a file"})
                     return
                 try:
-                    view = _read_client_file_view(p)
+                    view = _workspace_files.read_client_file_view(
+                        p, max_bytes=FILE_READ_MAX_BYTES, file_kind=_file_kind
+                    )
                 except PermissionError as e:
                     _json_response(self, 403, {"error": str(e)})
                     return
@@ -9449,45 +8906,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
             if path.startswith("/api/sessions/") and path.endswith("/file/list"):
-                if not _require_auth(self):
-                    self._unauthorized()
-                    return
-                parts = path.split("/")
-                session_id = parts[3] if len(parts) >= 4 else ""
+                session_id = _session_route_id(path, "/file/list")
                 if not session_id:
                     self.send_error(404)
                     return
-                MANAGER.refresh_session_meta(session_id, strict=False)
-                s = MANAGER.get_session(session_id)
-                if not s:
-                    _json_response(self, 404, {"error": "unknown session"})
-                    return
-                qs = urllib.parse.parse_qs(u.query)
-                raw_rel = qs.get("path", [""])[0]
-                base = _safe_expanduser(Path(s.cwd))
-                if not base.is_absolute():
-                    base = base.resolve()
-                try:
-                    entries = _list_session_directory_entries(base, raw_rel)
-                except FileNotFoundError as e:
-                    _json_response(self, 404, {"error": str(e)})
-                    return
-                except PermissionError as e:
-                    _json_response(self, 403, {"error": str(e)})
-                    return
-                except ValueError as e:
-                    _json_response(self, 400, {"error": str(e)})
-                    return
-                _json_response(
-                    self,
-                    200,
-                    {
-                        "ok": True,
-                        "cwd": str(base),
-                        "path": str(raw_rel or ""),
-                        "entries": entries,
-                    },
-                )
+                handle_session_file_list_get(self, session_id=session_id, parsed_url=u)
                 return
 
             if path.startswith("/api/sessions/") and path.endswith("/file/blob"):
@@ -9513,7 +8936,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 base = _safe_expanduser(Path(s.cwd))
                 if not base.is_absolute():
                     base = base.resolve()
-                p = _resolve_session_path(base, rel)
+                p = _workspace_files.resolve_session_path(base, rel)
                 if not p.exists():
                     _json_response(self, 404, {"error": "file not found"})
                     return
@@ -9601,9 +9024,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 base = _safe_expanduser(Path(s.cwd))
                 if not base.is_absolute():
                     base = base.resolve()
-                p = _resolve_session_path(base, rel)
+                p = _workspace_files.resolve_session_path(base, rel)
                 try:
-                    raw, size = _read_downloadable_file(p)
+                    raw, size = _workspace_files.read_downloadable_file(p)
                 except FileNotFoundError as e:
                     _json_response(self, 404, {"error": str(e)})
                     return
@@ -9853,7 +9276,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     _json_response(self, 409, {"error": str(e)})
                     return
                 try:
-                    p, _repo_root, rel = _resolve_git_path(cwd, rel)
+                    p, _repo_root, rel = _workspace_files.resolve_git_path(
+                        cwd,
+                        rel,
+                        run_git=lambda git_cwd, args: _run_git(
+                            git_cwd,
+                            args,
+                            timeout_s=GIT_DIFF_TIMEOUT_SECONDS,
+                            max_bytes=64 * 1024,
+                        ),
+                    )
                 except ValueError as e:
                     _json_response(self, 400, {"error": str(e)})
                     return
@@ -9861,7 +9293,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 current_size = 0
                 current_exists = bool(p.exists() and p.is_file())
                 if current_exists:
-                    current_text, current_size = _read_text_file_strict(
+                    current_text, current_size = _workspace_files.read_text_file_strict(
                         p, max_bytes=FILE_READ_MAX_BYTES
                     )
                 try:
