@@ -30,7 +30,9 @@ def _log_error(msg: str) -> None:
 def _log_exception(context: str, exc: BaseException) -> None:
     ts = datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
     _log_error(f"error: {context}: {type(exc).__name__}: {exc}")
-    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip("\n")
+    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip(
+        "\n"
+    )
     if tb:
         _log_error(f"traceback ({ts}):\n{tb}")
 
@@ -52,6 +54,9 @@ def _send_socket_json_line(conn: socket.socket, payload: dict[str, Any]) -> None
 
 
 def default_app_dir() -> Path:
+    override = os.environ.get("CODOXEAR_APP_DIR")
+    if override is not None and override.strip():
+        return Path(override.strip()).expanduser()
     base = Path.home() / ".local" / "share"
     new = base / "codoxear"
     old = base / "codex-web"
@@ -103,7 +108,9 @@ def _path_in_set(path: Path, paths: set[Path]) -> bool:
     return False
 
 
-def _read_session_meta_payload_once(log_path: Path, *, max_bytes: int) -> dict[str, Any] | None:
+def _read_session_meta_payload_once(
+    log_path: Path, *, max_bytes: int
+) -> dict[str, Any] | None:
     try:
         with log_path.open("rb") as f:
             data = f.read(int(max_bytes))
@@ -141,7 +148,9 @@ def read_session_meta_payload(
     max_bytes: int = 64 * 1024,
 ) -> dict[str, Any] | None:
     backend_name = normalize_agent_backend(
-        agent_backend if agent_backend is not None else infer_agent_backend_from_log_path(log_path) or "codex"
+        agent_backend
+        if agent_backend is not None
+        else infer_agent_backend_from_log_path(log_path) or "codex"
     )
     if backend_name == "pi":
         return read_pi_session_header(log_path)
@@ -176,14 +185,20 @@ def subagent_parent_thread_id(payload: dict[str, Any]) -> str | None:
     return parent if isinstance(parent, str) and parent else None
 
 
-def classify_session_log(log_path: Path, *, agent_backend: str | None = None, timeout_s: float = 0.0) -> str | None:
-    payload = read_session_meta_payload(log_path, agent_backend=agent_backend, timeout_s=timeout_s)
+def classify_session_log(
+    log_path: Path, *, agent_backend: str | None = None, timeout_s: float = 0.0
+) -> str | None:
+    payload = read_session_meta_payload(
+        log_path, agent_backend=agent_backend, timeout_s=timeout_s
+    )
     if payload is None:
         return None
     return "subagent" if is_subagent_session_meta(payload) else "main"
 
 
-def iter_session_logs(sessions_dir: Path, *, agent_backend: str = "codex") -> list[Path]:
+def iter_session_logs(
+    sessions_dir: Path, *, agent_backend: str = "codex"
+) -> list[Path]:
     backend_name = normalize_agent_backend(agent_backend)
     if not sessions_dir.exists():
         return []
@@ -192,7 +207,9 @@ def iter_session_logs(sessions_dir: Path, *, agent_backend: str = "codex") -> li
     for p in sessions_dir.rglob(pattern):
         if backend_name == "codex" and not _is_codex_rollout_log_path(p):
             continue
-        if backend_name == "pi" and not _is_pi_session_log_path(p, sessions_dir=sessions_dir):
+        if backend_name == "pi" and not _is_pi_session_log_path(
+            p, sessions_dir=sessions_dir
+        ):
             continue
         try:
             mt = float(p.stat().st_mtime)
@@ -206,7 +223,9 @@ def iter_session_logs(sessions_dir: Path, *, agent_backend: str = "codex") -> li
     return [p for _mt, p in out]
 
 
-def find_session_log_for_session_id(sessions_dir: Path, session_id: str, *, agent_backend: str = "codex") -> Path | None:
+def find_session_log_for_session_id(
+    sessions_dir: Path, session_id: str, *, agent_backend: str = "codex"
+) -> Path | None:
     backend_name = normalize_agent_backend(agent_backend)
     if not session_id:
         return None
@@ -247,7 +266,9 @@ def find_new_session_log(
                     continue
             except FileNotFoundError:
                 continue
-            payload = read_session_meta_payload(p, agent_backend=backend_name, timeout_s=0.0)
+            payload = read_session_meta_payload(
+                p, agent_backend=backend_name, timeout_s=0.0
+            )
             if not payload:
                 continue
             if backend_name == "codex" and is_subagent_session_meta(payload):
@@ -272,7 +293,10 @@ def find_new_session_log(
 def _macos_children(pid: int) -> list[int]:
     try:
         import subprocess
-        result = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True)
+
+        result = subprocess.run(
+            ["pgrep", "-P", str(pid)], capture_output=True, text=True
+        )
         out: list[int] = []
         for line in result.stdout.splitlines():
             try:
@@ -300,6 +324,7 @@ def _macos_descendants(root_pid: int) -> list[int]:
 
 def _macos_open_rollout_logs(root_pid: int) -> set[Path]:
     import subprocess
+
     pids = _macos_descendants(root_pid)
     if not pids:
         return set()
@@ -307,7 +332,9 @@ def _macos_open_rollout_logs(root_pid: int) -> set[Path]:
     try:
         result = subprocess.run(
             ["lsof", "-p", pid_arg, "-F", "n"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
     except Exception:
         return set()
@@ -390,13 +417,19 @@ def _fd_has_write_intent(flags: int) -> bool:
     return access_mode in (int(os.O_WRONLY), int(os.O_RDWR))
 
 
-def proc_open_rollout_logs(proc_root: Path, root_pid: int, *, agent_backend: str = "codex") -> set[Path]:
-    return proc_open_rollout_logs_for_backend(proc_root, root_pid, agent_backend=agent_backend)
+def proc_open_rollout_logs(
+    proc_root: Path, root_pid: int, *, agent_backend: str = "codex"
+) -> set[Path]:
+    return proc_open_rollout_logs_for_backend(
+        proc_root, root_pid, agent_backend=agent_backend
+    )
 
 
-def proc_open_rollout_logs_for_backend(proc_root: Path, root_pid: int, *, agent_backend: str) -> set[Path]:
+def proc_open_rollout_logs_for_backend(
+    proc_root: Path, root_pid: int, *, agent_backend: str
+) -> set[Path]:
     backend_name = normalize_agent_backend(agent_backend)
-    if sys.platform == "darwin":
+    if sys.platform == "darwin" and proc_root == Path("/proc"):
         return _macos_open_rollout_logs(root_pid)
     uid = int(os.getuid())
     sessions_dir = get_agent_backend(backend_name).sessions_dir()
@@ -432,13 +465,19 @@ def proc_open_rollout_logs_for_backend(proc_root: Path, root_pid: int, *, agent_
     return out
 
 
-def proc_open_writable_rollout_logs(proc_root: Path, root_pid: int, *, agent_backend: str = "codex") -> set[Path]:
-    return proc_open_writable_rollout_logs_for_backend(proc_root, root_pid, agent_backend=agent_backend)
+def proc_open_writable_rollout_logs(
+    proc_root: Path, root_pid: int, *, agent_backend: str = "codex"
+) -> set[Path]:
+    return proc_open_writable_rollout_logs_for_backend(
+        proc_root, root_pid, agent_backend=agent_backend
+    )
 
 
-def proc_open_writable_rollout_logs_for_backend(proc_root: Path, root_pid: int, *, agent_backend: str) -> set[Path]:
+def proc_open_writable_rollout_logs_for_backend(
+    proc_root: Path, root_pid: int, *, agent_backend: str
+) -> set[Path]:
     backend_name = normalize_agent_backend(agent_backend)
-    if sys.platform == "darwin":
+    if sys.platform == "darwin" and proc_root == Path("/proc"):
         return _macos_open_rollout_logs(root_pid)
     uid = int(os.getuid())
     sessions_dir = get_agent_backend(backend_name).sessions_dir()
@@ -486,7 +525,11 @@ def proc_find_open_rollout_log(
     ignored_paths: set[Path] | None = None,
 ) -> Path | None:
     backend_name = normalize_agent_backend(agent_backend)
-    cands = list(proc_open_writable_rollout_logs_for_backend(proc_root, root_pid, agent_backend=backend_name))
+    cands = list(
+        proc_open_writable_rollout_logs_for_backend(
+            proc_root, root_pid, agent_backend=backend_name
+        )
+    )
     if not cands:
         return None
     ignored_resolved: set[Path] = set()
@@ -507,7 +550,9 @@ def proc_find_open_rollout_log(
             rp = p
         if rp in ignored_resolved:
             continue
-        payload = read_session_meta_payload(p, agent_backend=backend_name, timeout_s=0.0)
+        payload = read_session_meta_payload(
+            p, agent_backend=backend_name, timeout_s=0.0
+        )
         if not payload:
             continue
         if backend_name == "codex" and is_subagent_session_meta(payload):
@@ -522,7 +567,9 @@ def proc_find_open_rollout_log(
     return matches[0]
 
 
-def read_jsonl_from_offset(path: Path, offset: int, *, max_bytes: int) -> tuple[list[dict[str, Any]], int]:
+def read_jsonl_from_offset(
+    path: Path, offset: int, *, max_bytes: int
+) -> tuple[list[dict[str, Any]], int]:
     try:
         with path.open("rb") as f:
             prev_byte = b"\n"

@@ -22,3 +22,11 @@ include-package-data = true
 
 [tool.setuptools.package-data]
 codoxear = ["static/*", "static/dist/**/*", "static/dist/.vite/manifest.json"]
+
+[tool.pytest.ini_options]
+markers = [
+  "readonly: Phase 2 read-only endpoint parity tests",
+  "post: Phase 3 POST/write endpoint parity tests",
+  "unit: unit tests",
+  "integration: integration tests",
+]

@@ -1,0 +1,5 @@
+{"type":"event_msg","timestamp":"2026-05-09T10:00:00Z","payload":{"type":"user_message","message":"Hello"}}
+{"type":"response_item","timestamp":"2026-05-09T10:00:01Z","payload":{"type":"reasoning"}}
+{"type":"response_item","timestamp":"2026-05-09T10:00:02Z","payload":{"type":"function_call","name":"shell"}}
+{"type":"response_item","timestamp":"2026-05-09T10:00:03Z","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hi there"}]}}
+{"type":"event_msg","timestamp":"2026-05-09T10:00:04Z","payload":{"type":"turn_complete"}}

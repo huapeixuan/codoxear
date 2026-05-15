@@ -1,0 +1,63 @@
+{
+  "m-final": {
+    "session_id": "s1",
+    "session_display_name": "Session One",
+    "message_class": "final_response",
+    "preview_text": "Preview",
+    "notification_text": "  Hello   world  ",
+    "summary_text": "Summary",
+    "summary_status": "sent",
+    "narrated_status": "sent",
+    "push_status": "sent",
+    "voice": "nova",
+    "created_ts": 10.0,
+    "updated_ts": 20.0,
+    "last_error": ""
+  },
+  "m-final-2": {
+    "session_id": "s2",
+    "session_display_name": "",
+    "message_class": "final_response",
+    "notification_text": "Done",
+    "summary_status": "skipped",
+    "push_status": "skipped",
+    "created_ts": 12.0,
+    "updated_ts": 20.0
+  },
+  "m-narration": {
+    "session_id": "s1",
+    "message_class": "narration",
+    "notification_text": "Narration",
+    "summary_status": "sent",
+    "push_status": "sent",
+    "created_ts": 11.0,
+    "updated_ts": 21.0
+  },
+  "m-pending": {
+    "session_id": "s1",
+    "message_class": "final_response",
+    "notification_text": "Pending",
+    "summary_status": "pending",
+    "push_status": "pending",
+    "created_ts": 11.0,
+    "updated_ts": 22.0
+  },
+  "m-empty-text": {
+    "session_id": "s1",
+    "message_class": "final_response",
+    "notification_text": "   ",
+    "summary_status": "sent",
+    "push_status": "sent",
+    "created_ts": 11.0,
+    "updated_ts": 23.0
+  },
+  "invalid-class": {
+    "session_id": "s1",
+    "message_class": "other",
+    "notification_text": "Invalid",
+    "summary_status": "sent",
+    "push_status": "sent",
+    "created_ts": 1.0,
+    "updated_ts": 2.0
+  }
+}
