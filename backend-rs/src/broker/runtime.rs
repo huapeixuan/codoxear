@@ -112,6 +112,7 @@ pub struct State {
     pub pty_master: Option<std::fs::File>,
     pub pending_ui_requests: serde_json::Map<String, Value>,
     pub pi_live: PiLiveState,
+    pub prompt_sent_at: Option<std::time::Instant>,
 }
 
 pub type BrokerStateHandle = Arc<Mutex<State>>;
@@ -185,6 +186,7 @@ fn run_inner(cli: BrokerCli, env: BrokerEnv) -> Result<i32, String> {
         pty_master: pty_master.as_ref().and_then(|f| f.try_clone().ok()),
         pending_ui_requests: serde_json::Map::new(),
         pi_live: PiLiveState::default(),
+        prompt_sent_at: None,
     }));
     if env.backend == "pi" {
         if let ChildHandle::Process { child } = &mut child {
@@ -548,8 +550,19 @@ fn sync_pi_state(state: &Arc<Mutex<State>>, env: &BrokerEnv) {
     let mut rewrite_meta = false;
     {
         let mut st = state.lock().expect("broker state poisoned");
-        if let Some(busy) = rpc_state.get("busy").and_then(Value::as_bool) {
+        if let Some(mut busy) = rpc_state.get("busy").and_then(Value::as_bool) {
+            if st.busy
+                && !busy
+                && st
+                    .prompt_sent_at
+                    .is_some_and(|t| t.elapsed() < Duration::from_secs(5))
+            {
+                busy = true;
+            }
             st.busy = busy;
+            if !busy {
+                st.prompt_sent_at = None;
+            }
         }
         if let Some(turn_id) = rpc_state.get("turn_id").and_then(Value::as_str) {
             st.last_turn_id = Some(turn_id.to_string());

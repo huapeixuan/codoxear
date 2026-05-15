@@ -1,6 +1,7 @@
 use super::*;
 use crate::broker::pi_live::coalesce_live_message_events;
 use crate::broker::runtime_support::seq_bytes;
+use crate::write_cleaners::normalize_pi_image_inputs;
 
 pub(super) fn handle_send(req: &Value, state: &Arc<Mutex<State>>) -> Value {
     let Some(text) = req
@@ -11,7 +12,11 @@ pub(super) fn handle_send(req: &Value, state: &Arc<Mutex<State>>) -> Value {
         return json!({"error": "text required"});
     };
     if state.lock().expect("broker state poisoned").backend == "pi" {
-        return handle_pi_send(text, req.get("images").cloned(), state);
+        let images = match normalize_pi_image_inputs(req.get("images").unwrap_or(&Value::Null)) {
+            Ok(items) => items,
+            Err(err) => return json!({"error": err}),
+        };
+        return handle_pi_send(text, images, state);
     }
     let mut st = state.lock().expect("broker state poisoned");
     st.busy = true;
@@ -31,25 +36,34 @@ pub(super) fn handle_send(req: &Value, state: &Arc<Mutex<State>>) -> Value {
     json!({"queued": false, "queue_len": 0})
 }
 
-fn handle_pi_send(text: &str, images: Option<Value>, state: &Arc<Mutex<State>>) -> Value {
-    let result = {
+fn handle_pi_send(text: &str, images: Vec<Value>, state: &Arc<Mutex<State>>) -> Value {
+    let (rpc, streaming_behavior) = {
         let mut st = state.lock().expect("broker state poisoned");
+        let streaming_behavior = st.busy.then(|| "steer".to_string());
         st.busy = true;
-        st.pi_rpc.as_ref().map(|rpc| rpc.prompt(text, images))
+        st.prompt_sent_at = Some(std::time::Instant::now());
+        (st.pi_rpc.clone(), streaming_behavior)
     };
-    match result {
-        Some(Ok(value)) => {
-            let mut st = state.lock().expect("broker state poisoned");
+    let result = rpc
+        .as_ref()
+        .map(|rpc| rpc.prompt_with_options(text, streaming_behavior.as_deref(), Some(images)));
+    {
+        let mut st = state.lock().expect("broker state poisoned");
+        if result.as_ref().is_some_and(Result::is_err) {
+            st.busy = false;
+            st.prompt_sent_at = None;
+        }
+        if let Some(Ok(value)) = &result {
             if let Some(turn_id) = value.get("turn_id").and_then(Value::as_str) {
                 st.last_turn_id = Some(turn_id.to_string());
             }
             st.busy = true;
-            json!({"queued": false, "queue_len": 0})
+            st.prompt_sent_at = Some(std::time::Instant::now());
         }
-        Some(Err(err)) => {
-            state.lock().expect("broker state poisoned").busy = false;
-            json!({"error": err})
-        }
+    };
+    match result {
+        Some(Ok(_)) => json!({"queued": false, "queue_len": 0}),
+        Some(Err(err)) => json!({"error": err}),
         None => json!({"error": "no state"}),
     }
 }
@@ -68,11 +82,15 @@ pub(super) fn handle_keys(req: &Value, state: &Arc<Mutex<State>>) -> Value {
         if bytes != b"\x1b" {
             return json!({"error": format!("unsupported key sequence: {seq}")});
         }
-        let result = st.pi_rpc.as_ref().map(|rpc| rpc.abort(None));
+        let (rpc, turn_id) = (st.pi_rpc.clone(), st.last_turn_id.clone());
+        drop(st);
+        let result = rpc.as_ref().map(|rpc| rpc.abort(turn_id.as_deref()));
+        let mut st = state.lock().expect("broker state poisoned");
         match result {
             Some(Ok(_)) => {
                 st.busy = false;
                 st.last_turn_id = None;
+                st.prompt_sent_at = None;
             }
             Some(Err(err)) => return json!({"error": err}),
             None => return json!({"error": "no state"}),

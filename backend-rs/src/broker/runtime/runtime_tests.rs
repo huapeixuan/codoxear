@@ -49,6 +49,7 @@ fn test_state(dir: &Path, backend: &str) -> Arc<Mutex<State>> {
         pty_master: None,
         pending_ui_requests: serde_json::Map::new(),
         pi_live: PiLiveState::default(),
+        prompt_sent_at: None,
     }))
 }
 
@@ -236,6 +237,43 @@ fn pi_send_propagates_prompt_error_and_clears_busy() {
     assert!(!state.lock().unwrap().busy);
     let _ = child.kill();
     let _ = child.wait();
+    let _ = child.wait();
+}
+
+#[test]
+fn pi_send_validates_images_and_uses_steer_when_busy() {
+    let dir = TempDir::new().unwrap();
+    let env = test_env();
+    let state = test_state(dir.path(), "pi");
+    state.lock().unwrap().busy = true;
+    let marker = dir.path().join("prompt-line");
+    let script = format!(
+        r#"while IFS= read -r line; do echo "$line" > '{}'; id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'); printf '{{"type":"response","id":"%s","success":true,"data":{{"turn_id":"turn-2"}}}}\n' "$id"; done"#,
+        marker.display()
+    );
+    let mut child = attach_rpc(&state, script);
+    assert_eq!(
+        socket_json(
+            &state,
+            &env,
+            json!({"cmd":"send","text":"hello","images":"bad"})
+        ),
+        json!({"error":"images must be a list"})
+    );
+    assert_eq!(
+        socket_json(
+            &state,
+            &env,
+            json!({"cmd":"send","text":"hello","images":[{"data_b64":"abc","mime_type":"image/png","file_name":"x.png"}]})
+        ),
+        json!({"queued":false,"queue_len":0})
+    );
+    let line = std::fs::read_to_string(marker).unwrap();
+    assert!(line.contains("\"streamingBehavior\":\"steer\""));
+    assert!(line.contains("\"mimeType\":\"image/png\""));
+    assert!(state.lock().unwrap().prompt_sent_at.is_some());
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 #[test]
@@ -267,6 +305,7 @@ fn pi_escape_keys_calls_abort_rpc() {
     assert_eq!(state.lock().unwrap().last_turn_id, None);
     let _ = child.kill();
     let _ = child.wait();
+    let _ = child.wait();
 }
 
 #[test]
@@ -297,5 +336,6 @@ fn pi_live_messages_coalesce_stream_deltas() {
         .iter()
         .any(|event| event["text"] == "Hello" && event["completed"] == true));
     let _ = child.kill();
+    let _ = child.wait();
     let _ = child.wait();
 }

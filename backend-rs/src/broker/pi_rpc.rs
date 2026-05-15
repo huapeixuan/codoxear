@@ -10,7 +10,7 @@ use std::time::Duration;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PiRpcClient {
     stdin: Arc<Mutex<ChildStdin>>,
     pending: Arc<Mutex<HashMap<String, Sender<Value>>>>,
@@ -43,9 +43,34 @@ impl PiRpcClient {
     }
 
     pub fn prompt(&self, text: &str, images: Option<Value>) -> Result<Value, String> {
+        let images = match images {
+            Some(Value::Array(items)) => Some(items),
+            _ => None,
+        };
+        self.prompt_with_options(text, None, images)
+    }
+
+    pub fn prompt_with_options(
+        &self,
+        text: &str,
+        streaming_behavior: Option<&str>,
+        images: Option<Vec<Value>>,
+    ) -> Result<Value, String> {
         let mut payload = json!({"message": text});
-        if let Some(images) = images.filter(|v| v.is_array()) {
-            payload["images"] = images;
+        if let Some(value) = streaming_behavior.filter(|v| !v.is_empty()) {
+            payload["streamingBehavior"] = json!(value);
+        }
+        if let Some(images) = images.filter(|v| !v.is_empty()) {
+            payload["images"] = Value::Array(
+                images
+                    .into_iter()
+                    .filter_map(|item| {
+                        let data = item.get("data_b64")?.as_str()?;
+                        let mime = item.get("mime_type")?.as_str()?;
+                        Some(json!({"type":"image","data":data,"mimeType":mime}))
+                    })
+                    .collect(),
+            );
         }
         self.send_command("prompt", payload)
     }

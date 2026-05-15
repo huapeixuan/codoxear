@@ -336,6 +336,7 @@ mod tests {
             pty_master: None,
             pending_ui_requests: serde_json::Map::new(),
             pi_live: crate::broker::pi_live::PiLiveState::default(),
+            prompt_sent_at: None,
         }))
     }
 
