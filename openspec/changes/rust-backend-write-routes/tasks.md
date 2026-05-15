@@ -51,7 +51,7 @@
 
 ## 7. Send, ui_response, interrupt, heartbeat
 
-- [ ] 7.1 Implement `POST /api/sessions/{id}/send`: historical Pi resume handling if feasible, live broker `send`, Pi images forwarding, idle auto-stop heartbeat refresh, dead broker cleanup, and fallback enqueue when broker socket is unavailable but process is alive. _(partial: live send, Pi images, and stale-socket fallback enqueue implemented; historical resume/heartbeat refresh/dead cleanup pending)_
+- [ ] 7.1 Implement `POST /api/sessions/{id}/send`: historical Pi resume handling if feasible, live broker `send`, Pi images forwarding, idle auto-stop heartbeat refresh, dead broker cleanup, and fallback enqueue when broker socket is unavailable but process is alive. _(partial: live send, Pi images, idle auto-stop heartbeat refresh, dead cleanup via stale sidecar pruning, and stale-socket fallback enqueue implemented; historical Pi resume pending)_
 - [x] 7.2 Implement `POST /api/sessions/{id}/ui_response`: Pi-only validation, forward allowed fields (`id`, `value`, `confirmed`, `cancelled`), live UI success, `unknown cmd` legacy fallback via ESC/text, and matching 404/502 errors.
 - [x] 7.3 Implement `POST /api/sessions/{id}/interrupt`: broker `keys` with ESC and response `ok/broker` parity.
 - [x] 7.4 Implement `POST /api/sessions/{id}/heartbeat`: update web activity for supported web-owned pi-rpc sessions and return `session_id`, `idle_timeout_seconds`, `last_web_activity_ts`; unsupported sessions return 409.

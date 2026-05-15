@@ -544,6 +544,41 @@ async fn send_falls_back_to_queue_when_live_process_has_stale_socket() {
 }
 
 #[tokio::test]
+async fn send_refreshes_idle_heartbeat_for_web_owned_pi_rpc_sessions() {
+    let (home, app) = test_app();
+    write_session(&home, "sid-a", "pi");
+    let socks = app_dir(&home).join("socks");
+    let sock_path = socks.join("sid-a.sock");
+    let server = spawn_broker_server(sock_path, 2, |request| {
+        match request["cmd"].as_str().unwrap() {
+            "state" => json!({"busy": false, "queue_len": 0}),
+            "send" => {
+                assert_eq!(request["text"], "keep alive");
+                json!({"ok": true, "queue_len": 0})
+            }
+            other => panic!("unexpected broker cmd {other}"),
+        }
+    });
+    let cookie = signed_cookie(&home);
+
+    let (status, body) = post_json(
+        app,
+        "/api/sessions/sid-a/send",
+        &cookie,
+        json!({"text": "keep alive"}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let sidecar: Value =
+        serde_json::from_str(&fs::read_to_string(app_dir(&home).join("socks/sid-a.json")).unwrap())
+            .unwrap();
+    assert!(sidecar["last_web_activity_ts"].as_f64().unwrap() > 0.0);
+    assert_eq!(sidecar["idle_timeout_seconds"], 1800);
+    server.join().unwrap();
+}
+
+#[tokio::test]
 async fn global_file_post_read_and_inspect_track_session_history() {
     let (home, app) = test_app();
     write_session(&home, "sid-a", "codex");

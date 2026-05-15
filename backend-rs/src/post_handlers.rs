@@ -1,5 +1,6 @@
 use crate::app_state::AppState;
 use crate::broker_client::{broker_keys, broker_send, broker_ui_response, BrokerError};
+use crate::lifecycle_post::heartbeat_impl;
 use crate::models::SessionRow;
 use crate::routes::{internal_error, json_response};
 use crate::runtime::{
@@ -599,6 +600,9 @@ fn send_impl(
     if text.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "text required".to_string()));
     }
+    if supports_idle_auto_stop(&row) {
+        heartbeat_impl(state, session_id)?;
+    }
     let sock = row_sock_path(&state.config.app_dir, &row);
     let response = match broker_send(
         &sock,
@@ -708,6 +712,14 @@ fn known_cwd_keys(state: &AppState) -> Result<HashMap<String, ()>, (StatusCode, 
 
 fn broker_process_alive(row: &SessionRow) -> bool {
     pid_alive(row.broker_pid) || pid_alive(row.codex_pid)
+}
+
+fn supports_idle_auto_stop(row: &SessionRow) -> bool {
+    row.auto_stop_on_idle
+        && row.owned
+        && row.backend == "pi"
+        && row.transport.as_deref().map(str::trim) == Some("pi-rpc")
+        && row.idle_timeout_seconds.unwrap_or(0) > 0
 }
 
 #[cfg(unix)]

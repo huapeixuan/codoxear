@@ -35,7 +35,10 @@ pub(crate) async fn session_delete(
     }
 }
 
-fn heartbeat_impl(state: &AppState, session_id: &str) -> Result<Value, (StatusCode, String)> {
+pub(crate) fn heartbeat_impl(
+    state: &AppState,
+    session_id: &str,
+) -> Result<Value, (StatusCode, String)> {
     let row = session_or_404(state, session_id)?;
     if !row.auto_stop_on_idle
         || !row.owned
