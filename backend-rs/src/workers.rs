@@ -69,9 +69,43 @@ pub fn spawn_enabled_workers(state: AppState) {
         tokio::spawn(async move { queue_worker_loop(state2).await });
     }
     if env_flag_truthy("CODOXEAR_ENABLE_HARNESS_SWEEP") {
-        let state2 = state;
+        let state2 = state.clone();
         tokio::spawn(async move { harness_worker_loop(state2).await });
     }
+    if let Some(role) = voice_worker_role(
+        env_flag_truthy("CODOXEAR_ENABLE_VOICE_SCAN"),
+        env_flag_truthy("CODOXEAR_ENABLE_VOICE_WORKER"),
+    ) {
+        spawn_voice_worker_owner(state, role);
+    }
+}
+
+pub fn voice_worker_role(scan_enabled: bool, worker_enabled: bool) -> Option<&'static str> {
+    match (scan_enabled, worker_enabled) {
+        (false, false) => None,
+        (true, false) => Some("scan"),
+        (false, true) => Some("worker"),
+        (true, true) => Some("scan+worker"),
+    }
+}
+
+fn spawn_voice_worker_owner(state: AppState, role: &'static str) {
+    tokio::spawn(async move {
+        let guard = match crate::voice_worker::locks::VoiceOwnerLock::acquire(
+            &state.config.app_dir,
+            role,
+        ) {
+            Ok(guard) => guard,
+            Err(error) => {
+                tracing::warn!(error, role, "voice worker owner lock conflict");
+                return;
+            }
+        };
+        tracing::info!(path = %guard.path().display(), role, "voice worker owner lock acquired");
+        loop {
+            sleep(Duration::from_secs(3600)).await;
+        }
+    });
 }
 
 async fn queue_worker_loop(state: AppState) {

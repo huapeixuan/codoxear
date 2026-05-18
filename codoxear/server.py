@@ -4200,6 +4200,7 @@ class SessionManager:
             subscriptions_path=PUSH_SUBSCRIPTIONS_PATH,
             delivery_ledger_path=DELIVERY_LEDGER_PATH,
             vapid_private_key_path=VAPID_PRIVATE_KEY_PATH,
+            enable_worker=not _env_flag_truthy("CODOXEAR_ENABLE_VOICE_WORKER"),
         )
         self._discover_existing(force=True, skip_invalid_sidecars=True)
         self._harness_thr = None

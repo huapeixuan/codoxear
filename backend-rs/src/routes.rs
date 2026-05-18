@@ -28,6 +28,7 @@ use crate::voice_post::{
     audio_listener, feature_disabled_debug_endpoint, notification_subscription_toggle,
     notification_subscription_upsert, settings_voice_save,
 };
+use crate::voice_worker::hls::{audio_playlist, audio_segment};
 use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::header;
@@ -144,6 +145,8 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/v1/notifications/message", get(notification_message))
         .route("/api/v1/notifications/feed", get(notification_feed))
+        .route("/api/v1/audio/live.m3u8", get(audio_playlist))
+        .route("/api/v1/audio/segments/*segment", get(audio_segment))
         .route("/api/v1/audio/listener", post(audio_listener))
         .route(
             "/api/v1/audio/test_announcement",
@@ -246,6 +249,8 @@ fn public_api_router(state: AppState) -> Router<AppState> {
         )
         .route("/notifications/message", get(notification_message))
         .route("/notifications/feed", get(notification_feed))
+        .route("/audio/live.m3u8", get(audio_playlist))
+        .route("/audio/segments/*segment", get(audio_segment))
         .route("/audio/listener", post(audio_listener))
         .route(
             "/audio/test_announcement",

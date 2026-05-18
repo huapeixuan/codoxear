@@ -20,7 +20,6 @@ pub mod state_files;
 pub mod takeover_post;
 pub mod voice_post;
 pub mod voice_state;
+pub mod voice_worker;
 pub mod workers;
 pub mod write_cleaners;
-
-// Phase 5 will add: pub mod voice_worker;

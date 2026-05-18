@@ -131,3 +131,6 @@ Spot-check performed by `coding-agent` on 2026-05-09 against `codoxear/server.py
 Independent review by `code-reviewer` on 2026-05-09: spot-check 5/5 confirmed against `codoxear/server.py@ffe4afb`; follow-up fixes incorporated review items #3 and #5.
 
 Phase 3 POST update by `coding-agent` on 2026-05-15: `rust-backend-write-routes` keeps `POST /api/notifications/test_push` and `POST /api/audio/test_announcement` as Phase 5-owned side-effect routes; Rust registers explicit `501` feature-disabled responses for those paths so they are not falsely successful. Phase 3 POST contract selector is `pytest tests/contract -q -k 'parity and post'`.
+
+
+Phase 5 implementation note (2026-05-18 partial): Rust now serves authenticated HLS artifact routes `/api/audio/live.m3u8` and `/api/audio/segments/*` from the live `audio/` contract and has voice worker scaffolding/VAPID/ledger/lock tests. `POST /api/notifications/test_push` and `POST /api/audio/test_announcement` still remain disabled until the Rust delivery worker side-effect path is completed.

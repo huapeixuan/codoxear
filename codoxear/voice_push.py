@@ -716,6 +716,7 @@ class VoicePushCoordinator:
         subscriptions_path: Path,
         delivery_ledger_path: Path,
         vapid_private_key_path: Path,
+        enable_worker: bool = True,
     ) -> None:
         self._app_dir = Path(app_dir)
         self._stop = stop_event
@@ -741,18 +742,26 @@ class VoicePushCoordinator:
         self._delivery_ledger: dict[str, dict[str, Any]] = {}
         self._vapid_public_key = ""
         self._vapid_subject = _default_vapid_subject()
+        self._worker_enabled = bool(enable_worker)
         self._load_settings()
         self._load_subscriptions()
         self._load_delivery_ledger()
         self._ensure_vapid_keys()
-        self._worker = threading.Thread(
-            target=self._worker_loop, name="voice-push", daemon=True
-        )
-        self._worker.start()
-        self._keepalive = threading.Thread(
-            target=self._keepalive_loop, name="voice-push-keepalive", daemon=True
-        )
-        self._keepalive.start()
+        self._worker = None
+        self._keepalive = None
+        if self._worker_enabled:
+            self._worker = threading.Thread(
+                target=self._worker_loop, name="voice-push", daemon=True
+            )
+            self._worker.start()
+            self._keepalive = threading.Thread(
+                target=self._keepalive_loop, name="voice-push-keepalive", daemon=True
+            )
+            self._keepalive.start()
+
+    @property
+    def worker_enabled(self) -> bool:
+        return self._worker_enabled
 
     def settings_snapshot(self) -> dict[str, Any]:
         with self._lock:

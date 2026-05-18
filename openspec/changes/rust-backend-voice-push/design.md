@@ -141,3 +141,8 @@ Rollback：停止 Rust server，unset `CODOXEAR_ENABLE_VOICE_SCAN` 和 `CODOXEAR
 2. Rust voice worker 是否应在启动时创建跨进程 lock 文件并让 Python 检测？当前 Python 只按 env flag 让出 scan；建议 Phase 5 至少 Rust 自身 fail-fast，是否补 Python lock 检测由实现复杂度决定。
 3. HLS tests 是否使用真实 ffmpeg/ffprobe 还是 fake binary？建议 unit tests fake，integration/CI 在可用时跑真实 ffmpeg selector，缺失时明确 skip 并保留 playlist pure tests。
 4. Real iOS/Tailscale HTTPS push smoke 是否由 coding-agent 完成还是交给人类？自动化可证明协议大部分行为，但真实 APNs/WebPush 仍建议人工 smoke。
+## Implementation Notes
+
+- 2026-05-18 coding-agent Phase 5 partial implementation selected Rust `web-push` 0.11.0 with `default-features = false` for VAPID PEM parsing/public-key derivation and future request construction. The spike test loads a Python `py_vapid`-generated `webpush_vapid_private.pem` fixture and verifies the base64url uncompressed public key matches Python exactly. Rust-created keys are emitted as PKCS#8 PEM because `web-push` can reload that format reliably; Python readability is left in the remaining Phase 5 cross-language gate.
+- The first implementation slice added `backend-rs/src/voice_worker/` scaffolding, trait boundaries for OpenAI/WebPush/HLS/clock, a Rust voice owner lock (`voice_worker.lock`), VAPID helpers, ledger trim helpers, HLS playlist/segment serving helpers, and WebPush payload/drop semantics tests. It does **not** yet implement the full scan loop, OpenAI HTTP calls, HLS ffmpeg append, or enabled debug side-effect paths.
+- Python fallback remains present. `CODOXEAR_ENABLE_VOICE_WORKER` now prevents Python `voice-push` / `voice-push-keepalive` delivery threads from starting, while `CODOXEAR_ENABLE_VOICE_SCAN` continues to prevent the Python scan thread. This keeps rollback simple: unset Rust flags and restart Python.

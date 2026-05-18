@@ -46,7 +46,7 @@ pub fn load_voice_settings_snapshot(app_dir: &Path) -> Value {
         json!({
             "enabled_devices": enabled_devices,
             "total_devices": total_devices,
-            "vapid_public_key": "",
+            "vapid_public_key": crate::voice_worker::vapid::load_or_create_public_key(app_dir).unwrap_or_default(),
         }),
     );
     Value::Object(out)
@@ -82,11 +82,13 @@ pub fn load_subscriptions_snapshot(app_dir: &Path) -> Value {
         })
         .collect();
     items.sort_by(|left, right| {
-        value_f64(right.get("updated_ts").unwrap_or(&Value::Null))
-            .partial_cmp(&value_f64(left.get("updated_ts").unwrap_or(&Value::Null)))
+        value_f64_public(right.get("updated_ts").unwrap_or(&Value::Null))
+            .partial_cmp(&value_f64_public(
+                left.get("updated_ts").unwrap_or(&Value::Null),
+            ))
             .unwrap_or(Ordering::Equal)
     });
-    json!({"vapid_public_key": "", "subscriptions": items})
+    json!({"vapid_public_key": crate::voice_worker::vapid::load_or_create_public_key(app_dir).unwrap_or_default(), "subscriptions": items})
 }
 
 pub fn notification_state_for_message(app_dir: &Path, message_id: &str) -> Option<Value> {
@@ -111,7 +113,7 @@ pub fn notification_feed_since(app_dir: &Path, since: f64) -> Vec<Value> {
         if object.get("message_class").and_then(Value::as_str) != Some("final_response") {
             continue;
         }
-        let updated_ts = value_f64(object.get("updated_ts").unwrap_or(&Value::Null));
+        let updated_ts = value_f64_public(object.get("updated_ts").unwrap_or(&Value::Null));
         if updated_ts <= since {
             continue;
         }
@@ -138,11 +140,11 @@ pub fn notification_feed_since(app_dir: &Path, since: f64) -> Vec<Value> {
     }
     out.sort_by(|left, right| {
         let left_key = (
-            value_f64(left.get("updated_ts").unwrap_or(&Value::Null)),
+            value_f64_public(left.get("updated_ts").unwrap_or(&Value::Null)),
             left.get("message_id").and_then(Value::as_str).unwrap_or(""),
         );
         let right_key = (
-            value_f64(right.get("updated_ts").unwrap_or(&Value::Null)),
+            value_f64_public(right.get("updated_ts").unwrap_or(&Value::Null)),
             right
                 .get("message_id")
                 .and_then(Value::as_str)
@@ -244,10 +246,13 @@ pub fn clean_subscription_record(raw: &Value) -> Option<Map<String, Value>> {
     let object = raw.as_object()?;
     let subscription = clean_subscription(object.get("subscription")?)?;
     let now = now_seconds();
-    let created_ts = object.get("created_ts").map(value_f64).unwrap_or(now);
+    let created_ts = object
+        .get("created_ts")
+        .map(value_f64_public)
+        .unwrap_or(now);
     let updated_ts = object
         .get("updated_ts")
-        .map(value_f64)
+        .map(value_f64_public)
         .unwrap_or(created_ts);
     let user_agent = clean_string(object.get("user_agent")).unwrap_or_default();
     let device_class = clean_device_class(object.get("device_class"), &user_agent);
@@ -305,7 +310,7 @@ pub fn clean_subscription(raw: &Value) -> Option<Map<String, Value>> {
     Some(subscription)
 }
 
-fn clean_ledger_row(message_id: &str, row: &Value) -> Option<Map<String, Value>> {
+pub fn clean_ledger_row(message_id: &str, row: &Value) -> Option<Map<String, Value>> {
     let object = row.as_object()?;
     let session_id = clean_string(object.get("session_id"))?;
     let message_class = clean_string(object.get("message_class"))?;
@@ -351,11 +356,17 @@ fn clean_ledger_row(message_id: &str, row: &Value) -> Option<Map<String, Value>>
     );
     out.insert(
         "created_ts".to_string(),
-        json!(object.get("created_ts").map(value_f64).unwrap_or(now)),
+        json!(object
+            .get("created_ts")
+            .map(value_f64_public)
+            .unwrap_or(now)),
     );
     out.insert(
         "updated_ts".to_string(),
-        json!(object.get("updated_ts").map(value_f64).unwrap_or(now)),
+        json!(object
+            .get("updated_ts")
+            .map(value_f64_public)
+            .unwrap_or(now)),
     );
     out.insert(
         "last_error".to_string(),
@@ -428,7 +439,7 @@ fn py_bool(value: Option<&Value>) -> bool {
     }
 }
 
-fn value_f64(value: &Value) -> f64 {
+pub fn value_f64_public(value: &Value) -> f64 {
     match value {
         Value::Number(number) => number.as_f64().unwrap_or(0.0),
         Value::String(raw) => raw.parse::<f64>().unwrap_or(0.0),

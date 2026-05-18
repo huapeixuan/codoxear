@@ -35,7 +35,7 @@
 
 ## 7. Phase 5 — Voice push port
 
-- [ ] 7.1 Open OpenSpec change `rust-backend-voice-push` (port `codoxear/voice_push.py` to `voice_worker.rs`; HLS playlist, WebPush via `web-push` crate, OpenAI TTS client, voice ledger). Definition of Done: real iOS device receives a notification through the Rust path on Tailscale HTTPS; ledger written by Rust is readable by Python and vice versa; concurrent-write advisory lock prevents double delivery.
+- [ ] 7.1 OpenSpec change `rust-backend-voice-push` is in implementation. Partial coding status: Rust `voice_worker` scaffolding, `web-push`/VAPID public-key spike, HLS artifact serving routes, ledger trim helper, Python delivery-thread handoff, and single-writer lock tests are present; full scan loop, OpenAI TTS, WebPush send, HLS ffmpeg append, and real-device smoke remain before DoD. Definition of Done: real iOS device receives a notification through the Rust path on Tailscale HTTPS; ledger written by Rust is readable by Python and vice versa; concurrent-write advisory lock prevents double delivery.
 
 ## 8. Phase 6 — Remove Python backend
 

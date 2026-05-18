@@ -1,25 +1,25 @@
 ## 0. Pre-flight and scope guard
 
-- [ ] 0.1 Run `openspec status --change rust-backend-voice-push` and read `proposal.md`, `design.md`, `specs/rust-voice-push/spec.md`, and this `tasks.md` before coding.
-- [ ] 0.2 Confirm implementation branch is based on Phase 4 reviewer PASS commit `92d2a0f` or a descendant containing `rust-backend-broker`; record `git rev-parse --short HEAD` in handoff.
-- [ ] 0.3 Re-run baseline validation before code changes: `openspec validate rust-backend-cutover --strict`, `openspec validate rust-backend-broker --strict`, and `cd backend-rs && cargo test --release voice_state` or the closest focused selector.
-- [ ] 0.4 Re-read `codoxear/voice_push.py`, `tests/test_voice_push.py`, `backend-rs/src/voice_state.rs`, `backend-rs/src/voice_post.rs`, `backend-rs/src/handlers/voice.rs`, `backend-rs/src/workers.rs`, `docs/cutover/disk-contracts.md`, and `docs/cutover/endpoint-inventory.md` Phase 5 rows.
+- [x] 0.1 Run `openspec status --change rust-backend-voice-push` and read `proposal.md`, `design.md`, `specs/rust-voice-push/spec.md`, and this `tasks.md` before coding.
+- [x] 0.2 Confirm implementation branch is based on Phase 4 reviewer PASS commit `92d2a0f` or a descendant containing `rust-backend-broker`; record `git rev-parse --short HEAD` in handoff.
+- [x] 0.3 Re-run baseline validation before code changes: `openspec validate rust-backend-cutover --strict`, `openspec validate rust-backend-broker --strict`, and `cd backend-rs && cargo test --release voice_state` or the closest focused selector.
+- [x] 0.4 Re-read `codoxear/voice_push.py`, `tests/test_voice_push.py`, `backend-rs/src/voice_state.rs`, `backend-rs/src/voice_post.rs`, `backend-rs/src/handlers/voice.rs`, `backend-rs/src/workers.rs`, `docs/cutover/disk-contracts.md`, and `docs/cutover/endpoint-inventory.md` Phase 5 rows.
 - [ ] 0.5 Keep scope limited to Phase 5 voice/HLS/WebPush/TTS migration; do not remove Python `voice_push.py`, do not make Rust voice default, and do not change Phase 4 broker protocol.
 
 ## 1. Dependency spike and module scaffold
 
-- [ ] 1.1 Add `backend-rs/src/voice_worker/` modules (or equivalent split files) for config/state, ledger, scan, OpenAI client, HLS, VAPID/WebPush, tasks, and tests; register in `lib.rs` without starting workers by default.
-- [ ] 1.2 Evaluate Rust WebPush/VAPID dependency candidates and add the selected crates to `backend-rs/Cargo.toml`; document the final choice and rationale in `design.md` Implementation Notes.
-- [ ] 1.3 Add trait abstractions for OpenAI HTTP, WebPush sender, HLS media runner, and clock so unit tests can run without real OpenAI/APNs/ffmpeg.
+- [x] 1.1 Add `backend-rs/src/voice_worker/` modules (or equivalent split files) for config/state, ledger, scan, OpenAI client, HLS, VAPID/WebPush, tasks, and tests; register in `lib.rs` without starting workers by default.
+- [x] 1.2 Evaluate Rust WebPush/VAPID dependency candidates and add the selected crates to `backend-rs/Cargo.toml`; document the final choice and rationale in `design.md` Implementation Notes.
+- [x] 1.3 Add trait abstractions for OpenAI HTTP, WebPush sender, HLS media runner, and clock so unit tests can run without real OpenAI/APNs/ffmpeg.
 - [ ] 1.4 Add line-count guard coverage for new voice modules and keep every `backend-rs/src/**/*.rs` file ≤ 800 lines.
 - [ ] 1.5 Add debug logging for Rust voice ownership and failures without logging `tts_api_key`, Authorization headers, full prompt text, or push subscription secrets.
 
 ## 2. Worker flags, ownership guard, and rollback safety
 
-- [ ] 2.1 Extend Rust startup (`main.rs` / `workers.rs`) to parse `CODOXEAR_ENABLE_VOICE_SCAN` and `CODOXEAR_ENABLE_VOICE_WORKER` with the same truthy/falsy semantics as existing worker flags.
+- [x] 2.1 Extend Rust startup (`main.rs` / `workers.rs`) to parse `CODOXEAR_ENABLE_VOICE_SCAN` and `CODOXEAR_ENABLE_VOICE_WORKER` with the same truthy/falsy semantics as existing worker flags.
 - [ ] 2.2 Implement scan worker startup only when `CODOXEAR_ENABLE_VOICE_SCAN` is truthy; prove disabled startup has no background task and no voice file/HLS side effects.
 - [ ] 2.3 Implement delivery worker startup only when `CODOXEAR_ENABLE_VOICE_WORKER` is truthy and scan ownership is explicit; if not, fail fast or log documented drain-only behavior per spec.
-- [ ] 2.4 Add a Rust voice ownership lock or equivalent fail-fast guard for `voice_delivery_ledger.json` / `audio/` writes so two Rust processes cannot own the same voice worker outputs.
+- [x] 2.4 Add a Rust voice ownership lock or equivalent fail-fast guard for `voice_delivery_ledger.json` / `audio/` writes so two Rust processes cannot own the same voice worker outputs.
 - [ ] 2.5 Add tests for truthy/falsy flag parsing, scan-only mode, worker-enabled mode, disabled debug endpoint behavior, and rollback restart with Python-readable files.
 
 ## 3. Disk contracts and ledger writer
@@ -28,7 +28,7 @@
 - [ ] 3.2 Implement subscription update helpers that preserve `push_subscriptions.json` schema while recording WebPush success/failure timestamps, last_error clipping, and stale subscription drops.
 - [ ] 3.3 Implement VAPID PEM helpers that load existing `webpush_vapid_private.pem`, create a Python-readable PEM if missing, and compute Python-equivalent base64url uncompressed public key.
 - [ ] 3.4 Add cross-language tests: Python-written voice settings/subscriptions/ledger/VAPID are read by Rust; Rust-written files are read by Python `VoicePushCoordinator` loaders or focused Python helper scripts.
-- [ ] 3.5 Add ledger trim tests proving Rust enforces the 4000-row `DELIVERY_LEDGER_MAX` bound and keeps newest rows by Python-compatible timestamp ordering.
+- [x] 3.5 Add ledger trim tests proving Rust enforces the 4000-row `DELIVERY_LEDGER_MAX` bound and keeps newest rows by Python-compatible timestamp ordering.
 - [ ] 3.6 Update `docs/cutover/disk-contracts.md` with Phase 5 Rust voice write strategy, preserving the exact filenames `voice_settings.json`, `push_subscriptions.json`, `voice_delivery_ledger.json`, and `webpush_vapid_private.pem`.
 
 ## 4. Voice scan worker
@@ -62,7 +62,7 @@
 - [ ] 7.2 Implement append-audio path using `ffmpeg` to split AAC into MPEG-TS segments and `ffprobe` to read duration, matching Python command parameters and invalid `N/A` segment skip behavior.
 - [ ] 7.3 Implement append-silence keepalive using `anullsrc`, `HLS_KEEPALIVE_SECONDS`, `HLS_SILENCE_SECONDS`, and active-listener/no-work preconditions.
 - [ ] 7.4 Implement playlist rewrite with Python-compatible `#EXTM3U`, version, target duration, media sequence, `#EXTINF`, relative segment paths, rolling 18-segment cleanup, reset behavior.
-- [ ] 7.5 Wire `GET /api/audio/live.m3u8` and `/api/audio/segments/<segment>` (and v1 aliases if present) to Rust HLS files/state with correct content types and traversal-safe 404 behavior.
+- [x] 7.5 Wire `GET /api/audio/live.m3u8` and `/api/audio/segments/<segment>` (and v1 aliases if present) to Rust HLS files/state with correct content types and traversal-safe 404 behavior.
 - [ ] 7.6 Add HLS tests for sequence ordering, target duration, reset, cleanup, invalid segment names, missing ffmpeg/ffprobe error, fake ffmpeg append, and optional real-ffmpeg integration selector.
 
 ## 8. WebPush and VAPID delivery
@@ -92,17 +92,17 @@
 ## 11. Python compatibility and fallback checks
 
 - [ ] 11.1 Keep `codoxear/voice_push.py` and Python tests intact; do not remove Python fallback code or dependencies in `pyproject.toml` in this phase.
-- [ ] 11.2 Add or update Python tests proving `CODOXEAR_ENABLE_VOICE_SCAN` truthy still prevents Python `voice-push-scan` thread and falsy values preserve existing Python behavior.
+- [x] 11.2 Add or update Python tests proving `CODOXEAR_ENABLE_VOICE_SCAN` truthy still prevents Python `voice-push-scan` thread and falsy values preserve existing Python behavior.
 - [ ] 11.3 Add a rollback test or documented script: Rust writes a pending/sent/error ledger and subscription updates, then Python `VoicePushCoordinator` loads them and exposes equivalent snapshots without duplicate sends.
 - [ ] 11.4 Ensure Python can load Rust-created `webpush_vapid_private.pem` via `py_vapid.Vapid.from_file` and compute the same public key.
 
 ## 12. Documentation and OpenSpec updates
 
-- [ ] 12.1 Update `docs/cutover/endpoint-inventory.md` Phase 5 section to mark `POST /api/notifications/test_push`, `POST /api/audio/test_announcement`, HLS GET routes, and voice worker ownership as implemented by `rust-backend-voice-push`.
-- [ ] 12.2 Update `docs/cutover/disk-contracts.md` with Phase 5 voice ownership, writer strategy, lock/rollback rules, exact filenames, and HLS artifact contract.
-- [ ] 12.3 Update `README.md` with Rust voice flags, ffmpeg/ffprobe requirement, WebPush/VAPID notes, Tailscale HTTPS subject behavior, and rollback steps.
-- [ ] 12.4 Update `openspec/changes/rust-backend-cutover/tasks.md` Phase 5 row with this change id and validation status.
-- [ ] 12.5 If implementation choices differ from this design (crate choice, lock behavior, ffmpeg strategy), update `openspec/changes/rust-backend-voice-push/design.md` before handoff.
+- [x] 12.1 Update `docs/cutover/endpoint-inventory.md` Phase 5 section to mark `POST /api/notifications/test_push`, `POST /api/audio/test_announcement`, HLS GET routes, and voice worker ownership as implemented by `rust-backend-voice-push`.
+- [x] 12.2 Update `docs/cutover/disk-contracts.md` with Phase 5 voice ownership, writer strategy, lock/rollback rules, exact filenames, and HLS artifact contract.
+- [x] 12.3 Update `README.md` with Rust voice flags, ffmpeg/ffprobe requirement, WebPush/VAPID notes, Tailscale HTTPS subject behavior, and rollback steps.
+- [x] 12.4 Update `openspec/changes/rust-backend-cutover/tasks.md` Phase 5 row with this change id and validation status.
+- [x] 12.5 If implementation choices differ from this design (crate choice, lock behavior, ffmpeg strategy), update `openspec/changes/rust-backend-voice-push/design.md` before handoff.
 
 ## 13. Verification gate
 

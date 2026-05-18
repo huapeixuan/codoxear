@@ -80,3 +80,11 @@ Validation coverage added for the cutover includes:
 - Python-style Pi sidecars remain accepted by the Rust session loader, preserving rollback/dual-server compatibility.
 - macOS log discovery is implemented through injectable `pgrep -P`/`lsof -p ... -F n` command runners and covered by fixture-output tests on non-macOS CI; real macOS validation should run the broker subset on a macOS host or `macos-latest` runner.
 - PTY resize/raw-mode behavior is isolated in `backend-rs/src/broker/pty.rs`; unit coverage validates the resize abstraction and invalid-fd failure behavior without requiring a real Codex binary.
+
+
+### Phase 5 Rust voice ownership notes
+
+- Rust Phase 5 writes only the established voice file names: `voice_settings.json`, `push_subscriptions.json`, `voice_delivery_ledger.json`, `webpush_vapid_private.pem`, and HLS artifacts under `audio/live.m3u8` plus `audio/segments/*.ts`.
+- Rust voice workers are opt-in through `CODOXEAR_ENABLE_VOICE_SCAN` and `CODOXEAR_ENABLE_VOICE_WORKER`; Python fallback remains the default writer when those flags are unset.
+- Rust creates `voice_worker.lock` in the app dir before owning scan/delivery outputs so a second Rust process fails fast instead of double-writing ledger/HLS/WebPush state.
+- Rollback is to stop Rust, unset both voice flags, and restart Python. Do not delete the ledger, subscription file, settings file, or VAPID PEM during rollback.
