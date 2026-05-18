@@ -111,8 +111,8 @@ The Rust backend can own selected background sweeps only when explicitly enabled
 
 - `CODOXEAR_ENABLE_QUEUE_SWEEP=1` — Rust drains `session_queues.json` after broker/log idle plus `CODEX_WEB_QUEUE_IDLE_GRACE_SECONDS`; Python does not start its queue sweep thread when this flag is truthy.
 - `CODOXEAR_ENABLE_HARNESS_SWEEP=1` — Rust performs harness injections and writes `harness.json`; Python does not start its harness sweep thread when this flag is truthy.
-- `CODOXEAR_ENABLE_VOICE_SCAN=1` — enables the Rust-owned voice scan path during Phase 5 experiments and makes Python yield its `voice-push-scan` thread. Keep unset for Python fallback.
-- `CODOXEAR_ENABLE_VOICE_WORKER=1` — enables the Rust-owned voice delivery/HLS/WebPush worker path during Phase 5 experiments and makes Python skip its `voice-push` / `voice-push-keepalive` delivery threads. The Rust worker is still opt-in and guarded by a single-writer lock; keep unset for Python fallback.
+- `CODOXEAR_ENABLE_VOICE_SCAN=1` — enables the Rust-owned voice scan path during Phase 5 experiments and makes Python yield its `voice-push-scan` thread. The current Rust scan path writes Python-compatible `voice_delivery_ledger.json` rows from existing log normalizers and keeps delivery side effects disabled unless the worker flag is also set. Keep unset for Python fallback.
+- `CODOXEAR_ENABLE_VOICE_WORKER=1` — enables the Rust-owned voice delivery/HLS/WebPush worker path during Phase 5 experiments and makes Python skip its `voice-push` / `voice-push-keepalive` delivery threads. The Rust worker is still opt-in and guarded by a single-writer lock; this partial Phase 5 build has guarded debug endpoint paths but not the full OpenAI TTS + ffmpeg HLS + real WebPush delivery loop yet. Keep unset for Python fallback.
 
 Safe handoff order:
 

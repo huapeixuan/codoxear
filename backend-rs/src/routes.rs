@@ -25,8 +25,8 @@ use crate::runtime::{cookie_name, load_or_create_hmac_secret, verify_auth_cookie
 use crate::session_create::session_create;
 use crate::takeover_post::takeover_open;
 use crate::voice_post::{
-    audio_listener, feature_disabled_debug_endpoint, notification_subscription_toggle,
-    notification_subscription_upsert, settings_voice_save,
+    audio_listener, audio_test_announcement, notification_subscription_toggle,
+    notification_subscription_upsert, notification_test_push, settings_voice_save,
 };
 use crate::voice_worker::hls::{audio_playlist, audio_segment};
 use axum::body::Body;
@@ -141,7 +141,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/notifications/test_push",
-            post(feature_disabled_debug_endpoint),
+            post(notification_test_push),
         )
         .route("/api/v1/notifications/message", get(notification_message))
         .route("/api/v1/notifications/feed", get(notification_feed))
@@ -150,7 +150,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/audio/listener", post(audio_listener))
         .route(
             "/api/v1/audio/test_announcement",
-            post(feature_disabled_debug_endpoint),
+            post(audio_test_announcement),
         )
         .route("/api/v1/metrics", get(metrics))
         .route("/api/v1/logout", post(logout))
@@ -243,19 +243,13 @@ fn public_api_router(state: AppState) -> Router<AppState> {
             "/notifications/subscription/toggle",
             post(notification_subscription_toggle),
         )
-        .route(
-            "/notifications/test_push",
-            post(feature_disabled_debug_endpoint),
-        )
+        .route("/notifications/test_push", post(notification_test_push))
         .route("/notifications/message", get(notification_message))
         .route("/notifications/feed", get(notification_feed))
         .route("/audio/live.m3u8", get(audio_playlist))
         .route("/audio/segments/*segment", get(audio_segment))
         .route("/audio/listener", post(audio_listener))
-        .route(
-            "/audio/test_announcement",
-            post(feature_disabled_debug_endpoint),
-        )
+        .route("/audio/test_announcement", post(audio_test_announcement))
         .route("/metrics", get(metrics))
         .route("/logout", post(logout))
         .route("/cwd_groups/edit", post(cwd_group_edit))

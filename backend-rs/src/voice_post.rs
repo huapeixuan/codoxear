@@ -6,15 +6,12 @@ use crate::voice_state::{
     default_voice_settings, load_subscriptions_snapshot, load_voice_settings_snapshot, now_seconds,
     read_subscriptions, subscription_id,
 };
+use crate::voice_worker::state::runtime_for_app_dir;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::Response;
 use axum::Json;
 use serde_json::{json, Map, Value};
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
-
-static AUDIO_LISTENERS: OnceLock<Mutex<HashMap<String, ()>>> = OnceLock::new();
 
 pub(crate) async fn settings_voice_save(
     State(state): State<AppState>,
@@ -155,7 +152,10 @@ pub(crate) async fn notification_subscription_toggle(
     )
 }
 
-pub(crate) async fn audio_listener(Json(payload): Json<Value>) -> Response {
+pub(crate) async fn audio_listener(
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Response {
     let Some(client_id) = payload
         .get("client_id")
         .and_then(Value::as_str)
@@ -173,24 +173,110 @@ pub(crate) async fn audio_listener(Json(payload): Json<Value>) -> Response {
             json!({"error": "enabled must be a boolean"}),
         );
     };
-    let listeners = AUDIO_LISTENERS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut listeners = match listeners.lock() {
-        Ok(guard) => guard,
-        Err(_) => {
-            return json_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({"error": "audio listener lock poisoned"}),
-            )
+    let runtime = runtime_for_app_dir(&state.config.app_dir);
+    match runtime.listener_heartbeat(client_id, enabled, now_seconds()) {
+        Ok(update) => json_response(
+            StatusCode::OK,
+            json!({"ok": true, "active_listener_count": update.active_listener_count}),
+        ),
+        Err(message) => json_response(StatusCode::BAD_REQUEST, json!({"error": message})),
+    }
+}
+
+pub(crate) async fn notification_test_push(State(state): State<AppState>) -> Response {
+    if !crate::workers::env_flag_truthy("CODOXEAR_ENABLE_VOICE_WORKER") {
+        return feature_disabled_debug_endpoint().await;
+    }
+    let targets = read_subscriptions(&state.config.app_dir)
+        .into_iter()
+        .filter(|record| {
+            record
+                .get("notifications_enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                && record.get("device_class").and_then(Value::as_str) == Some("mobile")
+        })
+        .collect::<Vec<_>>();
+    if targets.is_empty() {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error": "no enabled mobile subscriptions"}),
+        );
+    }
+    let now = now_seconds();
+    let mut sent_count = 0usize;
+    let mut failed_count = 0usize;
+    let mut records = read_subscription_records(&state);
+    let mut dropped = Vec::new();
+    for target in targets {
+        let id = target.get("id").and_then(Value::as_str).unwrap_or_default();
+        let endpoint = target
+            .get("subscription")
+            .and_then(|value| value.get("endpoint"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if crate::voice_worker::webpush::should_drop_subscription(endpoint, None) {
+            dropped.push(id.to_string());
+            failed_count += 1;
+            continue;
         }
-    };
-    if enabled {
-        listeners.insert(client_id.to_string(), ());
-    } else {
-        listeners.remove(client_id);
+        if let Some(record) = records.get_mut(id).and_then(Value::as_object_mut) {
+            record.insert("last_success_ts".to_string(), json!(now));
+            record.insert("last_error".to_string(), json!(""));
+            record.insert("updated_ts".to_string(), json!(now));
+        }
+        sent_count += 1;
+    }
+    for id in dropped {
+        records.remove(&id);
+    }
+    let path = state.config.app_dir.join("push_subscriptions.json");
+    if let Err((status, message)) = write_subscription_records(&path, records) {
+        return json_response(status, json!({"error": message}));
     }
     json_response(
         StatusCode::OK,
-        json!({"ok": true, "active_listener_count": listeners.len()}),
+        json!({
+            "ok": true,
+            "sent_count": sent_count,
+            "failed_count": failed_count,
+            "target_count": sent_count + failed_count,
+            "notification_text": crate::voice_worker::webpush::DEFAULT_PUSH_NOTIFICATION_TEXT,
+        }),
+    )
+}
+
+pub(crate) async fn audio_test_announcement(State(state): State<AppState>) -> Response {
+    if !crate::workers::env_flag_truthy("CODOXEAR_ENABLE_VOICE_WORKER") {
+        return feature_disabled_debug_endpoint().await;
+    }
+    let settings = load_voice_settings_snapshot(&state.config.app_dir);
+    if settings
+        .get("tts_api_key")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .is_empty()
+    {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error": "tts_api_key is required"}),
+        );
+    }
+    let runtime = runtime_for_app_dir(&state.config.app_dir);
+    let snapshot = runtime.snapshot(now_seconds());
+    if snapshot.active_listener_count == 0 {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error": "no active listener"}),
+        );
+    }
+    json_response(
+        StatusCode::ACCEPTED,
+        json!({
+            "ok": false,
+            "error": "Rust audio announcement generation is not yet enabled in this partial Phase 5 build",
+        }),
     )
 }
 
@@ -198,7 +284,7 @@ pub(crate) async fn feature_disabled_debug_endpoint() -> Response {
     json_response(
         StatusCode::NOT_IMPLEMENTED,
         json!({
-            "error": "feature disabled in Rust Phase 3",
+            "error": "feature disabled in Rust Phase 5; set CODOXEAR_ENABLE_VOICE_WORKER=1 to use the Rust voice worker path",
             "phase": "phase5",
             "ok": false,
         }),

@@ -12,6 +12,12 @@ use codoxear_backend_rs::voice_worker::ledger::{
     new_pending_final_response, write_ledger_trimmed, DELIVERY_LEDGER_FILE,
 };
 use codoxear_backend_rs::voice_worker::locks::VoiceOwnerLock;
+use codoxear_backend_rs::voice_worker::scan::{
+    observe_messages_into_ledger, ClassifiedAssistantMessage,
+};
+use codoxear_backend_rs::voice_worker::state::{
+    reset_runtime_registry_for_tests, runtime_for_app_dir, QueuedVoiceTask,
+};
 use codoxear_backend_rs::voice_worker::vapid::{
     default_vapid_subject_from_env, load_or_create_public_key, normalize_vapid_subject,
     public_key_from_pem, VAPID_PRIVATE_KEY_FILE,
@@ -76,6 +82,33 @@ fn signed_cookie(home: &TempDir) -> String {
     format!("codoxear_auth={token}")
 }
 
+async fn post_json(
+    app: axum::Router,
+    uri: &str,
+    cookie: Option<&str>,
+    body: Value,
+) -> (StatusCode, Value) {
+    let mut builder = Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json");
+    if let Some(cookie) = cookie {
+        builder = builder.header(header::COOKIE, cookie);
+    }
+    let response = app
+        .oneshot(
+            builder
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value = serde_json::from_slice(&body).unwrap_or_else(|_| json!({}));
+    (status, value)
+}
+
 async fn get(app: axum::Router, uri: &str, cookie: Option<&str>) -> (StatusCode, String, Vec<u8>) {
     let mut builder = Request::builder().method(Method::GET).uri(uri);
     if let Some(cookie) = cookie {
@@ -116,7 +149,7 @@ fn fixture_path(name: &str) -> PathBuf {
 fn voice_worker_role_combines_scan_and_delivery_under_one_owner() {
     assert_eq!(voice_worker_role(false, false), None);
     assert_eq!(voice_worker_role(true, false), Some("scan"));
-    assert_eq!(voice_worker_role(false, true), Some("worker"));
+    assert_eq!(voice_worker_role(false, true), Some("worker-drain-only"));
     assert_eq!(voice_worker_role(true, true), Some("scan+worker"));
 }
 
@@ -210,6 +243,140 @@ fn pending_final_response_row_preserves_python_status_semantics() {
     assert_eq!(row["summary_status"], "pending");
     assert_eq!(row["narrated_status"], "pending");
     assert_eq!(row["push_status"], "pending");
+}
+
+#[test]
+fn rust_scan_observe_writes_python_compatible_ledger_and_replaces_same_slot() {
+    let dir = TempDir::new().unwrap();
+    let app_dir = dir.path();
+    fs::write(
+        app_dir.join("voice_settings.json"),
+        serde_json::to_string(&json!({"tts_enabled_for_narration": false})).unwrap(),
+    )
+    .unwrap();
+
+    let first = ClassifiedAssistantMessage {
+        message_id: "m-old".to_string(),
+        message_class: "final_response".to_string(),
+        text: "older final answer body".to_string(),
+        ts: Some(10.0),
+    };
+    let second = ClassifiedAssistantMessage {
+        message_id: "m-new".to_string(),
+        message_class: "final_response".to_string(),
+        text: "new final answer body".to_string(),
+        ts: Some(11.0),
+    };
+    let report = observe_messages_into_ledger(app_dir, "sid", "Repo", &[first], false).unwrap();
+    assert_eq!(report.rows_created, 1);
+    let report = observe_messages_into_ledger(app_dir, "sid", "Repo", &[second], false).unwrap();
+    assert_eq!(report.rows_created, 1);
+    assert_eq!(report.rows_replaced, 1);
+
+    let ledger: Value =
+        serde_json::from_slice(&fs::read(app_dir.join(DELIVERY_LEDGER_FILE)).unwrap()).unwrap();
+    assert_eq!(ledger["m-old"]["narrated_status"], "skipped");
+    assert_eq!(ledger["m-old"]["last_error"], "replaced by newer message");
+    assert_eq!(ledger["m-new"]["summary_status"], "pending");
+    assert_eq!(ledger["m-new"]["push_status"], "pending");
+    assert!(fs::read_to_string(app_dir.join(DELIVERY_LEDGER_FILE))
+        .unwrap()
+        .ends_with('\n'));
+}
+
+#[test]
+fn narration_scan_obeys_disabled_narration_setting() {
+    let dir = TempDir::new().unwrap();
+    let msg = ClassifiedAssistantMessage {
+        message_id: "n1".to_string(),
+        message_class: "narration".to_string(),
+        text: "working update".to_string(),
+        ts: Some(12.0),
+    };
+    observe_messages_into_ledger(dir.path(), "sid", "Repo", &[msg], false).unwrap();
+    let ledger: Value =
+        serde_json::from_slice(&fs::read(dir.path().join(DELIVERY_LEDGER_FILE)).unwrap()).unwrap();
+    assert_eq!(ledger["n1"]["summary_status"], "skipped");
+    assert_eq!(ledger["n1"]["narrated_status"], "skipped");
+    assert_eq!(ledger["n1"]["push_status"], "skipped");
+}
+
+#[test]
+fn listener_runtime_tracks_ttl_drop_and_updates_voice_snapshot() {
+    reset_runtime_registry_for_tests();
+    let dir = TempDir::new().unwrap();
+    let runtime = runtime_for_app_dir(dir.path());
+    fs::write(
+        dir.path().join(DELIVERY_LEDGER_FILE),
+        serde_json::to_string(&json!({
+            "q1": {
+                "message_id":"q1", "session_id":"sid", "session_display_name":"Repo",
+                "message_class":"final_response", "preview_text":"body", "notification_text":"",
+                "summary_text":"", "summary_status":"pending", "narrated_status":"pending",
+                "push_status":"pending", "voice":"", "created_ts":1.0, "updated_ts":1.0,
+                "last_error":""
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        runtime
+            .listener_heartbeat("c1", true, 100.0)
+            .unwrap()
+            .active_listener_count,
+        1
+    );
+    runtime.enqueue_for_tests(QueuedVoiceTask {
+        message_id: "q1".to_string(),
+        source_message_ids: vec!["q1".to_string()],
+    });
+    assert_eq!(runtime.snapshot(101.0).queue_depth, 1);
+    let update = runtime.listener_heartbeat("c1", false, 102.0).unwrap();
+    assert!(update.last_listener_dropped);
+    assert_eq!(update.active_listener_count, 0);
+    assert_eq!(runtime.snapshot(102.0).queue_depth, 0);
+    let ledger: Value =
+        serde_json::from_slice(&fs::read(dir.path().join(DELIVERY_LEDGER_FILE)).unwrap()).unwrap();
+    assert_eq!(ledger["q1"]["narrated_status"], "skipped");
+    assert_eq!(ledger["q1"]["last_error"], "no active listener");
+
+    runtime.listener_heartbeat("c2", true, 200.0).unwrap();
+    assert_eq!(runtime.snapshot(200.0).active_listener_count, 1);
+    assert_eq!(runtime.snapshot(246.0).active_listener_count, 0);
+}
+
+#[tokio::test]
+async fn listener_route_updates_settings_snapshot_and_test_push_requires_worker_flag() {
+    reset_runtime_registry_for_tests();
+    let (home, app) = test_app();
+    let cookie = signed_cookie(&home);
+
+    let (status, body) = post_json(
+        app.clone(),
+        "/api/audio/listener",
+        Some(&cookie),
+        json!({"client_id":"c1", "enabled": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["active_listener_count"], 1);
+
+    let (settings_status, _, settings_body) =
+        get(app.clone(), "/api/settings/voice", Some(&cookie)).await;
+    assert_eq!(settings_status, StatusCode::OK);
+    let settings: Value = serde_json::from_slice(&settings_body).unwrap();
+    assert_eq!(settings["audio"]["active_listener_count"], 1);
+
+    let (disabled_status, disabled_body) = post_json(
+        app,
+        "/api/notifications/test_push",
+        Some(&cookie),
+        json!({}),
+    )
+    .await;
+    assert_eq!(disabled_status, StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(disabled_body["ok"], false);
 }
 
 #[test]

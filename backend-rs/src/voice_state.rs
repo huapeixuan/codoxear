@@ -1,3 +1,4 @@
+use crate::voice_worker::state::runtime_for_app_dir;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
@@ -29,16 +30,17 @@ pub fn load_voice_settings_snapshot(app_dir: &Path) -> Value {
         .filter(|record| record.get("device_class").and_then(Value::as_str) == Some("mobile"))
         .count();
 
+    let runtime = runtime_for_app_dir(app_dir).snapshot(now_seconds());
     let mut out = settings;
     out.insert(
         "audio".to_string(),
         json!({
-            "queue_depth": 0,
-            "active_listener_count": 0,
+            "queue_depth": runtime.queue_depth,
+            "active_listener_count": runtime.active_listener_count,
             "stream_url": "/api/audio/live.m3u8",
-            "segment_count": 0,
-            "last_error": "",
-            "media_sequence": 1,
+            "segment_count": runtime.segment_count,
+            "last_error": runtime.last_error,
+            "media_sequence": runtime.media_sequence,
         }),
     );
     out.insert(

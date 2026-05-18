@@ -72,11 +72,10 @@ pub fn spawn_enabled_workers(state: AppState) {
         let state2 = state.clone();
         tokio::spawn(async move { harness_worker_loop(state2).await });
     }
-    if let Some(role) = voice_worker_role(
-        env_flag_truthy("CODOXEAR_ENABLE_VOICE_SCAN"),
-        env_flag_truthy("CODOXEAR_ENABLE_VOICE_WORKER"),
-    ) {
-        spawn_voice_worker_owner(state, role);
+    let scan_enabled = env_flag_truthy("CODOXEAR_ENABLE_VOICE_SCAN");
+    let worker_enabled = env_flag_truthy("CODOXEAR_ENABLE_VOICE_WORKER");
+    if let Some(role) = voice_worker_role(scan_enabled, worker_enabled) {
+        spawn_voice_worker_owner(state, role, scan_enabled);
     }
 }
 
@@ -84,12 +83,12 @@ pub fn voice_worker_role(scan_enabled: bool, worker_enabled: bool) -> Option<&'s
     match (scan_enabled, worker_enabled) {
         (false, false) => None,
         (true, false) => Some("scan"),
-        (false, true) => Some("worker"),
+        (false, true) => Some("worker-drain-only"),
         (true, true) => Some("scan+worker"),
     }
 }
 
-fn spawn_voice_worker_owner(state: AppState, role: &'static str) {
+fn spawn_voice_worker_owner(state: AppState, role: &'static str, scan_enabled: bool) {
     tokio::spawn(async move {
         let guard = match crate::voice_worker::locks::VoiceOwnerLock::acquire(
             &state.config.app_dir,
@@ -102,8 +101,26 @@ fn spawn_voice_worker_owner(state: AppState, role: &'static str) {
             }
         };
         tracing::info!(path = %guard.path().display(), role, "voice worker owner lock acquired");
+        if role == "worker-drain-only" {
+            tracing::warn!(role, "CODOXEAR_ENABLE_VOICE_WORKER is set without CODOXEAR_ENABLE_VOICE_SCAN; Rust voice worker is drain-only and will not scan logs into the ledger");
+        }
+        let interval = seconds_env("CODEX_WEB_VOICE_SCAN_SECONDS", 2.5).max(0.5);
         loop {
-            sleep(Duration::from_secs(3600)).await;
+            if scan_enabled {
+                match crate::voice_worker::scan::voice_scan_once(&state) {
+                    Ok(report) if report.rows_created > 0 || report.rows_replaced > 0 => {
+                        tracing::info!(
+                            rows_created = report.rows_created,
+                            rows_replaced = report.rows_replaced,
+                            sessions_scanned = report.sessions_scanned,
+                            "voice scan updated delivery ledger"
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => tracing::warn!(error, "voice scan failed"),
+                }
+            }
+            sleep(Duration::from_secs_f64(interval)).await;
         }
     });
 }

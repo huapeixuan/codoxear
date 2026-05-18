@@ -4,49 +4,49 @@
 - [x] 0.2 Confirm implementation branch is based on Phase 4 reviewer PASS commit `92d2a0f` or a descendant containing `rust-backend-broker`; record `git rev-parse --short HEAD` in handoff.
 - [x] 0.3 Re-run baseline validation before code changes: `openspec validate rust-backend-cutover --strict`, `openspec validate rust-backend-broker --strict`, and `cd backend-rs && cargo test --release voice_state` or the closest focused selector.
 - [x] 0.4 Re-read `codoxear/voice_push.py`, `tests/test_voice_push.py`, `backend-rs/src/voice_state.rs`, `backend-rs/src/voice_post.rs`, `backend-rs/src/handlers/voice.rs`, `backend-rs/src/workers.rs`, `docs/cutover/disk-contracts.md`, and `docs/cutover/endpoint-inventory.md` Phase 5 rows.
-- [ ] 0.5 Keep scope limited to Phase 5 voice/HLS/WebPush/TTS migration; do not remove Python `voice_push.py`, do not make Rust voice default, and do not change Phase 4 broker protocol.
+- [x] 0.5 Keep scope limited to Phase 5 voice/HLS/WebPush/TTS migration; do not remove Python `voice_push.py`, do not make Rust voice default, and do not change Phase 4 broker protocol.
 
 ## 1. Dependency spike and module scaffold
 
 - [x] 1.1 Add `backend-rs/src/voice_worker/` modules (or equivalent split files) for config/state, ledger, scan, OpenAI client, HLS, VAPID/WebPush, tasks, and tests; register in `lib.rs` without starting workers by default.
 - [x] 1.2 Evaluate Rust WebPush/VAPID dependency candidates and add the selected crates to `backend-rs/Cargo.toml`; document the final choice and rationale in `design.md` Implementation Notes.
 - [x] 1.3 Add trait abstractions for OpenAI HTTP, WebPush sender, HLS media runner, and clock so unit tests can run without real OpenAI/APNs/ffmpeg.
-- [ ] 1.4 Add line-count guard coverage for new voice modules and keep every `backend-rs/src/**/*.rs` file ≤ 800 lines.
-- [ ] 1.5 Add debug logging for Rust voice ownership and failures without logging `tts_api_key`, Authorization headers, full prompt text, or push subscription secrets.
+- [x] 1.4 Add line-count guard coverage for new voice modules and keep every `backend-rs/src/**/*.rs` file ≤ 800 lines.
+- [x] 1.5 Add debug logging for Rust voice ownership and failures without logging `tts_api_key`, Authorization headers, full prompt text, or push subscription secrets.
 
 ## 2. Worker flags, ownership guard, and rollback safety
 
 - [x] 2.1 Extend Rust startup (`main.rs` / `workers.rs`) to parse `CODOXEAR_ENABLE_VOICE_SCAN` and `CODOXEAR_ENABLE_VOICE_WORKER` with the same truthy/falsy semantics as existing worker flags.
-- [ ] 2.2 Implement scan worker startup only when `CODOXEAR_ENABLE_VOICE_SCAN` is truthy; prove disabled startup has no background task and no voice file/HLS side effects.
-- [ ] 2.3 Implement delivery worker startup only when `CODOXEAR_ENABLE_VOICE_WORKER` is truthy and scan ownership is explicit; if not, fail fast or log documented drain-only behavior per spec.
+- [x] 2.2 Implement scan worker startup only when `CODOXEAR_ENABLE_VOICE_SCAN` is truthy; prove disabled startup has no background task and no voice file/HLS side effects.
+- [x] 2.3 Implement delivery worker startup only when `CODOXEAR_ENABLE_VOICE_WORKER` is truthy and scan ownership is explicit; if not, fail fast or log documented drain-only behavior per spec.
 - [x] 2.4 Add a Rust voice ownership lock or equivalent fail-fast guard for `voice_delivery_ledger.json` / `audio/` writes so two Rust processes cannot own the same voice worker outputs.
-- [ ] 2.5 Add tests for truthy/falsy flag parsing, scan-only mode, worker-enabled mode, disabled debug endpoint behavior, and rollback restart with Python-readable files.
+- [x] 2.5 Add tests for truthy/falsy flag parsing, scan-only mode, worker-enabled mode, disabled debug endpoint behavior, and rollback restart with Python-readable files.
 
 ## 3. Disk contracts and ledger writer
 
-- [ ] 3.1 Implement Rust ledger read/modify/write helpers for `voice_delivery_ledger.json` preserving Python fields, status strings, sort-key pretty JSON, trailing newline, temp-file + fsync + rename.
-- [ ] 3.2 Implement subscription update helpers that preserve `push_subscriptions.json` schema while recording WebPush success/failure timestamps, last_error clipping, and stale subscription drops.
+- [x] 3.1 Implement Rust ledger read/modify/write helpers for `voice_delivery_ledger.json` preserving Python fields, status strings, sort-key pretty JSON, trailing newline, temp-file + fsync + rename.
+- [x] 3.2 Implement subscription update helpers that preserve `push_subscriptions.json` schema while recording WebPush success/failure timestamps, last_error clipping, and stale subscription drops.
 - [ ] 3.3 Implement VAPID PEM helpers that load existing `webpush_vapid_private.pem`, create a Python-readable PEM if missing, and compute Python-equivalent base64url uncompressed public key.
-- [ ] 3.4 Add cross-language tests: Python-written voice settings/subscriptions/ledger/VAPID are read by Rust; Rust-written files are read by Python `VoicePushCoordinator` loaders or focused Python helper scripts.
+- [x] 3.4 Add cross-language tests: Python-written voice settings/subscriptions/ledger/VAPID are read by Rust; Rust-written files are read by Python `VoicePushCoordinator` loaders or focused Python helper scripts.
 - [x] 3.5 Add ledger trim tests proving Rust enforces the 4000-row `DELIVERY_LEDGER_MAX` bound and keeps newest rows by Python-compatible timestamp ordering.
-- [ ] 3.6 Update `docs/cutover/disk-contracts.md` with Phase 5 Rust voice write strategy, preserving the exact filenames `voice_settings.json`, `push_subscriptions.json`, `voice_delivery_ledger.json`, and `webpush_vapid_private.pem`.
+- [x] 3.6 Update `docs/cutover/disk-contracts.md` with Phase 5 Rust voice write strategy, preserving the exact filenames `voice_settings.json`, `push_subscriptions.json`, `voice_delivery_ledger.json`, and `webpush_vapid_private.pem`.
 
 ## 4. Voice scan worker
 
-- [ ] 4.1 Implement scan loop interval configuration (for example `CODEX_WEB_VOICE_SCAN_SECONDS`, default matching Python’s practical cadence) and one-shot `voice_scan_once` test hook.
-- [ ] 4.2 Use `session_loader::load_session_rows` and existing Codex/Pi log normalizers to classify assistant messages into `narration` and `final_response` with stable message ids, text, timestamps, and session display names.
-- [ ] 4.3 Implement `observe_messages` parity: create pending ledger rows for new messages, skip already-ledgered ids, apply narration/final-response initial status rules, and clip preview text to Python limits.
-- [ ] 4.4 Implement same-slot replacement/merge behavior for queued final responses and narration tasks, including `last_error:"replaced by newer message"` for superseded pending work.
+- [x] 4.1 Implement scan loop interval configuration (for example `CODEX_WEB_VOICE_SCAN_SECONDS`, default matching Python’s practical cadence) and one-shot `voice_scan_once` test hook.
+- [x] 4.2 Use `session_loader::load_session_rows` and existing Codex/Pi log normalizers to classify assistant messages into `narration` and `final_response` with stable message ids, text, timestamps, and session display names.
+- [x] 4.3 Implement `observe_messages` parity: create pending ledger rows for new messages, skip already-ledgered ids, apply narration/final-response initial status rules, and clip preview text to Python limits.
+- [x] 4.4 Implement same-slot replacement/merge behavior for queued final responses and narration tasks, including `last_error:"replaced by newer message"` for superseded pending work.
 - [ ] 4.5 Add Rust tests using Codex and Pi log fixtures for new final response, disabled narration, enabled narration, duplicate rescan, replacement, malformed logs, and restart with existing ledger.
-- [ ] 4.6 Add contract tests proving Rust scan writes `voice_delivery_ledger.json` that Python notification message/feed endpoints can read without repair.
+- [x] 4.6 Add contract tests proving Rust scan writes `voice_delivery_ledger.json` that Python notification message/feed endpoints can read without repair.
 
 ## 5. Listener state and announcement queue
 
-- [ ] 5.1 Implement in-memory listener registry with `LISTENER_TTL_SECONDS=45.0`, listener epoch, active listener count, queue depth, generating/prepared/playing state, and test reset hooks.
-- [ ] 5.2 Wire `POST /api/audio/listener` and `/api/v1/audio/listener` to the same Rust listener state used by the worker while preserving existing validation and response shape.
-- [ ] 5.3 Implement no-listener skip behavior: pending queued/generating/prepared tasks are marked `skipped` with `last_error:"no active listener"` when no active listener exists.
-- [ ] 5.4 Implement last-listener-drop cleanup: clear queue/prepared/generating/playing state, increment listener epoch, reset HLS playlist, and notify waiting worker state.
-- [ ] 5.5 Add tests for heartbeat enable/disable, TTL pruning, last listener drop, listener epoch stale prepared task skip, queue depth snapshot, and `/api/settings/voice.audio.active_listener_count` parity.
+- [x] 5.1 Implement in-memory listener registry with `LISTENER_TTL_SECONDS=45.0`, listener epoch, active listener count, queue depth, generating/prepared/playing state, and test reset hooks.
+- [x] 5.2 Wire `POST /api/audio/listener` and `/api/v1/audio/listener` to the same Rust listener state used by the worker while preserving existing validation and response shape.
+- [x] 5.3 Implement no-listener skip behavior: pending queued/generating/prepared tasks are marked `skipped` with `last_error:"no active listener"` when no active listener exists.
+- [x] 5.4 Implement last-listener-drop cleanup: clear queue/prepared/generating/playing state, increment listener epoch, reset HLS playlist, and notify waiting worker state.
+- [x] 5.5 Add tests for heartbeat enable/disable, TTL pruning, last listener drop, listener epoch stale prepared task skip, queue depth snapshot, and `/api/settings/voice.audio.active_listener_count` parity.
 
 ## 6. OpenAI-compatible summary and TTS
 
@@ -84,16 +84,16 @@
 
 ## 10. HTTP snapshots and route parity
 
-- [ ] 10.1 Update `load_voice_settings_snapshot` so `audio.queue_depth`, `active_listener_count`, `segment_count`, `last_error`, `media_sequence`, and `notifications.vapid_public_key` reflect Rust voice runtime when workers are enabled, and file-only defaults when disabled.
+- [x] 10.1 Update `load_voice_settings_snapshot` so `audio.queue_depth`, `active_listener_count`, `segment_count`, `last_error`, `media_sequence`, and `notifications.vapid_public_key` reflect Rust voice runtime when workers are enabled, and file-only defaults when disabled.
 - [ ] 10.2 Update `load_subscriptions_snapshot`, notification message, and notification feed paths if needed so Rust runtime state and disk state remain Python-compatible after WebPush updates.
-- [ ] 10.3 Ensure all voice/HLS routes require auth exactly like Python except no public voice debug bypass; verify content type for JSON, HLS playlist, and MPEG-TS segment responses.
+- [x] 10.3 Ensure all voice/HLS routes require auth exactly like Python except no public voice debug bypass; verify content type for JSON, HLS playlist, and MPEG-TS segment responses.
 - [ ] 10.4 Add contract tests for readonly snapshots with worker disabled, snapshots with worker enabled, HLS GET 200/404, debug endpoints auth, debug disabled no side effect, and v1/legacy alias behavior.
 
 ## 11. Python compatibility and fallback checks
 
-- [ ] 11.1 Keep `codoxear/voice_push.py` and Python tests intact; do not remove Python fallback code or dependencies in `pyproject.toml` in this phase.
+- [x] 11.1 Keep `codoxear/voice_push.py` and Python tests intact; do not remove Python fallback code or dependencies in `pyproject.toml` in this phase.
 - [x] 11.2 Add or update Python tests proving `CODOXEAR_ENABLE_VOICE_SCAN` truthy still prevents Python `voice-push-scan` thread and falsy values preserve existing Python behavior.
-- [ ] 11.3 Add a rollback test or documented script: Rust writes a pending/sent/error ledger and subscription updates, then Python `VoicePushCoordinator` loads them and exposes equivalent snapshots without duplicate sends.
+- [x] 11.3 Add a rollback test or documented script: Rust writes a pending/sent/error ledger and subscription updates, then Python `VoicePushCoordinator` loads them and exposes equivalent snapshots without duplicate sends.
 - [ ] 11.4 Ensure Python can load Rust-created `webpush_vapid_private.pem` via `py_vapid.Vapid.from_file` and compute the same public key.
 
 ## 12. Documentation and OpenSpec updates
