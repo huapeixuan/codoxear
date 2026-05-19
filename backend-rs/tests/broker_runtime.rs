@@ -18,6 +18,14 @@ fn write_fake_bin(dir: &Path, name: &str, body: &str) -> PathBuf {
     path
 }
 
+fn write_fake_shell(dir: &Path) -> PathBuf {
+    write_fake_bin(
+        dir,
+        "fake-shell.sh",
+        "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"-c\" ]; then\n    shift\n    exec /bin/sh -c \"$1\"\n  fi\n  shift\ndone\nexec /bin/sh\n",
+    )
+}
+
 fn broker_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_codoxear-broker-rs"))
 }
@@ -88,10 +96,12 @@ fn rust_broker_codex_writes_sidecar_and_serves_socket() {
         "fake-codex.sh",
         "#!/bin/sh\necho fake-codex-ready\nsleep 30\n",
     );
+    let fake_shell = write_fake_shell(dir.path());
     let child = Command::new(broker_bin())
         .args(["--cwd", dir.path().to_str().unwrap(), "--"])
         .env("CODOXEAR_APP_DIR", dir.path().join("app"))
         .env("CODEX_BIN", &fake_codex)
+        .env("SHELL", &fake_shell)
         .env("CODEX_HOME", dir.path().join("codex-home"))
         .env("CODEX_WEB_OWNER", "web")
         .env("CODEX_WEB_SPAWN_NONCE", "nonce-codex")
