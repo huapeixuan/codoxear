@@ -1,6 +1,7 @@
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
 use codoxear_backend_rs::app_state::AppState;
+use codoxear_backend_rs::models::SessionRow;
 use codoxear_backend_rs::routes::router;
 use codoxear_backend_rs::runtime::{
     load_or_create_hmac_secret, sign_auth_cookie_value, unix_now_seconds, RuntimeConfig,
@@ -17,14 +18,15 @@ use codoxear_backend_rs::voice_worker::openai::{
     parse_summary_response, summary_payload, OpenAiVoiceClient, SummaryRequest, TtsRequest,
 };
 use codoxear_backend_rs::voice_worker::scan::{
-    observe_messages_into_ledger, ClassifiedAssistantMessage,
+    assistant_messages_from_log, observe_messages_into_ledger, voice_scan_rows_once,
+    ClassifiedAssistantMessage,
 };
 use codoxear_backend_rs::voice_worker::state::{
     reset_runtime_registry_for_tests, runtime_for_app_dir, QueuedVoiceTask,
 };
 use codoxear_backend_rs::voice_worker::vapid::{
     default_vapid_subject_from_env, load_or_create_public_key, normalize_vapid_subject,
-    public_key_from_pem, VAPID_PRIVATE_KEY_FILE,
+    public_key_from_pem, tailscale_https_subject_with_runner, VAPID_PRIVATE_KEY_FILE,
 };
 use codoxear_backend_rs::voice_worker::webpush::{
     build_webpush_message, should_drop_subscription, WebPushPayload, WebPushSendError,
@@ -36,6 +38,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -236,6 +239,17 @@ fn fixture_path(name: &str) -> PathBuf {
         .join(name)
 }
 
+fn repo_fixture_path(parts: &[&str]) -> PathBuf {
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    for part in parts {
+        path.push(part);
+    }
+    path
+}
+
 fn write_voice_settings(app_dir: &Path, extra: Value) {
     let mut settings = serde_json::Map::new();
     settings.insert("tts_enabled_for_narration".to_string(), json!(false));
@@ -371,6 +385,48 @@ fn rust_created_vapid_pem_is_reloaded_with_stable_public_key() {
 }
 
 #[test]
+fn rust_created_vapid_pem_is_python_py_vapid_readable() {
+    let dir = TempDir::new().unwrap();
+    let rust_public_key = load_or_create_public_key(dir.path()).unwrap();
+    let script = r#"
+import base64
+import sys
+from cryptography.hazmat.primitives import serialization
+from py_vapid import Vapid
+
+vapid = Vapid.from_file(sys.argv[1])
+public = vapid.public_key.public_bytes(
+    encoding=serialization.Encoding.X962,
+    format=serialization.PublicFormat.UncompressedPoint,
+)
+print(base64.urlsafe_b64encode(public).rstrip(b'=').decode('ascii'))
+"#;
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let venv_python = manifest_dir.parent().unwrap().join(".venv/bin/python");
+    let python = if venv_python.exists() {
+        venv_python
+    } else {
+        PathBuf::from("python3")
+    };
+    let output = std::process::Command::new(python)
+        .arg("-c")
+        .arg(script)
+        .arg(dir.path().join(VAPID_PRIVATE_KEY_FILE))
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("run python with py_vapid");
+    assert!(
+        output.status.success(),
+        "py_vapid failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        rust_public_key
+    );
+}
+
+#[test]
 fn vapid_subject_normalization_matches_python_rules_without_tailscale_probe() {
     assert_eq!(
         normalize_vapid_subject(" https://example.test/ ").unwrap(),
@@ -386,6 +442,17 @@ fn vapid_subject_normalization_matches_python_rules_without_tailscale_probe() {
 
     let _guard = EnvGuard::set("CODEX_WEB_PUSH_VAPID_SUBJECT", "https://push.example/");
     assert_eq!(default_vapid_subject_from_env(), "https://push.example");
+}
+
+#[test]
+fn vapid_subject_uses_tailscale_dns_fallback_when_env_is_unset() {
+    let _guard = EnvGuard::set("CODEX_WEB_PUSH_VAPID_SUBJECT", "");
+    let subject = tailscale_https_subject_with_runner(|timeout| {
+        assert_eq!(timeout, Duration::from_secs(5));
+        Ok(r#"{"Self":{"DNSName":"phone.tail123.ts.net."}}"#.to_string())
+    });
+    assert_eq!(subject.as_deref(), Some("https://phone.tail123.ts.net"));
+    assert!(tailscale_https_subject_with_runner(|_| Ok(r#"{"Self":{}}"#.to_string())).is_none());
 }
 
 #[test]
@@ -477,6 +544,101 @@ fn narration_scan_obeys_disabled_narration_setting() {
     assert_eq!(ledger["n1"]["summary_status"], "skipped");
     assert_eq!(ledger["n1"]["narrated_status"], "skipped");
     assert_eq!(ledger["n1"]["push_status"], "skipped");
+}
+
+#[test]
+fn scan_reads_codex_and_pi_log_fixtures_and_dedupes_on_restart() {
+    let dir = TempDir::new().unwrap();
+    let app_dir = dir.path();
+    fs::write(
+        app_dir.join("voice_settings.json"),
+        serde_json::to_string(&json!({"tts_enabled_for_narration": true})).unwrap(),
+    )
+    .unwrap();
+    let codex_log = repo_fixture_path(&["tests", "fixtures", "rollout", "codex_basic.jsonl"]);
+    let pi_log = app_dir.join("pi-with-narration.jsonl");
+    let mut pi_fixture = fs::read_to_string(repo_fixture_path(&[
+        "tests",
+        "fixtures",
+        "pi",
+        "pi_basic.jsonl",
+    ]))
+    .unwrap();
+    pi_fixture.push_str("\n{\"type\":\"message\",\"timestamp\":\"2026-05-09T11:00:04Z\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"toolUse\",\"content\":[{\"type\":\"text\",\"text\":\"Working update\"},{\"type\":\"toolCall\",\"name\":\"Read\"}]}}\n");
+    fs::write(&pi_log, pi_fixture).unwrap();
+
+    let codex_messages = assistant_messages_from_log(&codex_log).unwrap();
+    assert_eq!(codex_messages.len(), 1);
+    assert_eq!(codex_messages[0].message_class, "final_response");
+    let pi_messages = assistant_messages_from_log(&pi_log).unwrap();
+    assert!(pi_messages
+        .iter()
+        .any(|msg| msg.message_class == "narration"));
+    assert!(pi_messages
+        .iter()
+        .any(|msg| msg.message_class == "final_response"));
+
+    let rows = vec![
+        SessionRow {
+            session_id: "codex-session".to_string(),
+            alias: "Codex Fixture".to_string(),
+            cwd: "/tmp/codex".to_string(),
+            log_path: Some(codex_log.to_string_lossy().into_owned()),
+            ..SessionRow::default()
+        },
+        SessionRow {
+            session_id: "pi-session".to_string(),
+            alias: "Pi Fixture".to_string(),
+            cwd: "/tmp/pi".to_string(),
+            log_path: Some(pi_log.to_string_lossy().into_owned()),
+            ..SessionRow::default()
+        },
+    ];
+    let first = voice_scan_rows_once(app_dir, &rows).unwrap();
+    assert_eq!(first.sessions_scanned, 2);
+    assert_eq!(first.rows_created, codex_messages.len() + pi_messages.len());
+    let second = voice_scan_rows_once(app_dir, &rows).unwrap();
+    assert_eq!(second.rows_created, 0);
+    assert_eq!(second.rows_replaced, 0);
+}
+
+#[test]
+fn scan_ignores_malformed_log_lines_and_replaces_existing_pending_final_response() {
+    let dir = TempDir::new().unwrap();
+    let app_dir = dir.path();
+    let log = app_dir.join("malformed-codex.jsonl");
+    fs::write(
+        &log,
+        [
+            "not-json",
+            r#"{"type":"response_item","timestamp":"2026-05-09T10:00:02Z","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"newer final answer"}]}}"#,
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+    let old = ClassifiedAssistantMessage {
+        message_id: "old-final".to_string(),
+        message_class: "final_response".to_string(),
+        text: "older final answer".to_string(),
+        ts: Some(1.0),
+    };
+    observe_messages_into_ledger(app_dir, "sid", "Repo", &[old], false).unwrap();
+    let rows = vec![SessionRow {
+        session_id: "sid".to_string(),
+        alias: "Repo".to_string(),
+        cwd: "/tmp/repo".to_string(),
+        log_path: Some(log.to_string_lossy().into_owned()),
+        ..SessionRow::default()
+    }];
+    let report = voice_scan_rows_once(app_dir, &rows).unwrap();
+    assert_eq!(report.rows_created, 1);
+    assert_eq!(report.rows_replaced, 1);
+    let ledger: Value =
+        serde_json::from_slice(&fs::read(app_dir.join(DELIVERY_LEDGER_FILE)).unwrap()).unwrap();
+    assert_eq!(
+        ledger["old-final"]["last_error"],
+        "replaced by newer message"
+    );
 }
 
 #[test]
@@ -1031,4 +1193,113 @@ async fn hls_routes_are_authenticated_path_safe_and_use_existing_artifacts() {
 
     let (wrong_ext, _, _) = get(app, "/api/audio/segments/voice-000.aac", Some(&cookie)).await;
     assert_eq!(wrong_ext, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn voice_routes_preserve_v1_alias_auth_snapshots_and_disabled_debug_no_side_effects() {
+    reset_runtime_registry_for_tests();
+    let _worker_guard = EnvGuard::set("CODOXEAR_ENABLE_VOICE_WORKER", "");
+    let (home, app) = test_app();
+    let cookie = signed_cookie(&home);
+    let app_dir = app_dir(&home);
+    fs::create_dir_all(app_dir.join("audio/segments")).unwrap();
+    fs::write(
+        app_dir.join("audio/live.m3u8"),
+        "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:1.000,\nsegments/alias.ts\n",
+    )
+    .unwrap();
+    fs::write(app_dir.join("audio/segments/alias.ts"), b"ts").unwrap();
+    write_mobile_subscriptions(&app_dir, &["https://push.example.test/ok"]);
+    write_ledger(
+        &app_dir,
+        json!({
+            "m1": {
+                "message_id":"m1", "session_id":"sid", "session_display_name":"Repo",
+                "message_class":"final_response", "preview_text":"Final body",
+                "notification_text":"Summary", "summary_text":"Summary", "summary_status":"sent",
+                "narrated_status":"skipped", "push_status":"sent", "voice":"alloy",
+                "created_ts":1.0, "updated_ts":2.0, "last_error":""
+            }
+        }),
+    );
+
+    let (settings_status, _, settings_body) =
+        get(app.clone(), "/api/v1/settings/voice", Some(&cookie)).await;
+    assert_eq!(settings_status, StatusCode::OK);
+    let settings: Value = serde_json::from_slice(&settings_body).unwrap();
+    assert_eq!(settings["audio"]["stream_url"], "/api/audio/live.m3u8");
+    assert_eq!(settings["notifications"]["enabled_devices"], 1);
+
+    let (subs_status, _, subs_body) = get(
+        app.clone(),
+        "/api/v1/notifications/subscription",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(subs_status, StatusCode::OK);
+    let subs: Value = serde_json::from_slice(&subs_body).unwrap();
+    assert_eq!(subs["subscriptions"].as_array().unwrap().len(), 1);
+
+    let (message_status, _, message_body) = get(
+        app.clone(),
+        "/api/v1/notifications/message?message_id=m1",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(message_status, StatusCode::OK);
+    let message: Value = serde_json::from_slice(&message_body).unwrap();
+    assert_eq!(message["notification_text"], "Summary");
+    let (feed_status, _, feed_body) = get(
+        app.clone(),
+        "/api/v1/notifications/feed?since=0",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(feed_status, StatusCode::OK);
+    let feed: Value = serde_json::from_slice(&feed_body).unwrap();
+    assert_eq!(feed["items"][0]["message_id"], "m1");
+
+    let (playlist_status, _, _) = get(app.clone(), "/api/v1/audio/live.m3u8", Some(&cookie)).await;
+    assert_eq!(playlist_status, StatusCode::OK);
+    let (segment_status, _, _) = get(
+        app.clone(),
+        "/api/v1/audio/segments/alias.ts",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(segment_status, StatusCode::OK);
+    let (missing_segment_status, _, _) = get(
+        app.clone(),
+        "/api/v1/audio/segments/missing.ts",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(missing_segment_status, StatusCode::NOT_FOUND);
+
+    let (unauth_debug, _) = post_json(
+        app.clone(),
+        "/api/v1/notifications/test_push",
+        None,
+        json!({}),
+    )
+    .await;
+    assert_eq!(unauth_debug, StatusCode::UNAUTHORIZED);
+    let (disabled_push_status, disabled_push) = post_json(
+        app.clone(),
+        "/api/v1/notifications/test_push",
+        Some(&cookie),
+        json!({}),
+    )
+    .await;
+    assert_eq!(disabled_push_status, StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(disabled_push["phase"], "phase5");
+    let (disabled_audio_status, _) = post_json(
+        app,
+        "/api/v1/audio/test_announcement",
+        Some(&cookie),
+        json!({}),
+    )
+    .await;
+    assert_eq!(disabled_audio_status, StatusCode::NOT_IMPLEMENTED);
+    assert!(!app_dir.join("audio_announcement_queue.json").exists());
 }

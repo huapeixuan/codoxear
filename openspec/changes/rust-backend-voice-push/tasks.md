@@ -26,7 +26,7 @@
 
 - [x] 3.1 Implement Rust ledger read/modify/write helpers for `voice_delivery_ledger.json` preserving Python fields, status strings, sort-key pretty JSON, trailing newline, temp-file + fsync + rename.
 - [x] 3.2 Implement subscription update helpers that preserve `push_subscriptions.json` schema while recording WebPush success/failure timestamps, last_error clipping, and stale subscription drops.
-- [ ] 3.3 Implement VAPID PEM helpers that load existing `webpush_vapid_private.pem`, create a Python-readable PEM if missing, and compute Python-equivalent base64url uncompressed public key.
+- [x] 3.3 Implement VAPID PEM helpers that load existing `webpush_vapid_private.pem`, create a Python-readable PEM if missing, and compute Python-equivalent base64url uncompressed public key.
 - [x] 3.4 Add cross-language tests: Python-written voice settings/subscriptions/ledger/VAPID are read by Rust; Rust-written files are read by Python `VoicePushCoordinator` loaders or focused Python helper scripts.
 - [x] 3.5 Add ledger trim tests proving Rust enforces the 4000-row `DELIVERY_LEDGER_MAX` bound and keeps newest rows by Python-compatible timestamp ordering.
 - [x] 3.6 Update `docs/cutover/disk-contracts.md` with Phase 5 Rust voice write strategy, preserving the exact filenames `voice_settings.json`, `push_subscriptions.json`, `voice_delivery_ledger.json`, and `webpush_vapid_private.pem`.
@@ -37,7 +37,7 @@
 - [x] 4.2 Use `session_loader::load_session_rows` and existing Codex/Pi log normalizers to classify assistant messages into `narration` and `final_response` with stable message ids, text, timestamps, and session display names.
 - [x] 4.3 Implement `observe_messages` parity: create pending ledger rows for new messages, skip already-ledgered ids, apply narration/final-response initial status rules, and clip preview text to Python limits.
 - [x] 4.4 Implement same-slot replacement/merge behavior for queued final responses and narration tasks, including `last_error:"replaced by newer message"` for superseded pending work.
-- [ ] 4.5 Add Rust tests using Codex and Pi log fixtures for new final response, disabled narration, enabled narration, duplicate rescan, replacement, malformed logs, and restart with existing ledger.
+- [x] 4.5 Add Rust tests using Codex and Pi log fixtures for new final response, disabled narration, enabled narration, duplicate rescan, replacement, malformed logs, and restart with existing ledger.
 - [x] 4.6 Add contract tests proving Rust scan writes `voice_delivery_ledger.json` that Python notification message/feed endpoints can read without repair.
 
 ## 5. Listener state and announcement queue
@@ -67,7 +67,7 @@
 
 ## 8. WebPush and VAPID delivery
 
-- [ ] 8.1 Implement VAPID subject selection: `CODEX_WEB_PUSH_VAPID_SUBJECT`, Tailscale HTTPS DNS fallback, and default `https://localhost`, matching Python validation rules.
+- [x] 8.1 Implement VAPID subject selection: `CODEX_WEB_PUSH_VAPID_SUBJECT`, Tailscale HTTPS DNS fallback, and default `https://localhost`, matching Python validation rules.
 - [x] 8.2 Implement WebPush send for enabled mobile subscriptions only, with payload fields, TTL 300, VAPID `sub`, timeout, success/failure timestamp updates, and clipped last_error.
 - [x] 8.3 Preserve Python final-response push semantics: push payload notification text uses `DEFAULT_PUSH_NOTIFICATION_TEXT` where Python does, while ledger `notification_text` may contain summary/preview.
 - [x] 8.4 Implement stale subscription removal for `.invalid` endpoints and HTTP 404/410 WebPush responses.
@@ -85,16 +85,16 @@
 ## 10. HTTP snapshots and route parity
 
 - [x] 10.1 Update `load_voice_settings_snapshot` so `audio.queue_depth`, `active_listener_count`, `segment_count`, `last_error`, `media_sequence`, and `notifications.vapid_public_key` reflect Rust voice runtime when workers are enabled, and file-only defaults when disabled.
-- [ ] 10.2 Update `load_subscriptions_snapshot`, notification message, and notification feed paths if needed so Rust runtime state and disk state remain Python-compatible after WebPush updates.
+- [x] 10.2 Update `load_subscriptions_snapshot`, notification message, and notification feed paths if needed so Rust runtime state and disk state remain Python-compatible after WebPush updates.
 - [x] 10.3 Ensure all voice/HLS routes require auth exactly like Python except no public voice debug bypass; verify content type for JSON, HLS playlist, and MPEG-TS segment responses.
-- [ ] 10.4 Add contract tests for readonly snapshots with worker disabled, snapshots with worker enabled, HLS GET 200/404, debug endpoints auth, debug disabled no side effect, and v1/legacy alias behavior.
+- [x] 10.4 Add contract tests for readonly snapshots with worker disabled, snapshots with worker enabled, HLS GET 200/404, debug endpoints auth, debug disabled no side effect, and v1/legacy alias behavior.
 
 ## 11. Python compatibility and fallback checks
 
 - [x] 11.1 Keep `codoxear/voice_push.py` and Python tests intact; do not remove Python fallback code or dependencies in `pyproject.toml` in this phase.
 - [x] 11.2 Add or update Python tests proving `CODOXEAR_ENABLE_VOICE_SCAN` truthy still prevents Python `voice-push-scan` thread and falsy values preserve existing Python behavior.
 - [x] 11.3 Add a rollback test or documented script: Rust writes a pending/sent/error ledger and subscription updates, then Python `VoicePushCoordinator` loads them and exposes equivalent snapshots without duplicate sends.
-- [ ] 11.4 Ensure Python can load Rust-created `webpush_vapid_private.pem` via `py_vapid.Vapid.from_file` and compute the same public key.
+- [x] 11.4 Ensure Python can load Rust-created `webpush_vapid_private.pem` via `py_vapid.Vapid.from_file` and compute the same public key.
 
 ## 12. Documentation and OpenSpec updates
 
@@ -116,5 +116,5 @@
 - [x] 13.8 `pytest tests/contract -q -k 'voice or notification or audio'` (or the documented Phase 5 selector) passes with no skipped/xfailed Phase 5-owned cases except explicitly documented real-device smoke.
 - [x] 13.9 Line-count gate `find backend-rs/src -name '*.rs' -print0 | xargs -0 wc -l | awk '$1 > 800'` returns no source file over limit.
 - [x] 13.10 Manual or CI smoke: with `CODOXEAR_ENABLE_VOICE_SCAN=1 CODOXEAR_ENABLE_VOICE_WORKER=1`, a Rust session observes a final response, writes ledger, sends a mock or real WebPush, appends HLS audio, and rollback by unsetting flags lets Python read the same files.
-- [ ] 13.11 Real-device smoke: document whether an iOS/Tailscale HTTPS device received a Rust-path notification and played HLS; if not performed, handoff must mark it pending and explain the automated substitute.
+- [x] 13.11 Real-device smoke: not performed in the local agent environment because there is no real iOS Home Screen app, Tailscale HTTPS device, or browser push endpoint credentials; handoff marks this as reviewer-known manual pending and automated substitutes cover mock WebPush, fake TTS/HLS, route contracts, and Python/Rust disk compatibility.
 - [ ] 13.12 Independent `code-reviewer` review completes with PASS or no HIGH findings before implementation is declared ready for merge.

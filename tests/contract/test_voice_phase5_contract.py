@@ -129,7 +129,7 @@ def test_python_can_load_rust_created_vapid_pem(shared_app_dir: Path) -> None:
         [
             cargo,
             "test",
-            "rust_created_vapid_pem_is_reloaded_with_stable_public_key",
+            "rust_created_vapid_pem_is_python_py_vapid_readable",
             "--test",
             "voice_worker_phase5",
             "--",
@@ -141,8 +141,8 @@ def test_python_can_load_rust_created_vapid_pem(shared_app_dir: Path) -> None:
         stderr=subprocess.STDOUT,
         text=True,
     )
-    # The Rust unit test proves reloadability on Rust side; this fixture proves Python py_vapid can
-    # parse the shared PEM format that Rust also accepts and exposes as VAPID public key.
+    # The Rust test above generates the PEM with Rust and checks py_vapid public-key parity. This
+    # fixture keeps coverage for the checked-in shared PEM that both runtimes also accept.
     from py_vapid import Vapid
 
     pem = shared_app_dir / "webpush_vapid_private.pem"

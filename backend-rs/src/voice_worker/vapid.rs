@@ -6,6 +6,9 @@ use p256::SecretKey;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 pub const VAPID_PRIVATE_KEY_FILE: &str = "webpush_vapid_private.pem";
 
@@ -59,8 +62,63 @@ pub fn normalize_vapid_subject(raw: &str) -> Result<String, String> {
 }
 
 pub fn default_vapid_subject_from_env() -> String {
-    std::env::var("CODEX_WEB_PUSH_VAPID_SUBJECT")
+    if let Some(subject) = std::env::var("CODEX_WEB_PUSH_VAPID_SUBJECT")
         .ok()
+        .filter(|value| !value.trim().is_empty())
         .and_then(|value| normalize_vapid_subject(&value).ok())
+    {
+        return subject;
+    }
+    tailscale_https_subject_with_runner(default_tailscale_status_runner)
         .unwrap_or_else(|| "https://localhost".to_string())
+}
+
+pub fn tailscale_https_subject_with_runner<F>(mut runner: F) -> Option<String>
+where
+    F: FnMut(Duration) -> Result<String, String>,
+{
+    let raw = runner(Duration::from_secs(5)).ok()?;
+    let value = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
+    let dns_name = value
+        .get("Self")
+        .and_then(|node| node.get("DNSName"))
+        .and_then(serde_json::Value::as_str)?
+        .trim()
+        .trim_end_matches('.')
+        .to_string();
+    if dns_name.is_empty() {
+        return None;
+    }
+    Some(format!("https://{dns_name}"))
+}
+
+fn default_tailscale_status_runner(timeout: Duration) -> Result<String, String> {
+    let mut child = Command::new("tailscale")
+        .args(["status", "--json"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| format!("run tailscale status --json: {err}"))?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                let output = child
+                    .wait_with_output()
+                    .map_err(|err| format!("read tailscale status output: {err}"))?;
+                if !output.status.success() {
+                    return Err(format!("tailscale status exited {}", output.status));
+                }
+                return String::from_utf8(output.stdout)
+                    .map_err(|err| format!("tailscale output utf8: {err}"));
+            }
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("tailscale status timed out".to_string());
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Err(err) => return Err(format!("wait tailscale status: {err}")),
+        }
+    }
 }
