@@ -194,10 +194,9 @@ fn run_inner(cli: BrokerCli, env: BrokerEnv) -> Result<i32, String> {
             state.lock().map_err(|_| "broker state poisoned")?.pi_rpc = Some(rpc);
         }
     }
-    write_meta(&state, &env)?;
-
     let stop = Arc::new(AtomicBool::new(false));
     start_socket_server(state.clone(), env.clone(), stop.clone())?;
+    write_meta(&state, &env)?;
     start_output_reader(&mut child, state.clone(), stop.clone());
     if let ChildHandle::Pty { master, .. } = &child {
         if let Ok(stdin_master) = master.try_clone() {
