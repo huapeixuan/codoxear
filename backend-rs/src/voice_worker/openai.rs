@@ -8,6 +8,8 @@ pub struct SummaryRequest {
     pub base_url: String,
     pub model: String,
     pub api_key_present: bool,
+    pub session_name: String,
+    pub source_label: String,
     pub target_words: u16,
 }
 
@@ -62,7 +64,13 @@ impl OpenAiVoiceClient for HttpOpenAiVoiceClient {
         if self.api_key.trim().is_empty() || !request.api_key_present {
             return Err("tts_api_key is required".to_string());
         }
-        let payload = summary_payload(&request.model, text, request.target_words);
+        let payload = summary_payload(
+            &request.model,
+            text,
+            request.target_words,
+            &request.session_name,
+            &request.source_label,
+        );
         let body = self.post_json(&request.base_url, "/chat/completions", &payload)?;
         parse_summary_response(&body)
     }
@@ -124,7 +132,13 @@ impl HttpOpenAiVoiceClient {
     }
 }
 
-pub fn summary_payload(model: &str, text: &str, target_words: u16) -> Value {
+pub fn summary_payload(
+    model: &str,
+    text: &str,
+    target_words: u16,
+    session_name: &str,
+    source_label: &str,
+) -> Value {
     let (system_content, label) = if target_words <= 15 {
         (
             "You write spoken mobile notifications. Return one plain sentence of about 15 words. Aim for roughly 12 to 18 words, no markdown, no quotes, no prefixes.",
@@ -136,13 +150,23 @@ pub fn summary_payload(model: &str, text: &str, target_words: u16) -> Value {
             "Final assistant response",
         )
     };
+    let label = if source_label.trim().is_empty() {
+        label
+    } else {
+        source_label.trim()
+    };
+    let session_name = if session_name.trim().is_empty() {
+        "Session"
+    } else {
+        session_name.trim()
+    };
     json!({
         "model": model,
         "temperature": 0.2,
         "max_completion_tokens": 90,
         "messages": [
             {"role": "system", "content": system_content},
-            {"role": "user", "content": format!("Session name: Session\n{label}:\n{text}")},
+            {"role": "user", "content": format!("Session name: {session_name}\n{label}:\n{text}")},
         ],
     })
 }

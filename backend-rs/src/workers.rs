@@ -2,6 +2,10 @@ use crate::app_state::AppState;
 use crate::broker_client::{broker_send, BrokerError};
 use crate::log_normalizer::codex::{idle_from_log, last_chat_role_ts_from_log};
 use crate::state_files::{read_array_file, with_state_file_lock, write_array_file};
+use crate::voice_worker::hls::FfmpegHlsMediaRunner;
+use crate::voice_worker::openai::HttpOpenAiVoiceClient;
+use crate::voice_worker::state::runtime_for_app_dir;
+use crate::voice_worker::webpush::RustWebPushSender;
 use crate::write_cleaners::clean_queue_items;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -105,6 +109,7 @@ fn spawn_voice_worker_owner(state: AppState, role: &'static str, scan_enabled: b
             tracing::warn!(role, "CODOXEAR_ENABLE_VOICE_WORKER is set without CODOXEAR_ENABLE_VOICE_SCAN; Rust voice worker is drain-only and will not scan logs into the ledger");
         }
         let interval = seconds_env("CODEX_WEB_VOICE_SCAN_SECONDS", 2.5).max(0.5);
+        let worker_enabled = role == "scan+worker" || role == "worker-drain-only";
         loop {
             if scan_enabled {
                 match crate::voice_worker::scan::voice_scan_once(&state) {
@@ -120,9 +125,30 @@ fn spawn_voice_worker_owner(state: AppState, role: &'static str, scan_enabled: b
                     Err(error) => tracing::warn!(error, "voice scan failed"),
                 }
             }
+            if worker_enabled {
+                if let Err(error) = voice_delivery_sweep_once(&state) {
+                    tracing::warn!(error, "voice delivery worker failed");
+                }
+            }
             sleep(Duration::from_secs_f64(interval)).await;
         }
     });
+}
+
+pub fn voice_delivery_sweep_once(state: &AppState) -> Result<bool, String> {
+    let settings = crate::voice_state::load_voice_settings_snapshot(&state.config.app_dir);
+    let api_key = settings
+        .get("tts_api_key")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let runtime = runtime_for_app_dir(&state.config.app_dir);
+    let client = HttpOpenAiVoiceClient::new(api_key);
+    let hls = FfmpegHlsMediaRunner;
+    let push = RustWebPushSender::new(state.config.app_dir.clone());
+    runtime
+        .worker_step(&client, &hls, &push, now_seconds())
+        .map(|report| report.is_some())
 }
 
 async fn queue_worker_loop(state: AppState) {

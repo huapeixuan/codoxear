@@ -13,7 +13,9 @@ use codoxear_backend_rs::voice_worker::ledger::{
     new_pending_final_response, write_ledger_trimmed, DELIVERY_LEDGER_FILE,
 };
 use codoxear_backend_rs::voice_worker::locks::VoiceOwnerLock;
-use codoxear_backend_rs::voice_worker::openai::{parse_summary_response, summary_payload};
+use codoxear_backend_rs::voice_worker::openai::{
+    parse_summary_response, summary_payload, OpenAiVoiceClient, SummaryRequest, TtsRequest,
+};
 use codoxear_backend_rs::voice_worker::scan::{
     observe_messages_into_ledger, ClassifiedAssistantMessage,
 };
@@ -26,19 +28,104 @@ use codoxear_backend_rs::voice_worker::vapid::{
 };
 use codoxear_backend_rs::voice_worker::webpush::{
     build_webpush_message, should_drop_subscription, WebPushPayload, WebPushSendError,
-    WebPushTarget, WEB_PUSH_TTL_SECONDS,
+    WebPushSender, WebPushTarget, WEB_PUSH_TTL_SECONDS,
 };
 use codoxear_backend_rs::workers::voice_worker_role;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
 struct EnvGuard {
     key: &'static str,
     previous: Option<String>,
+}
+
+#[derive(Clone)]
+struct FakeOpenAi {
+    summary: Arc<Mutex<Result<String, String>>>,
+    speech: Arc<Mutex<Result<Vec<u8>, String>>>,
+    summary_calls: Arc<Mutex<Vec<(SummaryRequest, String)>>>,
+    speech_calls: Arc<Mutex<Vec<(TtsRequest, String)>>>,
+}
+
+impl Default for FakeOpenAi {
+    fn default() -> Self {
+        Self::success()
+    }
+}
+
+impl FakeOpenAi {
+    fn success() -> Self {
+        Self {
+            summary: Arc::new(Mutex::new(Ok("short summary".to_string()))),
+            speech: Arc::new(Mutex::new(Ok(b"fake-aac".to_vec()))),
+            summary_calls: Arc::new(Mutex::new(Vec::new())),
+            speech_calls: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn with_speech_error(message: &str) -> Self {
+        let client = Self::success();
+        *client.speech.lock().unwrap() = Err(message.to_string());
+        client
+    }
+}
+
+impl OpenAiVoiceClient for FakeOpenAi {
+    fn summarize(&self, request: SummaryRequest, text: &str) -> Result<String, String> {
+        self.summary_calls
+            .lock()
+            .unwrap()
+            .push((request, text.to_string()));
+        self.summary.lock().unwrap().clone()
+    }
+
+    fn synthesize(&self, request: TtsRequest, text: &str) -> Result<Vec<u8>, String> {
+        self.speech_calls
+            .lock()
+            .unwrap()
+            .push((request, text.to_string()));
+        self.speech.lock().unwrap().clone()
+    }
+}
+
+type FakePushCall = (WebPushTarget, Value, u32, String);
+
+#[derive(Clone, Default)]
+struct FakePushSender {
+    results: Arc<Mutex<Vec<Result<(), WebPushSendError>>>>,
+    calls: Arc<Mutex<Vec<FakePushCall>>>,
+}
+
+impl FakePushSender {
+    fn new(results: Vec<Result<(), WebPushSendError>>) -> Self {
+        Self {
+            results: Arc::new(Mutex::new(results)),
+            calls: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
+
+impl WebPushSender for FakePushSender {
+    fn send_json(
+        &self,
+        target: &WebPushTarget,
+        payload: &Value,
+        ttl_seconds: u32,
+        vapid_subject: &str,
+    ) -> Result<(), WebPushSendError> {
+        self.calls.lock().unwrap().push((
+            target.clone(),
+            payload.clone(),
+            ttl_seconds,
+            vapid_subject.to_string(),
+        ));
+        self.results.lock().unwrap().pop().unwrap_or(Ok(()))
+    }
 }
 
 impl EnvGuard {
@@ -64,6 +151,7 @@ impl Drop for EnvGuard {
 }
 
 fn test_app() -> (TempDir, axum::Router) {
+    reset_runtime_registry_for_tests();
     let home = TempDir::new().expect("temp home");
     let app_dir = home.path().join(".local/share/codoxear");
     fs::create_dir_all(&app_dir).unwrap();
@@ -146,6 +234,64 @@ fn fixture_path(name: &str) -> PathBuf {
         .join("fixtures")
         .join("voice")
         .join(name)
+}
+
+fn write_voice_settings(app_dir: &Path, extra: Value) {
+    let mut settings = serde_json::Map::new();
+    settings.insert("tts_enabled_for_narration".to_string(), json!(false));
+    settings.insert("tts_enabled_for_final_response".to_string(), json!(true));
+    settings.insert("tts_base_url".to_string(), json!("http://127.0.0.1:1/v1"));
+    settings.insert("tts_api_key".to_string(), json!("test-key"));
+    settings.insert("summarization_model".to_string(), json!("sum-model"));
+    settings.insert("tts_model".to_string(), json!("tts-model"));
+    if let Some(extra) = extra.as_object() {
+        for (key, value) in extra {
+            settings.insert(key.clone(), value.clone());
+        }
+    }
+    fs::write(
+        app_dir.join("voice_settings.json"),
+        serde_json::to_string(&Value::Object(settings)).unwrap(),
+    )
+    .unwrap();
+}
+
+fn write_ledger(app_dir: &Path, rows: Value) {
+    fs::write(
+        app_dir.join(DELIVERY_LEDGER_FILE),
+        serde_json::to_string_pretty(&rows).unwrap() + "\n",
+    )
+    .unwrap();
+}
+
+fn write_mobile_subscriptions(app_dir: &Path, endpoints: &[&str]) {
+    let rows = endpoints
+        .iter()
+        .enumerate()
+        .map(|(idx, endpoint)| {
+            json!({
+                "id": format!("sub-{idx}"),
+                "subscription": {
+                    "endpoint": endpoint,
+                    "keys": {"p256dh": "p256", "auth": "auth"}
+                },
+                "notifications_enabled": true,
+                "created_ts": idx as f64 + 1.0,
+                "updated_ts": idx as f64 + 1.0,
+                "last_success_ts": null,
+                "last_failure_ts": null,
+                "last_error": "",
+                "user_agent": "iPhone",
+                "device_label": "phone",
+                "device_class": "mobile",
+            })
+        })
+        .collect::<Vec<_>>();
+    fs::write(
+        app_dir.join("push_subscriptions.json"),
+        serde_json::to_string_pretty(&rows).unwrap() + "\n",
+    )
+    .unwrap();
 }
 
 #[derive(Default)]
@@ -416,7 +562,13 @@ async fn listener_route_updates_settings_snapshot_and_test_push_requires_worker_
 
 #[test]
 fn openai_summary_payload_and_response_parsing_match_python_shapes() {
-    let payload = summary_payload("gpt-test", "Long body", 30);
+    let payload = summary_payload(
+        "gpt-test",
+        "Long body",
+        30,
+        "Repo",
+        "Final assistant response",
+    );
     assert_eq!(payload["model"], "gpt-test");
     assert!(payload["messages"][0]["content"]
         .as_str()
@@ -541,6 +693,258 @@ async fn enabled_test_announcement_enqueues_ledger_row() {
         ledger[body["message_id"].as_str().unwrap()]["narrated_status"],
         "pending"
     );
+}
+
+#[test]
+fn worker_step_processes_final_response_push_tts_and_hls_with_playing_gate() {
+    reset_runtime_registry_for_tests();
+    let dir = TempDir::new().unwrap();
+    let app_dir = dir.path();
+    write_voice_settings(app_dir, json!({"tts_enabled_for_final_response": true}));
+    write_mobile_subscriptions(app_dir, &["https://push.example.test/ok"]);
+    write_ledger(
+        app_dir,
+        json!({
+            "m1": {
+                "message_id":"m1", "session_id":"sid", "session_display_name":"Repo",
+                "message_class":"final_response", "preview_text":"Longer final answer body",
+                "notification_text":"", "summary_text":"", "summary_status":"pending",
+                "narrated_status":"pending", "push_status":"pending", "voice":"",
+                "created_ts":1.0, "updated_ts":1.0, "last_error":""
+            },
+            "m2": {
+                "message_id":"m2", "session_id":"sid", "session_display_name":"Repo",
+                "message_class":"final_response", "preview_text":"Second final answer body",
+                "notification_text":"", "summary_text":"", "summary_status":"pending",
+                "narrated_status":"pending", "push_status":"pending", "voice":"",
+                "created_ts":2.0, "updated_ts":2.0, "last_error":""
+            }
+        }),
+    );
+    let runtime = runtime_for_app_dir(app_dir);
+    runtime.listener_heartbeat("c1", true, 10.0).unwrap();
+    let client = FakeOpenAi::success();
+    let push = FakePushSender::new(vec![Ok(()), Ok(())]);
+
+    let first = runtime
+        .worker_step(&client, &FakeHlsRunner, &push, 10.0)
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.action, "prepared");
+    let appended = runtime
+        .worker_step(&client, &FakeHlsRunner, &push, 10.1)
+        .unwrap()
+        .unwrap();
+    assert_eq!(appended.action, "appended");
+    assert!(runtime
+        .worker_step(&client, &FakeHlsRunner, &push, 11.0)
+        .unwrap()
+        .is_none());
+    let second = runtime
+        .worker_step(&client, &FakeHlsRunner, &push, 24.0)
+        .unwrap()
+        .unwrap();
+    assert_eq!(second.message_id, "m2");
+
+    let ledger: Value =
+        serde_json::from_slice(&fs::read(app_dir.join(DELIVERY_LEDGER_FILE)).unwrap()).unwrap();
+    assert_eq!(ledger["m1"]["summary_status"], "sent");
+    assert_eq!(ledger["m1"]["summary_text"], "short summary");
+    assert_eq!(ledger["m1"]["notification_text"], "short summary");
+    assert_eq!(ledger["m1"]["push_status"], "sent");
+    assert_eq!(ledger["m1"]["narrated_status"], "sent");
+    assert_eq!(
+        client.summary_calls.lock().unwrap()[0].0.source_label,
+        "Final assistant response"
+    );
+    assert_eq!(
+        client.speech_calls.lock().unwrap()[0].1,
+        "Turn summary from Repo. short summary"
+    );
+    let push_call = &push.calls.lock().unwrap()[0];
+    assert_eq!(push_call.2, WEB_PUSH_TTL_SECONDS);
+    assert_eq!(push_call.1["notification_text"], "回复完成");
+    assert!(fs::read_to_string(app_dir.join("audio/live.m3u8"))
+        .unwrap()
+        .contains("segments/000001-m1.ts"));
+}
+
+#[test]
+fn worker_step_processes_narration_and_continues_after_tts_error() {
+    reset_runtime_registry_for_tests();
+    let dir = TempDir::new().unwrap();
+    let app_dir = dir.path();
+    write_voice_settings(
+        app_dir,
+        json!({"tts_enabled_for_narration": true, "tts_enabled_for_final_response": false}),
+    );
+    write_ledger(
+        app_dir,
+        json!({
+            "n1": {
+                "message_id":"n1", "session_id":"sid", "session_display_name":"Repo",
+                "message_class":"narration", "preview_text":"Long and verbose narration body",
+                "notification_text":"", "summary_text":"", "summary_status":"pending",
+                "narrated_status":"pending", "push_status":"skipped", "voice":"",
+                "created_ts":1.0, "updated_ts":1.0, "last_error":""
+            },
+            "n2": {
+                "message_id":"n2", "session_id":"sid", "session_display_name":"Repo",
+                "message_class":"narration", "preview_text":"Next narration body",
+                "notification_text":"", "summary_text":"", "summary_status":"pending",
+                "narrated_status":"pending", "push_status":"skipped", "voice":"",
+                "created_ts":2.0, "updated_ts":2.0, "last_error":""
+            }
+        }),
+    );
+    let runtime = runtime_for_app_dir(app_dir);
+    runtime.listener_heartbeat("c1", true, 10.0).unwrap();
+    let failing_client = FakeOpenAi::with_speech_error("audio/speech returned empty body");
+    let push = FakePushSender::default();
+    let first = runtime
+        .worker_step(&failing_client, &FakeHlsRunner, &push, 10.0)
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.action, "error");
+    let ledger: Value =
+        serde_json::from_slice(&fs::read(app_dir.join(DELIVERY_LEDGER_FILE)).unwrap()).unwrap();
+    assert_eq!(ledger["n1"]["narrated_status"], "error");
+    assert_eq!(ledger["n1"]["summary_status"], "error");
+    assert!(ledger["n1"]["last_error"]
+        .as_str()
+        .unwrap()
+        .contains("empty body"));
+
+    let ok_client = FakeOpenAi::success();
+    let second = runtime
+        .worker_step(&ok_client, &FakeHlsRunner, &push, 11.0)
+        .unwrap()
+        .unwrap();
+    assert_eq!(second.action, "prepared");
+    assert_eq!(
+        ok_client.summary_calls.lock().unwrap()[0].0.target_words,
+        15
+    );
+    assert_eq!(
+        ok_client.speech_calls.lock().unwrap()[0].1,
+        "From Repo. short summary"
+    );
+}
+
+#[test]
+fn final_response_push_partial_failure_all_failure_and_stale_drop_are_recorded() {
+    reset_runtime_registry_for_tests();
+    let dir = TempDir::new().unwrap();
+    let app_dir = dir.path();
+    write_voice_settings(app_dir, json!({"tts_enabled_for_final_response": false}));
+    write_mobile_subscriptions(
+        app_dir,
+        &[
+            "https://push.example.test/ok",
+            "https://push.example.test/fail",
+            "https://removed.invalid/stale",
+        ],
+    );
+    write_ledger(
+        app_dir,
+        json!({
+            "m1": {
+                "message_id":"m1", "session_id":"sid", "session_display_name":"Repo",
+                "message_class":"final_response", "preview_text":"Final body", "notification_text":"",
+                "summary_text":"", "summary_status":"pending", "narrated_status":"pending",
+                "push_status":"pending", "voice":"", "created_ts":1.0, "updated_ts":1.0,
+                "last_error":""
+            }
+        }),
+    );
+    let runtime = runtime_for_app_dir(app_dir);
+    runtime.listener_heartbeat("c1", true, 10.0).unwrap();
+    let push = FakePushSender::new(vec![
+        Err(WebPushSendError::StaleSubscription(410)),
+        Err(WebPushSendError::Transport("timeout".to_string())),
+        Ok(()),
+    ]);
+    let report = runtime
+        .worker_step(&FakeOpenAi::success(), &FakeHlsRunner, &push, 10.0)
+        .unwrap()
+        .unwrap();
+    assert_eq!(report.action, "final-push");
+    let ledger: Value =
+        serde_json::from_slice(&fs::read(app_dir.join(DELIVERY_LEDGER_FILE)).unwrap()).unwrap();
+    assert_eq!(ledger["m1"]["push_status"], "sent");
+    assert_eq!(ledger["m1"]["narrated_status"], "skipped");
+    let subscriptions: Value =
+        serde_json::from_slice(&fs::read(app_dir.join("push_subscriptions.json")).unwrap())
+            .unwrap();
+    assert_eq!(subscriptions.as_array().unwrap().len(), 2);
+    assert_eq!(push.calls.lock().unwrap().len(), 3);
+    assert!(push
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|(_, payload, ttl, _)| {
+            *ttl == 300 && payload["notification_text"] == "回复完成"
+        }));
+
+    reset_runtime_registry_for_tests();
+    write_mobile_subscriptions(app_dir, &["https://push.example.test/fail"]);
+    write_ledger(
+        app_dir,
+        json!({
+            "m2": {
+                "message_id":"m2", "session_id":"sid", "session_display_name":"Repo",
+                "message_class":"final_response", "preview_text":"Final body", "notification_text":"",
+                "summary_text":"", "summary_status":"pending", "narrated_status":"pending",
+                "push_status":"pending", "voice":"", "created_ts":2.0, "updated_ts":2.0,
+                "last_error":""
+            }
+        }),
+    );
+    let runtime = runtime_for_app_dir(app_dir);
+    runtime.listener_heartbeat("c1", true, 20.0).unwrap();
+    let push = FakePushSender::new(vec![Err(WebPushSendError::Transport(
+        "offline".to_string(),
+    ))]);
+    runtime
+        .worker_step(&FakeOpenAi::success(), &FakeHlsRunner, &push, 20.0)
+        .unwrap();
+    let ledger: Value =
+        serde_json::from_slice(&fs::read(app_dir.join(DELIVERY_LEDGER_FILE)).unwrap()).unwrap();
+    assert_eq!(ledger["m2"]["push_status"], "error");
+}
+
+#[test]
+fn successful_test_announcement_tts_appends_hls_side_effect() {
+    reset_runtime_registry_for_tests();
+    let dir = TempDir::new().unwrap();
+    let app_dir = dir.path();
+    write_voice_settings(app_dir, json!({"tts_enabled_for_final_response": true}));
+    let runtime = runtime_for_app_dir(app_dir);
+    runtime
+        .listener_heartbeat("c1", true, unix_now_seconds() as f64)
+        .unwrap();
+    let (message_id, queue_depth) = runtime
+        .enqueue_test_announcement("alloy".to_string())
+        .unwrap();
+    assert_eq!(queue_depth, 1);
+    let client = FakeOpenAi::success();
+    let prepared = runtime
+        .worker_step(&client, &FakeHlsRunner, &FakePushSender::default(), 10.0)
+        .unwrap()
+        .unwrap();
+    assert_eq!(prepared.action, "prepared");
+    let appended = runtime
+        .worker_step(&client, &FakeHlsRunner, &FakePushSender::default(), 10.1)
+        .unwrap()
+        .unwrap();
+    assert_eq!(appended.action, "appended");
+    let ledger: Value =
+        serde_json::from_slice(&fs::read(app_dir.join(DELIVERY_LEDGER_FILE)).unwrap()).unwrap();
+    assert_eq!(ledger[&message_id]["narrated_status"], "sent");
+    assert!(fs::read_to_string(app_dir.join("audio/live.m3u8"))
+        .unwrap()
+        .contains(&format!("segments/000001-{}.ts", &message_id[..12])));
 }
 
 #[test]

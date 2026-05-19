@@ -50,11 +50,11 @@
 
 ## 6. OpenAI-compatible summary and TTS
 
-- [ ] 6.1 Implement OpenAI-compatible `/chat/completions` summary client with Python-equivalent system/user prompts, target word behavior, response parsing for string and content-list formats, timeout, and error mapping.
-- [ ] 6.2 Implement OpenAI-compatible `/audio/speech` client posting model/voice/input/`response_format:"aac"` and returning non-empty bytes or Python-compatible errors.
-- [ ] 6.3 Implement final-response processing: summary success/skipped/error, ledger `notification_text`, default push text semantics, `tts_enabled_for_final_response`, and `tts_api_key required` narration error.
-- [ ] 6.4 Implement narration processing: short summary target, `From <session>.` spoken prefix, merged narration tasks, status transitions, and stale listener checks before/after HTTP calls.
-- [ ] 6.5 Add mock HTTP server tests for summary success, summary HTTP error, malformed summary, empty API key, TTS success, TTS empty body, TTS HTTP error, and secret-safe logs.
+- [x] 6.1 Implement OpenAI-compatible `/chat/completions` summary client with Python-equivalent system/user prompts, target word behavior, response parsing for string and content-list formats, timeout, and error mapping.
+- [x] 6.2 Implement OpenAI-compatible `/audio/speech` client posting model/voice/input/`response_format:"aac"` and returning non-empty bytes or Python-compatible errors.
+- [x] 6.3 Implement final-response processing: summary success/skipped/error, ledger `notification_text`, default push text semantics, `tts_enabled_for_final_response`, and `tts_api_key required` narration error.
+- [x] 6.4 Implement narration processing: short summary target, `From <session>.` spoken prefix, merged narration tasks, status transitions, and stale listener checks before/after HTTP calls.
+- [x] 6.5 Add mock HTTP server tests for summary success, summary HTTP error, malformed summary, empty API key, TTS success, TTS empty body, TTS HTTP error, and secret-safe logs.
 
 ## 7. HLS live stream output and serving
 
@@ -68,19 +68,19 @@
 ## 8. WebPush and VAPID delivery
 
 - [ ] 8.1 Implement VAPID subject selection: `CODEX_WEB_PUSH_VAPID_SUBJECT`, Tailscale HTTPS DNS fallback, and default `https://localhost`, matching Python validation rules.
-- [ ] 8.2 Implement WebPush send for enabled mobile subscriptions only, with payload fields, TTL 300, VAPID `sub`, timeout, success/failure timestamp updates, and clipped last_error.
-- [ ] 8.3 Preserve Python final-response push semantics: push payload notification text uses `DEFAULT_PUSH_NOTIFICATION_TEXT` where Python does, while ledger `notification_text` may contain summary/preview.
-- [ ] 8.4 Implement stale subscription removal for `.invalid` endpoints and HTTP 404/410 WebPush responses.
+- [x] 8.2 Implement WebPush send for enabled mobile subscriptions only, with payload fields, TTL 300, VAPID `sub`, timeout, success/failure timestamp updates, and clipped last_error.
+- [x] 8.3 Preserve Python final-response push semantics: push payload notification text uses `DEFAULT_PUSH_NOTIFICATION_TEXT` where Python does, while ledger `notification_text` may contain summary/preview.
+- [x] 8.4 Implement stale subscription removal for `.invalid` endpoints and HTTP 404/410 WebPush responses.
 - [x] 8.5 Implement `POST /api/notifications/test_push` enabled path returning `sent_count`, `failed_count`, `target_count`, and `notification_text`; keep disabled path explicit with no side effect.
-- [ ] 8.6 Add WebPush tests with mock sender/server for success, partial failure, all failure, 404/410 drop, `.invalid` drop, no mobile subscriptions error, payload JSON, TTL, and VAPID subject/public-key equivalence.
+- [x] 8.6 Add WebPush tests with mock sender/server for success, partial failure, all failure, 404/410 drop, `.invalid` drop, no mobile subscriptions error, payload JSON, TTL, and VAPID subject/public-key equivalence.
 
 ## 9. Debug announcement endpoint and worker loop
 
-- [ ] 9.1 Implement Rust worker loop state machine: wait for queued task, generate summary/TTS, prepare audio, append to HLS only when no task is playing and listener epoch matches, then mark `narrated_status:"sent"`.
-- [ ] 9.2 Implement playing duration gate using appended HLS duration, so prepared tasks do not overlap and queue order matches Python.
-- [ ] 9.3 Implement worker error path: mark task/ledger `error`, update HLS `last_error`, clear generating state, and continue processing future tasks.
+- [x] 9.1 Implement Rust worker loop state machine: wait for queued task, generate summary/TTS, prepare audio, append to HLS only when no task is playing and listener epoch matches, then mark `narrated_status:"sent"`.
+- [x] 9.2 Implement playing duration gate using appended HLS duration, so prepared tasks do not overlap and queue order matches Python.
+- [x] 9.3 Implement worker error path: mark task/ledger `error`, update HLS `last_error`, clear generating state, and continue processing future tasks.
 - [x] 9.4 Implement `POST /api/audio/test_announcement` enabled path: validate API key and active listener, create `test-...` ledger row, enqueue task, return `message_id`, `queue_depth`, and `voice`.
-- [ ] 9.5 Add worker loop tests for append prepared, stale prepared skip, processing error, queue ordering, playing duration, test announcement no listener, missing API key, and successful test announcement with fake TTS/HLS.
+- [x] 9.5 Add worker loop tests for append prepared, stale prepared skip, processing error, queue ordering, playing duration, test announcement no listener, missing API key, and successful test announcement with fake TTS/HLS.
 
 ## 10. HTTP snapshots and route parity
 
@@ -106,15 +106,15 @@
 
 ## 13. Verification gate
 
-- [ ] 13.1 `openspec validate rust-backend-voice-push --strict` passes.
-- [ ] 13.2 `openspec validate rust-backend-cutover --strict` still passes.
-- [ ] 13.3 `cd backend-rs && cargo fmt --all -- --check` passes.
-- [ ] 13.4 `cd backend-rs && cargo clippy --all-targets -- -D warnings` passes.
-- [ ] 13.5 `cd backend-rs && cargo test --release` passes, including voice worker, HLS, WebPush/VAPID, OpenAI mock, and worker flag tests.
-- [ ] 13.6 `cd backend-rs && cargo build --release --bins` passes.
-- [ ] 13.7 `python3 -m pytest tests/test_voice_push.py tests/test_python_worker_handoff.py -q` passes.
-- [ ] 13.8 `pytest tests/contract -q -k 'voice or notification or audio'` (or the documented Phase 5 selector) passes with no skipped/xfailed Phase 5-owned cases except explicitly documented real-device smoke.
-- [ ] 13.9 Line-count gate `find backend-rs/src -name '*.rs' -print0 | xargs -0 wc -l | awk '$1 > 800'` returns no source file over limit.
-- [ ] 13.10 Manual or CI smoke: with `CODOXEAR_ENABLE_VOICE_SCAN=1 CODOXEAR_ENABLE_VOICE_WORKER=1`, a Rust session observes a final response, writes ledger, sends a mock or real WebPush, appends HLS audio, and rollback by unsetting flags lets Python read the same files.
+- [x] 13.1 `openspec validate rust-backend-voice-push --strict` passes.
+- [x] 13.2 `openspec validate rust-backend-cutover --strict` still passes.
+- [x] 13.3 `cd backend-rs && cargo fmt --all -- --check` passes.
+- [x] 13.4 `cd backend-rs && cargo clippy --all-targets -- -D warnings` passes.
+- [x] 13.5 `cd backend-rs && cargo test --release` passes, including voice worker, HLS, WebPush/VAPID, OpenAI mock, and worker flag tests.
+- [x] 13.6 `cd backend-rs && cargo build --release --bins` passes.
+- [x] 13.7 `python3 -m pytest tests/test_voice_push.py tests/test_python_worker_handoff.py -q` passes.
+- [x] 13.8 `pytest tests/contract -q -k 'voice or notification or audio'` (or the documented Phase 5 selector) passes with no skipped/xfailed Phase 5-owned cases except explicitly documented real-device smoke.
+- [x] 13.9 Line-count gate `find backend-rs/src -name '*.rs' -print0 | xargs -0 wc -l | awk '$1 > 800'` returns no source file over limit.
+- [x] 13.10 Manual or CI smoke: with `CODOXEAR_ENABLE_VOICE_SCAN=1 CODOXEAR_ENABLE_VOICE_WORKER=1`, a Rust session observes a final response, writes ledger, sends a mock or real WebPush, appends HLS audio, and rollback by unsetting flags lets Python read the same files.
 - [ ] 13.11 Real-device smoke: document whether an iOS/Tailscale HTTPS device received a Rust-path notification and played HLS; if not performed, handoff must mark it pending and explain the automated substitute.
 - [ ] 13.12 Independent `code-reviewer` review completes with PASS or no HIGH findings before implementation is declared ready for merge.
