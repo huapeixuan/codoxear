@@ -15,7 +15,12 @@ pub struct PiSigintState {
 }
 
 pub fn install_pi_sigint_handler(state: BrokerStateHandle) {
-    let previous = unsafe { libc::signal(libc::SIGINT, handle_pi_sigint as libc::sighandler_t) };
+    let previous = unsafe {
+        libc::signal(
+            libc::SIGINT,
+            handle_pi_sigint as *const () as libc::sighandler_t,
+        )
+    };
     let boxed = Box::new(PiSigintState { state, previous });
     let _ = PI_SIGINT_STATE.set(Box::into_raw(boxed) as usize);
 }
@@ -93,7 +98,10 @@ pub fn install_sigwinch_resize(master_fd: i32) {
     let _ = SIGWINCH_MASTER_FD.set(master_fd);
     resize_pty_to_terminal(master_fd);
     unsafe {
-        libc::signal(libc::SIGWINCH, handle_sigwinch as libc::sighandler_t);
+        libc::signal(
+            libc::SIGWINCH,
+            handle_sigwinch as *const () as libc::sighandler_t,
+        );
     }
 }
 

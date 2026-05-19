@@ -288,7 +288,7 @@ fn spawn_codex_pty(cli: &BrokerCli, env: &BrokerEnv) -> Result<ChildHandle, Stri
             &mut master_fd,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            &mut winsize,
+            &mut winsize as *mut libc::winsize,
         )
     };
     if pid < 0 {
