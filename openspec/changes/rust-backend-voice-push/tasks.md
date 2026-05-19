@@ -58,12 +58,12 @@
 
 ## 7. HLS live stream output and serving
 
-- [ ] 7.1 Implement Rust `MergedHlsStream` equivalent under `<app_dir>/audio`, including `segments/`, `live.m3u8`, sequence counter, segment metadata, last_error, and snapshot fields.
-- [ ] 7.2 Implement append-audio path using `ffmpeg` to split AAC into MPEG-TS segments and `ffprobe` to read duration, matching Python command parameters and invalid `N/A` segment skip behavior.
-- [ ] 7.3 Implement append-silence keepalive using `anullsrc`, `HLS_KEEPALIVE_SECONDS`, `HLS_SILENCE_SECONDS`, and active-listener/no-work preconditions.
-- [ ] 7.4 Implement playlist rewrite with Python-compatible `#EXTM3U`, version, target duration, media sequence, `#EXTINF`, relative segment paths, rolling 18-segment cleanup, reset behavior.
+- [x] 7.1 Implement Rust `MergedHlsStream` equivalent under `<app_dir>/audio`, including `segments/`, `live.m3u8`, sequence counter, segment metadata, last_error, and snapshot fields.
+- [x] 7.2 Implement append-audio path using `ffmpeg` to split AAC into MPEG-TS segments and `ffprobe` to read duration, matching Python command parameters and invalid `N/A` segment skip behavior.
+- [x] 7.3 Implement append-silence keepalive using `anullsrc`, `HLS_KEEPALIVE_SECONDS`, `HLS_SILENCE_SECONDS`, and active-listener/no-work preconditions.
+- [x] 7.4 Implement playlist rewrite with Python-compatible `#EXTM3U`, version, target duration, media sequence, `#EXTINF`, relative segment paths, rolling 18-segment cleanup, reset behavior.
 - [x] 7.5 Wire `GET /api/audio/live.m3u8` and `/api/audio/segments/<segment>` (and v1 aliases if present) to Rust HLS files/state with correct content types and traversal-safe 404 behavior.
-- [ ] 7.6 Add HLS tests for sequence ordering, target duration, reset, cleanup, invalid segment names, missing ffmpeg/ffprobe error, fake ffmpeg append, and optional real-ffmpeg integration selector.
+- [x] 7.6 Add HLS tests for sequence ordering, target duration, reset, cleanup, invalid segment names, missing ffmpeg/ffprobe error, fake ffmpeg append, and optional real-ffmpeg integration selector.
 
 ## 8. WebPush and VAPID delivery
 
@@ -71,7 +71,7 @@
 - [ ] 8.2 Implement WebPush send for enabled mobile subscriptions only, with payload fields, TTL 300, VAPID `sub`, timeout, success/failure timestamp updates, and clipped last_error.
 - [ ] 8.3 Preserve Python final-response push semantics: push payload notification text uses `DEFAULT_PUSH_NOTIFICATION_TEXT` where Python does, while ledger `notification_text` may contain summary/preview.
 - [ ] 8.4 Implement stale subscription removal for `.invalid` endpoints and HTTP 404/410 WebPush responses.
-- [ ] 8.5 Implement `POST /api/notifications/test_push` enabled path returning `sent_count`, `failed_count`, `target_count`, and `notification_text`; keep disabled path explicit with no side effect.
+- [x] 8.5 Implement `POST /api/notifications/test_push` enabled path returning `sent_count`, `failed_count`, `target_count`, and `notification_text`; keep disabled path explicit with no side effect.
 - [ ] 8.6 Add WebPush tests with mock sender/server for success, partial failure, all failure, 404/410 drop, `.invalid` drop, no mobile subscriptions error, payload JSON, TTL, and VAPID subject/public-key equivalence.
 
 ## 9. Debug announcement endpoint and worker loop
@@ -79,7 +79,7 @@
 - [ ] 9.1 Implement Rust worker loop state machine: wait for queued task, generate summary/TTS, prepare audio, append to HLS only when no task is playing and listener epoch matches, then mark `narrated_status:"sent"`.
 - [ ] 9.2 Implement playing duration gate using appended HLS duration, so prepared tasks do not overlap and queue order matches Python.
 - [ ] 9.3 Implement worker error path: mark task/ledger `error`, update HLS `last_error`, clear generating state, and continue processing future tasks.
-- [ ] 9.4 Implement `POST /api/audio/test_announcement` enabled path: validate API key and active listener, create `test-...` ledger row, enqueue task, return `message_id`, `queue_depth`, and `voice`.
+- [x] 9.4 Implement `POST /api/audio/test_announcement` enabled path: validate API key and active listener, create `test-...` ledger row, enqueue task, return `message_id`, `queue_depth`, and `voice`.
 - [ ] 9.5 Add worker loop tests for append prepared, stale prepared skip, processing error, queue ordering, playing duration, test announcement no listener, missing API key, and successful test announcement with fake TTS/HLS.
 
 ## 10. HTTP snapshots and route parity

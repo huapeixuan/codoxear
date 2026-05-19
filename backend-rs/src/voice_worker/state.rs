@@ -1,4 +1,4 @@
-use crate::state_files::write_value;
+use crate::state_files::{with_state_file_lock, write_value};
 use crate::voice_state::now_seconds;
 use crate::voice_worker::hls::{empty_playlist, HLS_MAX_SEGMENTS};
 use crate::voice_worker::ledger::DELIVERY_LEDGER_FILE;
@@ -154,6 +154,59 @@ impl VoiceRuntime {
 
     pub fn enqueue_for_tests(&self, task: QueuedVoiceTask) {
         self.state.lock().unwrap().queue.push_back(task);
+    }
+
+    pub fn enqueue_test_announcement(&self, voice: String) -> Result<(String, usize), String> {
+        let now = now_seconds();
+        let message_id = format!("test-{}", (now * 1000.0).round() as i64);
+        let task = QueuedVoiceTask {
+            message_id: message_id.clone(),
+            source_message_ids: vec![message_id.clone()],
+        };
+        let queue_depth = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| "voice runtime lock poisoned")?;
+            prune_listeners(&mut state.listeners, now);
+            if state.listeners.is_empty() {
+                return Err("no active listener".to_string());
+            }
+            state.queue.push_back(task);
+            state.queue.len()
+        };
+        self.upsert_ledger_row(json!({
+            "message_id": message_id,
+            "session_id": "test-session",
+            "session_display_name": "Codoxear",
+            "message_class": "narration",
+            "preview_text": "This is a Codoxear announcement test.",
+            "notification_text": "Codoxear announcement test",
+            "summary_text": "",
+            "summary_status": "skipped",
+            "narrated_status": "pending",
+            "push_status": "skipped",
+            "voice": voice,
+            "created_ts": now,
+            "updated_ts": now,
+            "last_error": "",
+        }))?;
+        Ok((message_id, queue_depth))
+    }
+
+    fn upsert_ledger_row(&self, row: Value) -> Result<(), String> {
+        let message_id = row
+            .get("message_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "message_id required".to_string())?
+            .to_string();
+        let path = self.app_dir.join(DELIVERY_LEDGER_FILE);
+        with_state_file_lock(&path, || {
+            let mut ledger = read_ledger_object(&path);
+            ledger.insert(message_id, row);
+            write_value(&path, &Value::Object(ledger))
+        })
+        .map_err(|(_, message)| message)
     }
 
     pub fn set_last_error(&self, message: &str) {

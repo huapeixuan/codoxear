@@ -27,7 +27,7 @@ tower = { version = "0.5.2", features = ["util"] }
 tower-http = { version = "0.5.2", features = ["cors", "trace"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
-web-push = { version = "0.11.0", default-features = false }
+web-push = { version = "0.11.0", default-features = false, features = ["isahc-client"] }
 
 [dev-dependencies]
 tracing-test = "0.2"

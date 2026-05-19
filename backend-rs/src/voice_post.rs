@@ -7,6 +7,9 @@ use crate::voice_state::{
     read_subscriptions, subscription_id,
 };
 use crate::voice_worker::state::runtime_for_app_dir;
+use crate::voice_worker::webpush::{
+    RustWebPushSender, WebPushSender, WebPushTarget, WEB_PUSH_TTL_SECONDS,
+};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::Response;
@@ -208,24 +211,64 @@ pub(crate) async fn notification_test_push(State(state): State<AppState>) -> Res
     let mut failed_count = 0usize;
     let mut records = read_subscription_records(&state);
     let mut dropped = Vec::new();
+    let sender = RustWebPushSender::new(state.config.app_dir.clone());
+    let payload = json!({
+        "session_display_name": "Codoxear",
+        "notification_text": crate::voice_worker::webpush::DEFAULT_PUSH_NOTIFICATION_TEXT,
+        "timestamp": now,
+    });
+    let subject = crate::voice_worker::vapid::default_vapid_subject_from_env();
     for target in targets {
         let id = target.get("id").and_then(Value::as_str).unwrap_or_default();
-        let endpoint = target
+        let sub = target
             .get("subscription")
-            .and_then(|value| value.get("endpoint"))
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let keys = sub
+            .get("keys")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let endpoint = sub
+            .get("endpoint")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if crate::voice_worker::webpush::should_drop_subscription(endpoint, None) {
-            dropped.push(id.to_string());
-            failed_count += 1;
-            continue;
+        let push_target = WebPushTarget {
+            id: id.to_string(),
+            endpoint: endpoint.to_string(),
+            p256dh: keys
+                .get("p256dh")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            auth: keys
+                .get("auth")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        };
+        match sender.send_json(&push_target, &payload, WEB_PUSH_TTL_SECONDS, &subject) {
+            Ok(()) => {
+                if let Some(record) = records.get_mut(id).and_then(Value::as_object_mut) {
+                    record.insert("last_success_ts".to_string(), json!(now));
+                    record.insert("last_error".to_string(), json!(""));
+                    record.insert("updated_ts".to_string(), json!(now));
+                }
+                sent_count += 1;
+            }
+            Err(error) => {
+                if let Some(record) = records.get_mut(id).and_then(Value::as_object_mut) {
+                    record.insert("last_failure_ts".to_string(), json!(now));
+                    record.insert("last_error".to_string(), json!(format!("{error:?}")));
+                    record.insert("updated_ts".to_string(), json!(now));
+                }
+                if crate::voice_worker::webpush::should_drop_subscription(endpoint, Some(&error)) {
+                    dropped.push(id.to_string());
+                }
+                failed_count += 1;
+            }
         }
-        if let Some(record) = records.get_mut(id).and_then(Value::as_object_mut) {
-            record.insert("last_success_ts".to_string(), json!(now));
-            record.insert("last_error".to_string(), json!(""));
-            record.insert("updated_ts".to_string(), json!(now));
-        }
-        sent_count += 1;
     }
     for id in dropped {
         records.remove(&id);
@@ -271,13 +314,18 @@ pub(crate) async fn audio_test_announcement(State(state): State<AppState>) -> Re
             json!({"error": "no active listener"}),
         );
     }
-    json_response(
-        StatusCode::ACCEPTED,
-        json!({
-            "ok": false,
-            "error": "Rust audio announcement generation is not yet enabled in this partial Phase 5 build",
-        }),
-    )
+    let voice = settings
+        .get("voice")
+        .and_then(Value::as_str)
+        .unwrap_or("alloy")
+        .to_string();
+    match runtime.enqueue_test_announcement(voice.clone()) {
+        Ok((message_id, queue_depth)) => json_response(
+            StatusCode::OK,
+            json!({"ok": true, "message_id": message_id, "queue_depth": queue_depth, "voice": voice}),
+        ),
+        Err(message) => json_response(StatusCode::BAD_REQUEST, json!({"error": message})),
+    }
 }
 
 pub(crate) async fn feature_disabled_debug_endpoint() -> Response {

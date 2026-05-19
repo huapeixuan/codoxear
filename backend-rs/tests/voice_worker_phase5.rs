@@ -6,12 +6,14 @@ use codoxear_backend_rs::runtime::{
     load_or_create_hmac_secret, sign_auth_cookie_value, unix_now_seconds, RuntimeConfig,
 };
 use codoxear_backend_rs::voice_worker::hls::{
-    empty_playlist, render_playlist, safe_segment_path, HlsSegment, HLS_MAX_SEGMENTS,
+    empty_playlist, parse_duration, render_playlist, safe_segment_path, HlsMediaRunner, HlsSegment,
+    MergedHlsStream, HLS_MAX_SEGMENTS,
 };
 use codoxear_backend_rs::voice_worker::ledger::{
     new_pending_final_response, write_ledger_trimmed, DELIVERY_LEDGER_FILE,
 };
 use codoxear_backend_rs::voice_worker::locks::VoiceOwnerLock;
+use codoxear_backend_rs::voice_worker::openai::{parse_summary_response, summary_payload};
 use codoxear_backend_rs::voice_worker::scan::{
     observe_messages_into_ledger, ClassifiedAssistantMessage,
 };
@@ -23,13 +25,14 @@ use codoxear_backend_rs::voice_worker::vapid::{
     public_key_from_pem, VAPID_PRIVATE_KEY_FILE,
 };
 use codoxear_backend_rs::voice_worker::webpush::{
-    should_drop_subscription, WebPushPayload, WebPushSendError, WEB_PUSH_TTL_SECONDS,
+    build_webpush_message, should_drop_subscription, WebPushPayload, WebPushSendError,
+    WebPushTarget, WEB_PUSH_TTL_SECONDS,
 };
 use codoxear_backend_rs::workers::voice_worker_role;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -143,6 +146,35 @@ fn fixture_path(name: &str) -> PathBuf {
         .join("fixtures")
         .join("voice")
         .join(name)
+}
+
+#[derive(Default)]
+struct FakeHlsRunner;
+
+impl HlsMediaRunner for FakeHlsRunner {
+    fn append_aac_as_segments(&self, _input: &Path, output_pattern: &Path) -> Result<(), String> {
+        let parent = output_pattern.parent().unwrap();
+        let pattern = output_pattern.file_name().unwrap().to_string_lossy();
+        let first = pattern.replace("%03d", "000");
+        let second = pattern.replace("%03d", "001");
+        fs::write(parent.join(first), b"ts-1").unwrap();
+        fs::write(parent.join(second), b"ts-2").unwrap();
+        Ok(())
+    }
+
+    fn append_silence_segment(&self, output: &Path) -> Result<(), String> {
+        fs::write(output, b"silence").unwrap();
+        Ok(())
+    }
+
+    fn segment_duration(&self, segment: &Path) -> Result<f64, String> {
+        let name = segment.file_name().unwrap().to_string_lossy();
+        if name.contains("001") {
+            Ok(7.25)
+        } else {
+            Ok(6.0)
+        }
+    }
 }
 
 #[test]
@@ -375,8 +407,140 @@ async fn listener_route_updates_settings_snapshot_and_test_push_requires_worker_
         json!({}),
     )
     .await;
-    assert_eq!(disabled_status, StatusCode::NOT_IMPLEMENTED);
-    assert_eq!(disabled_body["ok"], false);
+    assert_eq!(disabled_status, StatusCode::BAD_REQUEST);
+    assert!(disabled_body["error"]
+        .as_str()
+        .unwrap()
+        .contains("no enabled mobile"));
+}
+
+#[test]
+fn openai_summary_payload_and_response_parsing_match_python_shapes() {
+    let payload = summary_payload("gpt-test", "Long body", 30);
+    assert_eq!(payload["model"], "gpt-test");
+    assert!(payload["messages"][0]["content"]
+        .as_str()
+        .unwrap()
+        .contains("about 30 words"));
+    assert_eq!(
+        parse_summary_response(br#"{"choices":[{"message":{"content":"  hello   world "}}]}"#)
+            .unwrap(),
+        "hello world"
+    );
+    assert_eq!(
+        parse_summary_response(
+            br#"{"choices":[{"message":{"content":[{"type":"text","text":"hello "},{"type":"output_text","text":"world"}]}}]}"#,
+        )
+        .unwrap(),
+        "hello world"
+    );
+    assert!(parse_summary_response(br#"{"choices":[]}"#)
+        .unwrap_err()
+        .contains("choices"));
+}
+
+#[test]
+fn hls_stream_appends_fake_segments_silence_and_rolls_cleanup() {
+    let dir = TempDir::new().unwrap();
+    let mut stream = MergedHlsStream::new(dir.path().join("audio")).unwrap();
+    let duration = stream
+        .append_audio(&FakeHlsRunner, "message-abcdef1234567890", b"aac")
+        .unwrap();
+    assert_eq!(duration, 13.25);
+    let playlist = fs::read_to_string(dir.path().join("audio/live.m3u8")).unwrap();
+    assert!(playlist.contains("000001-message-abcd.ts"));
+    assert!(playlist.contains("000002-message-abcd.ts"));
+    assert_eq!(stream.snapshot().segment_count, 2);
+    assert!(!stream.append_silence(&FakeHlsRunner, false, 1.0).unwrap());
+    assert!(stream.append_silence(&FakeHlsRunner, true, 2.0).unwrap());
+    assert!(parse_duration("N/A").unwrap_err().contains("N/A"));
+
+    for idx in 0..25 {
+        stream
+            .append_silence(&FakeHlsRunner, true, 100.0 + idx as f64)
+            .unwrap();
+    }
+    let snapshot = stream.snapshot();
+    assert_eq!(snapshot.segment_count, HLS_MAX_SEGMENTS);
+    let segment_count = fs::read_dir(dir.path().join("audio/segments"))
+        .unwrap()
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .unwrap()
+                .path()
+                .extension()
+                .and_then(|value| value.to_str())
+                == Some("ts")
+        })
+        .count();
+    assert_eq!(segment_count, HLS_MAX_SEGMENTS);
+}
+
+#[test]
+fn webpush_message_builds_encrypted_payload_with_ttl_and_vapid_headers() {
+    let dir = TempDir::new().unwrap();
+    let pem = dir.path().join(VAPID_PRIVATE_KEY_FILE);
+    fs::copy(fixture_path(VAPID_PRIVATE_KEY_FILE), &pem).unwrap();
+    let target = WebPushTarget {
+        id: "sub1".to_string(),
+        endpoint: "http://127.0.0.1:9/push".to_string(),
+        p256dh: "BH1HTeKM7-NwaLGHEqxeu2IamQaVVLkcsFHPIHmsCnqxcBHPQBprF41bEMOr3O1hUQ2jU1opNEm1F_lZV_sxMP8".to_string(),
+        auth: "sBXU5_tIYz-5w7G2B25BEw".to_string(),
+    };
+    let message = build_webpush_message(
+        &pem,
+        &target,
+        &WebPushPayload::final_response_default("s", "Repo", "m", 1000).to_json_value(),
+        WEB_PUSH_TTL_SECONDS,
+        "https://localhost",
+    )
+    .unwrap();
+    assert_eq!(message.ttl, WEB_PUSH_TTL_SECONDS);
+    assert!(message.payload.is_some());
+}
+
+#[tokio::test]
+async fn enabled_test_announcement_enqueues_ledger_row() {
+    reset_runtime_registry_for_tests();
+    let _guard = EnvGuard::set("CODOXEAR_ENABLE_VOICE_WORKER", "1");
+    let (home, app) = test_app();
+    let cookie = signed_cookie(&home);
+    let app_dir = app_dir(&home);
+    fs::write(
+        app_dir.join("voice_settings.json"),
+        serde_json::to_string(&json!({
+            "tts_enabled_for_final_response": true,
+            "tts_base_url": "http://127.0.0.1:1/v1",
+            "tts_api_key": "test-key"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let (listener_status, _) = post_json(
+        app.clone(),
+        "/api/audio/listener",
+        Some(&cookie),
+        json!({"client_id":"c1", "enabled": true}),
+    )
+    .await;
+    assert_eq!(listener_status, StatusCode::OK);
+    let (status, body) = post_json(
+        app,
+        "/api/audio/test_announcement",
+        Some(&cookie),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["message_id"].as_str().unwrap().starts_with("test-"));
+    assert_eq!(body["queue_depth"], 1);
+    let ledger: Value =
+        serde_json::from_slice(&fs::read(app_dir.join(DELIVERY_LEDGER_FILE)).unwrap()).unwrap();
+    assert_eq!(
+        ledger[body["message_id"].as_str().unwrap()]["narrated_status"],
+        "pending"
+    );
 }
 
 #[test]
