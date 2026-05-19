@@ -22,7 +22,7 @@ fn broker_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_codoxear-broker-rs"))
 }
 
-fn wait_for_meta(app_dir: &Path) -> Value {
+fn wait_for_live_meta(app_dir: &Path) -> Value {
     let socks = app_dir.join("socks");
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
@@ -33,12 +33,17 @@ fn wait_for_meta(app_dir: &Path) -> Value {
                     continue;
                 }
                 let raw = fs::read_to_string(&path).unwrap();
-                return serde_json::from_str(&raw).unwrap();
+                let value: Value = serde_json::from_str(&raw).unwrap();
+                if let Some(sock_path) = value["sock_path"].as_str() {
+                    if fs::metadata(sock_path).is_ok() {
+                        return value;
+                    }
+                }
             }
         }
         thread::sleep(Duration::from_millis(50));
     }
-    panic!("broker metadata not written under {}", socks.display());
+    panic!("live broker metadata not written under {}", socks.display());
 }
 
 fn wait_for_file(path: &Path) -> String {
@@ -96,7 +101,7 @@ fn rust_broker_codex_writes_sidecar_and_serves_socket() {
         .spawn()
         .unwrap();
 
-    let meta = wait_for_meta(&dir.path().join("app"));
+    let meta = wait_for_live_meta(&dir.path().join("app"));
     let sock_path = meta["sock_path"].as_str().unwrap().to_string();
     assert_eq!(meta["backend"], "codex");
     assert_eq!(meta["agent_backend"], "codex");
@@ -157,7 +162,7 @@ fn rust_broker_pi_writes_session_path_and_pi_socket_commands() {
         .spawn()
         .unwrap();
 
-    let meta = wait_for_meta(&dir.path().join("app"));
+    let meta = wait_for_live_meta(&dir.path().join("app"));
     let sock_path = meta["sock_path"].as_str().unwrap().to_string();
     assert_eq!(meta["backend"], "pi");
     assert_eq!(meta["transport"], "pi-rpc");
