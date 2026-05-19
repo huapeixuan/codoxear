@@ -370,6 +370,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "indexmap",
+ "isahc",
  "libc",
  "p256",
  "serde",

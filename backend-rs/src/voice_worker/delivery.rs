@@ -65,8 +65,11 @@ pub fn load_worker_settings(app_dir: &Path) -> Value {
 }
 
 pub fn should_deliver_row(row: &Value) -> bool {
-    row.get("narrated_status").and_then(Value::as_str) == Some("pending")
-        || row.get("push_status").and_then(Value::as_str) == Some("pending")
+    let push_pending = row.get("push_status").and_then(Value::as_str) == Some("pending");
+    let narration_pending = row.get("narrated_status").and_then(Value::as_str) == Some("pending");
+    let summary_failed = row.get("summary_status").and_then(Value::as_str) == Some("error");
+    let final_response = row.get("message_class").and_then(Value::as_str) == Some("final_response");
+    push_pending || (narration_pending && !(final_response && summary_failed))
 }
 
 pub fn ledger_sort_ts(row: &Value) -> f64 {

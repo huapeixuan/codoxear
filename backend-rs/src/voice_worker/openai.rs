@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
-use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::time::Duration;
+
+use isahc::prelude::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SummaryRequest {
@@ -97,38 +97,27 @@ impl HttpOpenAiVoiceClient {
     fn post_json(&self, base_url: &str, route: &str, payload: &Value) -> Result<Vec<u8>, String> {
         let endpoint = parse_http_url(base_url, route)?;
         let body = serde_json::to_vec(payload).map_err(|err| err.to_string())?;
-        let mut stream = TcpStream::connect((endpoint.host.as_str(), endpoint.port))
-            .map_err(|err| format!("connect {}:{}: {err}", endpoint.host, endpoint.port))?;
-        stream
-            .set_read_timeout(Some(self.timeout))
-            .map_err(|err| format!("set read timeout: {err}"))?;
-        stream
-            .set_write_timeout(Some(self.timeout))
-            .map_err(|err| format!("set write timeout: {err}"))?;
-        let request = format!(
-            "POST {} HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nAccept: application/json, application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            endpoint.path,
-            endpoint.host_header,
-            self.api_key,
-            body.len()
-        );
-        stream
-            .write_all(request.as_bytes())
-            .and_then(|_| stream.write_all(&body))
-            .map_err(|err| format!("write {route}: {err}"))?;
-        let mut raw = Vec::new();
-        stream
-            .read_to_end(&mut raw)
+        let mut response = isahc::Request::post(endpoint.url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, application/octet-stream")
+            .timeout(self.timeout)
+            .body(body)
+            .map_err(|err| format!("build {route}: {err}"))?
+            .send()
+            .map_err(|err| format!("send {route}: {err}"))?;
+        let status = response.status().as_u16();
+        let body = response
+            .bytes()
             .map_err(|err| format!("read {route}: {err}"))?;
-        let response = parse_http_response(&raw)?;
-        if !(200..300).contains(&response.status) {
+        if !(200..300).contains(&status) {
             return Err(format!(
                 "{route} failed with {}: {}",
-                response.status,
-                clip_error(&String::from_utf8_lossy(&response.body))
+                status,
+                clip_error(&String::from_utf8_lossy(&body))
             ));
         }
-        Ok(response.body)
+        Ok(body)
     }
 }
 
@@ -212,69 +201,34 @@ pub fn parse_summary_response(body: &[u8]) -> Result<String, String> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct HttpEndpoint {
-    host: String,
-    host_header: String,
-    port: u16,
-    path: String,
+    url: String,
+}
+
+pub fn openai_endpoint_url(base_url: &str, route: &str) -> Result<String, String> {
+    parse_http_url(base_url, route).map(|endpoint| endpoint.url)
 }
 
 fn parse_http_url(base_url: &str, route: &str) -> Result<HttpEndpoint, String> {
     let trimmed = base_url.trim().trim_end_matches('/');
+    if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+        return Err("tts_base_url must start with http:// or https://".to_string());
+    }
     let rest = trimmed
         .strip_prefix("http://")
-        .ok_or_else(|| "Rust OpenAI client currently supports http:// endpoints in tests; use trait mocks for https://".to_string())?;
-    let (authority, base_path) = rest.split_once('/').unwrap_or((rest, ""));
-    let (host, port) = if let Some((host, raw_port)) = authority.rsplit_once(':') {
-        let port = raw_port
-            .parse::<u16>()
-            .map_err(|_| format!("invalid port in {base_url}"))?;
-        (host.to_string(), port)
-    } else {
-        (authority.to_string(), 80)
-    };
-    if host.trim().is_empty() {
+        .or_else(|| trimmed.strip_prefix("https://"))
+        .unwrap_or(trimmed);
+    let (authority, _) = rest.split_once('/').unwrap_or((rest, ""));
+    if authority.trim().is_empty() {
         return Err("empty OpenAI host".to_string());
     }
-    let path = format!(
-        "/{}{}",
-        base_path.trim_matches('/'),
-        route
-            .strip_prefix('/')
-            .map(|value| format!("/{value}"))
-            .unwrap_or_else(|| format!("/{route}"))
-    );
-    Ok(HttpEndpoint {
-        host: host.clone(),
-        host_header: if port == 80 {
-            host
-        } else {
-            format!("{host}:{port}")
-        },
-        port,
-        path: path.replace("//", "/"),
-    })
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct HttpResponse {
-    status: u16,
-    body: Vec<u8>,
-}
-
-fn parse_http_response(raw: &[u8]) -> Result<HttpResponse, String> {
-    let split = raw
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .ok_or_else(|| "malformed HTTP response".to_string())?;
-    let head = String::from_utf8_lossy(&raw[..split]);
-    let body = raw[split + 4..].to_vec();
-    let status = head
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .and_then(|code| code.parse::<u16>().ok())
-        .ok_or_else(|| "malformed HTTP status".to_string())?;
-    Ok(HttpResponse { status, body })
+    let route = route.trim_start_matches('/');
+    if route.is_empty() {
+        return Err("empty OpenAI route".to_string());
+    }
+    let url = format!("{trimmed}/{route}");
+    url.parse::<isahc::http::Uri>()
+        .map_err(|_| format!("invalid OpenAI base URL: {base_url}"))?;
+    Ok(HttpEndpoint { url })
 }
 
 fn compact_text(raw: &str) -> String {

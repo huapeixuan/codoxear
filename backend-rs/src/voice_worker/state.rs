@@ -65,6 +65,12 @@ pub struct WorkerStepReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct FinalResponseProcessResult {
+    stop_tts: bool,
+    action: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoiceRuntimeSnapshot {
     pub queue_depth: usize,
     pub active_listener_count: usize,
@@ -387,7 +393,7 @@ impl VoiceRuntime {
         self.patch_task_rows(&task, json!({"voice": voice.clone(), "last_error": ""}))?;
 
         if message_class == "final_response" {
-            self.process_final_push_and_summary(
+            let final_result = self.process_final_push_and_summary(
                 &task,
                 &mut row,
                 &settings,
@@ -395,6 +401,12 @@ impl VoiceRuntime {
                 now_ts,
                 client,
             )?;
+            if final_result.stop_tts {
+                return Ok(WorkerStepReport {
+                    action: final_result.action,
+                    message_id: task.message_id,
+                });
+            }
             if !settings
                 .get("tts_enabled_for_final_response")
                 .and_then(Value::as_bool)
@@ -505,7 +517,7 @@ impl VoiceRuntime {
         push_sender: &W,
         now_ts: f64,
         client: &C,
-    ) -> Result<(), String>
+    ) -> Result<FinalResponseProcessResult, String>
     where
         C: OpenAiVoiceClient,
         W: WebPushSender,
@@ -562,15 +574,19 @@ impl VoiceRuntime {
                         }),
                     )?;
                     self.set_last_error(&error);
-                    if tts_enabled {
-                        self.send_final_response_push(task, row, push_sender, now_ts)?;
-                        return Ok(());
-                    }
+                    self.send_final_response_push(task, row, push_sender, now_ts)?;
+                    return Ok(FinalResponseProcessResult {
+                        stop_tts: true,
+                        action: "summary-error".to_string(),
+                    });
                 }
             }
         }
         self.send_final_response_push(task, row, push_sender, now_ts)?;
-        Ok(())
+        Ok(FinalResponseProcessResult {
+            stop_tts: false,
+            action: "final-push".to_string(),
+        })
     }
 
     fn send_final_response_push<W>(

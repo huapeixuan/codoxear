@@ -15,7 +15,8 @@ use codoxear_backend_rs::voice_worker::ledger::{
 };
 use codoxear_backend_rs::voice_worker::locks::VoiceOwnerLock;
 use codoxear_backend_rs::voice_worker::openai::{
-    parse_summary_response, summary_payload, OpenAiVoiceClient, SummaryRequest, TtsRequest,
+    openai_endpoint_url, parse_summary_response, summary_payload, OpenAiVoiceClient,
+    SummaryRequest, TtsRequest,
 };
 use codoxear_backend_rs::voice_worker::scan::{
     assistant_messages_from_log, observe_messages_into_ledger, voice_scan_rows_once,
@@ -74,6 +75,12 @@ impl FakeOpenAi {
     fn with_speech_error(message: &str) -> Self {
         let client = Self::success();
         *client.speech.lock().unwrap() = Err(message.to_string());
+        client
+    }
+
+    fn with_summary_error(message: &str) -> Self {
+        let client = Self::success();
+        *client.summary.lock().unwrap() = Err(message.to_string());
         client
     }
 }
@@ -754,6 +761,27 @@ fn openai_summary_payload_and_response_parsing_match_python_shapes() {
 }
 
 #[test]
+fn openai_endpoint_builder_accepts_default_https_base_url() {
+    assert_eq!(
+        openai_endpoint_url("https://api.openai.com/v1", "/chat/completions").unwrap(),
+        "https://api.openai.com/v1/chat/completions"
+    );
+    assert_eq!(
+        openai_endpoint_url("https://api.openai.com/v1/", "/chat/completions").unwrap(),
+        "https://api.openai.com/v1/chat/completions"
+    );
+    assert_eq!(
+        openai_endpoint_url("http://127.0.0.1:8080/v1/", "/audio/speech").unwrap(),
+        "http://127.0.0.1:8080/v1/audio/speech"
+    );
+    assert!(
+        openai_endpoint_url("ftp://api.openai.com/v1", "/audio/speech")
+            .unwrap_err()
+            .contains("tts_base_url")
+    );
+}
+
+#[test]
 fn hls_stream_appends_fake_segments_silence_and_rolls_cleanup() {
     let dir = TempDir::new().unwrap();
     let mut stream = MergedHlsStream::new(dir.path().join("audio")).unwrap();
@@ -1074,6 +1102,86 @@ fn final_response_push_partial_failure_all_failure_and_stale_drop_are_recorded()
     let ledger: Value =
         serde_json::from_slice(&fs::read(app_dir.join(DELIVERY_LEDGER_FILE)).unwrap()).unwrap();
     assert_eq!(ledger["m2"]["push_status"], "error");
+}
+
+#[test]
+fn final_response_summary_error_sends_push_but_does_not_tts_or_hls() {
+    reset_runtime_registry_for_tests();
+    let dir = TempDir::new().unwrap();
+    let app_dir = dir.path();
+    write_voice_settings(app_dir, json!({"tts_enabled_for_final_response": true}));
+    write_mobile_subscriptions(app_dir, &["https://push.example.test/ok"]);
+    write_ledger(
+        app_dir,
+        json!({
+            "m1": {
+                "message_id":"m1", "session_id":"sid", "session_display_name":"Repo",
+                "message_class":"final_response", "preview_text":"Final body", "notification_text":"",
+                "summary_text":"", "summary_status":"pending", "narrated_status":"pending",
+                "push_status":"pending", "voice":"", "created_ts":1.0, "updated_ts":1.0,
+                "last_error":""
+            }
+        }),
+    );
+    let runtime = runtime_for_app_dir(app_dir);
+    runtime.listener_heartbeat("c1", true, 10.0).unwrap();
+    let client = FakeOpenAi::with_summary_error("/chat/completions failed with 500");
+    let push = FakePushSender::new(vec![Ok(())]);
+    let report = runtime
+        .worker_step(&client, &FakeHlsRunner, &push, 10.0)
+        .unwrap()
+        .unwrap();
+    assert_eq!(report.action, "summary-error");
+    assert!(runtime
+        .worker_step(&client, &FakeHlsRunner, &push, 10.1)
+        .unwrap()
+        .is_none());
+    let ledger: Value =
+        serde_json::from_slice(&fs::read(app_dir.join(DELIVERY_LEDGER_FILE)).unwrap()).unwrap();
+    assert_eq!(ledger["m1"]["summary_status"], "error");
+    assert_eq!(ledger["m1"]["narrated_status"], "error");
+    assert_eq!(ledger["m1"]["push_status"], "sent");
+    assert!(client.speech_calls.lock().unwrap().is_empty());
+    assert_eq!(push.calls.lock().unwrap().len(), 1);
+    assert!(!app_dir.join("audio/live.m3u8").exists());
+}
+
+#[test]
+fn final_response_summary_error_row_is_not_requeued_for_tts_after_restart() {
+    reset_runtime_registry_for_tests();
+    let dir = TempDir::new().unwrap();
+    let app_dir = dir.path();
+    write_voice_settings(app_dir, json!({"tts_enabled_for_final_response": true}));
+    write_ledger(
+        app_dir,
+        json!({
+            "m1": {
+                "message_id":"m1", "session_id":"sid", "session_display_name":"Repo",
+                "message_class":"final_response", "preview_text":"Final body", "notification_text":"Final body",
+                "summary_text":"", "summary_status":"error", "narrated_status":"pending",
+                "push_status":"sent", "voice":"", "created_ts":1.0, "updated_ts":1.0,
+                "last_error":"/chat/completions failed with 500"
+            }
+        }),
+    );
+    let runtime = runtime_for_app_dir(app_dir);
+    runtime.listener_heartbeat("c1", true, 10.0).unwrap();
+    assert_eq!(runtime.enqueue_pending_ledger_for_delivery().unwrap(), 0);
+    assert!(runtime
+        .worker_step(
+            &FakeOpenAi::success(),
+            &FakeHlsRunner,
+            &FakePushSender::default(),
+            10.0
+        )
+        .unwrap()
+        .is_none());
+
+    let ledger: Value =
+        serde_json::from_slice(&fs::read(app_dir.join(DELIVERY_LEDGER_FILE)).unwrap()).unwrap();
+    assert_eq!(ledger["m1"]["summary_status"], "error");
+    assert_eq!(ledger["m1"]["narrated_status"], "pending");
+    assert!(!app_dir.join("audio/live.m3u8").exists());
 }
 
 #[test]
