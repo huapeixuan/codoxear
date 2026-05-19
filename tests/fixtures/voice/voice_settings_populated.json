@@ -1,0 +1,8 @@
+{
+  "tts_enabled_for_narration": true,
+  "tts_enabled_for_final_response": false,
+  "tts_base_url": "https://tts.example.com/v1/",
+  "tts_api_key": "sk-test",
+  "summarization_model": "summary-model",
+  "tts_model": "tts-model"
+}

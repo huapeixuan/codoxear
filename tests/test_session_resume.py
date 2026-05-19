@@ -523,6 +523,43 @@ class TestSpawnWebSessionResume(unittest.TestCase):
         self.assertEqual(result, {"broker_pid": 3210})
         self.assertEqual(thread_calls, ["start"])
 
+    def test_spawn_web_session_uses_rust_broker_bin_when_enabled(self) -> None:
+        manager = SessionManager.__new__(SessionManager)
+
+        class _Proc:
+            pid = 3220
+            stderr = None
+
+            def wait(self) -> int:
+                return 0
+
+        with (
+            TemporaryDirectory() as td,
+            patch.dict(
+                "os.environ",
+                {"CODOXEAR_RUST_BROKER_BIN": " /tmp/codoxear-broker-rs "},
+                clear=False,
+            ),
+            patch("codoxear.server._wait_or_raise", return_value=None),
+            patch(
+                "codoxear.server._wait_for_spawned_broker_meta",
+                return_value={"broker_pid": 3220},
+            ),
+            patch(
+                "codoxear.server.subprocess.Popen", return_value=_Proc()
+            ) as popen_mock,
+            patch.object(threading.Thread, "start", lambda self: None),
+        ):
+            SessionManager.spawn_web_session(manager, cwd=td, args=["--search"])
+
+        argv = popen_mock.call_args.args[0]
+        self.assertEqual(
+            argv[:4],
+            ["/tmp/codoxear-broker-rs", "--cwd", str(Path(td).resolve()), "--"],
+        )
+        self.assertIn("--dangerously-bypass-approvals-and-sandbox", argv)
+        self.assertNotIn("codoxear.broker", argv)
+
     def test_spawn_web_session_passes_resume_id_to_broker(self) -> None:
         manager = SessionManager.__new__(SessionManager)
         manager._aliases = {}
@@ -658,6 +695,44 @@ class TestSpawnWebSessionResume(unittest.TestCase):
         self.assertEqual(result, {"broker_pid": 5321, "backend": "pi"})
         self.assertEqual(thread_calls, ["start"])
 
+    def test_spawn_web_session_uses_rust_broker_bin_for_pi_when_enabled(self) -> None:
+        manager = SessionManager.__new__(SessionManager)
+
+        class _Proc:
+            pid = 5322
+            stderr = None
+
+            def wait(self) -> int:
+                return 0
+
+        with (
+            TemporaryDirectory() as td,
+            patch.dict(
+                "os.environ",
+                {"CODOXEAR_RUST_BROKER_BIN": "/tmp/codoxear-broker-rs"},
+                clear=False,
+            ),
+            patch("codoxear.server._wait_or_raise", return_value=None),
+            patch(
+                "codoxear.server._wait_for_spawned_broker_meta",
+                return_value={"broker_pid": 5322, "backend": "pi"},
+            ),
+            patch(
+                "codoxear.server.subprocess.Popen", return_value=_Proc()
+            ) as popen_mock,
+            patch.object(threading.Thread, "start", lambda self: None),
+        ):
+            SessionManager.spawn_web_session(manager, cwd=td, backend="pi")
+
+        argv = popen_mock.call_args.args[0]
+        self.assertEqual(
+            argv[:3], ["/tmp/codoxear-broker-rs", "--cwd", str(Path(td).resolve())]
+        )
+        self.assertEqual(argv[3], "--session-file")
+        self.assertIn("--", argv)
+        self.assertIn("-e", argv)
+        self.assertNotIn("codoxear.pi_broker", argv)
+
     def test_spawn_web_session_passes_model_and_reasoning_to_broker(self) -> None:
         manager = SessionManager.__new__(SessionManager)
         thread_calls: list[str] = []
@@ -791,6 +866,50 @@ class TestSpawnWebSessionResume(unittest.TestCase):
         self.assertIn("CODEX_WEB_SERVICE_TIER=fast", shell_cmd)
         self.assertIn("codoxear.broker", shell_cmd)
         wait_mock.assert_called_once()
+
+    def test_spawn_web_session_tmux_uses_rust_broker_bin_when_enabled(self) -> None:
+        manager = SessionManager.__new__(SessionManager)
+
+        with (
+            TemporaryDirectory() as td,
+            patch.dict(
+                "os.environ",
+                {"CODOXEAR_RUST_BROKER_BIN": " /tmp/codoxear-broker-rs "},
+                clear=False,
+            ),
+            patch("codoxear.server.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "codoxear.server._wait_for_spawned_broker_meta",
+                return_value={"broker_pid": 7778},
+            ),
+            patch(
+                "codoxear.server.subprocess.run",
+                side_effect=[
+                    subprocess.CompletedProcess(
+                        ["/usr/bin/tmux", "has-session", "-t", "codoxear"],
+                        1,
+                        stdout="",
+                        stderr="",
+                    ),
+                    subprocess.CompletedProcess(
+                        ["/usr/bin/tmux", "new-session"], 0, stdout="%8\n", stderr=""
+                    ),
+                ],
+            ) as run_mock,
+        ):
+            SessionManager.spawn_web_session(
+                manager,
+                cwd=td,
+                create_in_tmux=True,
+            )
+
+        shell_cmd = run_mock.call_args_list[1].args[0][-1]
+        self.assertIn("/tmp/codoxear-broker-rs", shell_cmd)
+        self.assertIn("--cwd", shell_cmd)
+        self.assertIn(str(Path(td).resolve()), shell_cmd)
+        self.assertIn("CODEX_WEB_AGENT_BACKEND=codex", shell_cmd)
+        self.assertIn("CODEX_WEB_TRANSPORT=tmux", shell_cmd)
+        self.assertNotIn("codoxear.broker", shell_cmd)
 
     def test_spawn_web_session_rejects_tmux_when_unavailable(self) -> None:
         manager = SessionManager.__new__(SessionManager)

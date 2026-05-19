@@ -172,7 +172,7 @@ class Sessiond:
             return
         try:
             os.killpg(root_pid, signal.SIGKILL)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):
             return
 
     def _pty_reader(self) -> None:

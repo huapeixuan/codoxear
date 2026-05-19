@@ -1,0 +1,3 @@
+{"type":"session","id":"pi-session-2","cwd":"/tmp","provider":"openai","modelId":"gpt-5","thinkingLevel":"medium"}
+{"type":"model_change","provider":"anthropic","modelId":"claude-opus"}
+{"type":"thinking_level_change","thinkingLevel":"xhigh"}

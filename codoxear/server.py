@@ -876,6 +876,22 @@ def _is_same_password(pw: str) -> bool:
     return hmac.compare_digest(_sha256_hex(pw.encode("utf-8")), _password_hash())
 
 
+def _env_flag_truthy(name: str) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    trimmed = str(value).strip()
+    return bool(trimmed) and trimmed != "0" and trimmed.lower() != "false"
+
+
+def _rust_broker_bin() -> str | None:
+    value = os.environ.get("CODOXEAR_RUST_BROKER_BIN")
+    if value is None:
+        return None
+    trimmed = str(value).strip()
+    return trimmed or None
+
+
 def _safe_read_text(path: Path, max_bytes: int = 512 * 1024) -> str:
     try:
         b = path.read_bytes()
@@ -4184,20 +4200,27 @@ class SessionManager:
             subscriptions_path=PUSH_SUBSCRIPTIONS_PATH,
             delivery_ledger_path=DELIVERY_LEDGER_PATH,
             vapid_private_key_path=VAPID_PRIVATE_KEY_PATH,
+            enable_worker=not _env_flag_truthy("CODOXEAR_ENABLE_VOICE_WORKER"),
         )
         self._discover_existing(force=True, skip_invalid_sidecars=True)
-        self._harness_thr = threading.Thread(
-            target=self._harness_loop, name="harness", daemon=True
-        )
-        self._harness_thr.start()
-        self._queue_thr = threading.Thread(
-            target=self._queue_loop, name="queue", daemon=True
-        )
-        self._queue_thr.start()
-        self._voice_push_scan_thr = threading.Thread(
-            target=self._voice_push_scan_loop, name="voice-push-scan", daemon=True
-        )
-        self._voice_push_scan_thr.start()
+        self._harness_thr = None
+        if not _env_flag_truthy("CODOXEAR_ENABLE_HARNESS_SWEEP"):
+            self._harness_thr = threading.Thread(
+                target=self._harness_loop, name="harness", daemon=True
+            )
+            self._harness_thr.start()
+        self._queue_thr = None
+        if not _env_flag_truthy("CODOXEAR_ENABLE_QUEUE_SWEEP"):
+            self._queue_thr = threading.Thread(
+                target=self._queue_loop, name="queue", daemon=True
+            )
+            self._queue_thr.start()
+        self._voice_push_scan_thr = None
+        if not _env_flag_truthy("CODOXEAR_ENABLE_VOICE_SCAN"):
+            self._voice_push_scan_thr = threading.Thread(
+                target=self._voice_push_scan_loop, name="voice-push-scan", daemon=True
+            )
+            self._voice_push_scan_thr.start()
 
     def stop(self) -> None:
         self._stop.set()
@@ -7696,22 +7719,31 @@ class SessionManager:
             else:
                 session_path = _pi_new_session_file_for_cwd(cwd_path)
             session_path.parent.mkdir(parents=True, exist_ok=True)
-            argv = [
-                sys.executable,
-                "-m",
-                "codoxear.pi_broker",
-                "--cwd",
-                str(cwd_path),
-                "--session-file",
-                str(session_path),
-                "--",
-                "-e",
-                str(
-                    Path(__file__).resolve().parent
-                    / "pi_extensions"
-                    / "ask_user_bridge.ts"
-                ),
-            ]
+            rust_broker_bin = _rust_broker_bin()
+            argv = (
+                [rust_broker_bin, "--cwd", str(cwd_path)]
+                if rust_broker_bin is not None
+                else [
+                    sys.executable,
+                    "-m",
+                    "codoxear.pi_broker",
+                    "--cwd",
+                    str(cwd_path),
+                ]
+            )
+            argv.extend(
+                [
+                    "--session-file",
+                    str(session_path),
+                    "--",
+                    "-e",
+                    str(
+                        Path(__file__).resolve().parent
+                        / "pi_extensions"
+                        / "ask_user_bridge.ts"
+                    ),
+                ]
+            )
             env = dict(os.environ)
             if _DOTENV.exists():
                 for k, v in _load_env_file(_DOTENV).items():
@@ -7823,7 +7855,19 @@ class SessionManager:
         if worktree_branch is not None:
             spawn_cwd = _create_git_worktree(cwd_path, worktree_branch)
 
-        argv = [sys.executable, "-m", "codoxear.broker", "--cwd", str(spawn_cwd), "--"]
+        rust_broker_bin = _rust_broker_bin()
+        argv = (
+            [rust_broker_bin, "--cwd", str(spawn_cwd), "--"]
+            if rust_broker_bin is not None
+            else [
+                sys.executable,
+                "-m",
+                "codoxear.broker",
+                "--cwd",
+                str(spawn_cwd),
+                "--",
+            ]
+        )
         codex_args: list[str] = []
         resume_row: dict[str, Any] | None = None
         if backend_name == "codex":

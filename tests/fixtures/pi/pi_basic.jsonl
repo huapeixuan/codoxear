@@ -1,0 +1,5 @@
+{"type":"session","id":"pi-session-1","cwd":"/tmp","provider":"anthropic","modelId":"claude-sonnet","thinkingLevel":"high"}
+{"type":"message","timestamp":"2026-05-09T11:00:00Z","message":{"role":"user","content":[{"type":"text","text":"Hello Pi"}]}}
+{"type":"message","timestamp":"2026-05-09T11:00:01Z","message":{"role":"assistant","content":[{"type":"thinking","text":"hmm"},{"type":"toolCall","name":"Read"}]}}
+{"type":"message","timestamp":"2026-05-09T11:00:02Z","message":{"role":"toolResult","content":[{"type":"text","text":"result"}]}}
+{"type":"message","timestamp":"2026-05-09T11:00:03Z","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet","usage":{"totalTokens":90000},"stopReason":"end_turn","content":[{"type":"text","text":"Hello human"}]}}
