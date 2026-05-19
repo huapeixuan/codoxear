@@ -60,7 +60,7 @@ Rust background writers are opt-in during Phase 3 and Python remains the default
 - `CODOXEAR_ENABLE_HARNESS_SWEEP=1` makes Rust own harness injection and `harness.json`; Python skips its harness sweep thread while this flag is truthy.
 - `CODOXEAR_ENABLE_VOICE_SCAN=1` is reserved for Phase 5 voice ownership; Python skips its voice scan thread while truthy, but Phase 3 Rust must not send WebPush, synthesize TTS, or write voice delivery ledgers.
 
-Rollback is to stop Rust, unset the corresponding `CODOXEAR_ENABLE_*` flag, and restart the Python `codoxear-server`. Do not leave both servers running with the same writer flag enabled; `session_queues.json`, `harness.json`, and voice state files are single-writer cutover files.
+Historical Phase 3 rollback was to stop Rust, unset the corresponding `CODOXEAR_ENABLE_*` flag, and restart the Python server. After Phase 6 this is no longer an active rollback path; rollback is git revert. `session_queues.json`, `harness.json`, and voice state files remain single-writer files.
 
 ## Phase 3 Rust write strategy
 
@@ -68,11 +68,11 @@ Rollback is to stop Rust, unset the corresponding `CODOXEAR_ENABLE_*` flag, and 
 
 ## Phase 4 Rust broker rollout strategy
 
-`rust-backend-broker` introduces `CODOXEAR_RUST_BROKER_BIN` as an opt-in broker executable selector for Python and Rust session-create paths. When unset or blank, both servers keep spawning the Python broker fallback. When set, new Codex/Pi web-owned sessions use the selected `codoxear-broker-rs` binary while preserving the same `socks/*.json` filenames, schema keys, nullable fields, socket paths, and `0600` sidecar/socket modes. Rust sidecar helpers use same-directory temp file + `fsync` + rename where they write metadata, which is compatible with the existing Python readers.
+`rust-backend-broker` introduced `CODOXEAR_RUST_BROKER_BIN` as a historical opt-in broker executable selector. After Phase 6, new Codex/Pi web-owned sessions use the Rust broker default or this override path; unsetting it does not select a Python fallback. Rust sidecar helpers use same-directory temp file + `fsync` + rename while preserving the same `socks/*.json` filenames, schema keys, nullable fields, socket paths, and `0600` sidecar/socket modes.
 
 ### Phase 4 Rust broker validation note
 
-The Phase 4 Rust broker remains opt-in behind `CODOXEAR_RUST_BROKER_BIN`; unsetting the variable keeps Python broker fallback unchanged. Rust writes the same `socks/*.json` sidecar filenames and schema families as Python, with atomic same-directory temp-file replacement and final mode `0600`.
+The Phase 4 Rust broker was originally opt-in behind `CODOXEAR_RUST_BROKER_BIN`. Phase 6 makes Rust broker the default; unsetting the variable keeps the Rust default. Rust writes the same `socks/*.json` sidecar filenames and schema families as historical Python sidecars, with atomic same-directory temp-file replacement and final mode `0600`.
 
 Validation coverage added for the cutover includes:
 
@@ -92,3 +92,16 @@ Validation coverage added for the cutover includes:
 - `POST /api/notifications/test_push` is still no-side-effect while `CODOXEAR_ENABLE_VOICE_WORKER` is off; when the flag is on it sends encrypted WebPush through the Rust WebPush/VAPID path and updates or drops subscription records with Python-compatible timestamps/errors.
 - `POST /api/audio/test_announcement` remains guarded by the worker flag, active listener, and `tts_api_key`; when enabled, it queues a Rust worker task that can synthesize TTS and append HLS segments.
 - Rollback is to stop Rust, unset both voice flags, and restart Python. Do not delete the ledger, subscription file, settings file, or VAPID PEM during rollback.
+
+## Phase 6 Rust-only cutover note
+
+`rust-backend-cutover-finish` preserves the file names and schemas above but
+removes the Python writers/readers from the shipped runtime. Existing state that
+was written by the pre-Phase-6 Python server, broker, sessiond, or voice worker
+must remain readable by `codoxear-backend-rs` and `codoxear-broker-rs`; new
+runtime writes are Rust-only.
+
+After Phase 6, worker flags only enable/disable Rust side effects. They do not
+select a Python fallback. Operational rollback is git revert to the Phase 5 PASS
+baseline/descendant, not unsetting `CODOXEAR_RUST_BROKER_BIN` or restarting a
+Python server.

@@ -392,48 +392,6 @@ fn rust_created_vapid_pem_is_reloaded_with_stable_public_key() {
 }
 
 #[test]
-fn rust_created_vapid_pem_is_python_py_vapid_readable() {
-    let dir = TempDir::new().unwrap();
-    let rust_public_key = load_or_create_public_key(dir.path()).unwrap();
-    let script = r#"
-import base64
-import sys
-from cryptography.hazmat.primitives import serialization
-from py_vapid import Vapid
-
-vapid = Vapid.from_file(sys.argv[1])
-public = vapid.public_key.public_bytes(
-    encoding=serialization.Encoding.X962,
-    format=serialization.PublicFormat.UncompressedPoint,
-)
-print(base64.urlsafe_b64encode(public).rstrip(b'=').decode('ascii'))
-"#;
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let venv_python = manifest_dir.parent().unwrap().join(".venv/bin/python");
-    let python = if venv_python.exists() {
-        venv_python
-    } else {
-        PathBuf::from("python3")
-    };
-    let output = std::process::Command::new(python)
-        .arg("-c")
-        .arg(script)
-        .arg(dir.path().join(VAPID_PRIVATE_KEY_FILE))
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("run python with py_vapid");
-    assert!(
-        output.status.success(),
-        "py_vapid failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout).trim(),
-        rust_public_key
-    );
-}
-
-#[test]
 fn vapid_subject_normalization_matches_python_rules_without_tailscale_probe() {
     assert_eq!(
         normalize_vapid_subject(" https://example.test/ ").unwrap(),

@@ -38,8 +38,11 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use axum::Router;
 use serde_json::{json, Value};
+use std::fs;
+use tower_http::services::{ServeDir, ServeFile};
 
 pub fn router(state: AppState) -> Router {
+    let static_dir = repo_static_dir();
     let protected_v1 = Router::new()
         .route("/api/v1/me", get(me))
         .route("/api/v1/sessions/bootstrap", get(sessions_bootstrap))
@@ -164,10 +167,62 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/health", get(health))
         .route("/api/v1/login", post(login))
         .route("/api/v1/hooks/notify", post(hooks_notify))
+        .route("/", get(static_index))
+        .nest_service("/static", ServeDir::new(static_dir.clone()))
+        .nest_service("/assets", ServeDir::new(static_dir.join("dist/assets")))
+        .route_service(
+            "/manifest.webmanifest",
+            ServeFile::new(static_dir.join("manifest.webmanifest")),
+        )
+        .route_service(
+            "/service-worker.js",
+            ServeFile::new(static_dir.join("service-worker.js")),
+        )
+        .route_service(
+            "/favicon.ico",
+            ServeFile::new(static_dir.join("favicon.png")),
+        )
+        .route_service(
+            "/favicon.png",
+            ServeFile::new(static_dir.join("favicon.png")),
+        )
         .merge(protected_v1)
         .nest("/api", public_api_router(state.clone()))
         .fallback(not_found)
         .with_state(state)
+}
+
+async fn static_index() -> Response {
+    let static_dir = repo_static_dir();
+    let dist_index = static_dir.join("dist/index.html");
+    let source_index = static_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|repo| repo.join("web/index.html"));
+    let bytes = fs::read(&dist_index).or_else(|_| {
+        source_index
+            .as_ref()
+            .map(fs::read)
+            .unwrap_or_else(|| fs::read(&dist_index))
+    });
+    match bytes {
+        Ok(bytes) => {
+            let mut response = Response::new(Body::from(bytes));
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/html;charset=utf-8"),
+            );
+            response
+        }
+        Err(_) => not_found().await,
+    }
+}
+
+fn repo_static_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("codoxear/static")
 }
 
 fn public_api_router(state: AppState) -> Router<AppState> {

@@ -8,4 +8,3 @@ pub mod pi_rpc;
 pub mod pty;
 pub mod runtime;
 pub mod runtime_support;
-pub mod shim;

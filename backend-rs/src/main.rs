@@ -34,6 +34,6 @@ async fn main() {
         .unwrap_or(8743);
     let addr = SocketAddr::new(host, port);
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    tracing::info!("codoxear-backend-rs (phase 1) listening on http://{addr}");
+    tracing::info!("codoxear-backend-rs listening on http://{addr}");
     axum::serve(listener, app).await.unwrap();
 }

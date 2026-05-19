@@ -39,9 +39,9 @@
 
 ## 8. Phase 6 — Remove Python backend
 
-- [ ] 8.1 Open OpenSpec change `rust-backend-cutover-finish`. Delete `codoxear/server.py`, `codoxear/broker.py`, `codoxear/pi_broker.py`, `codoxear/voice_push.py`, `codoxear/sessiond.py`, `codoxear/pi_*.py`, `codoxear/rollout_log.py`, `codoxear/agent_backend.py`, `codoxear/git_context.py`, `codoxear/util.py`, `codoxear/pty_util.py`, and the matching `tests/test_*.py`. Update `pyproject.toml` to either drop Python entry points or repurpose the wheel as static-asset-only. Update `README.md`/`AGENTS.md` to describe Rust-only deploy. Definition of Done: only `codoxear/static/` remains under `codoxear/`; `git grep -l 'codex_web\|VoicePushCoordinator'` returns 0 matches; no broken imports.
+- [x] 8.1 OpenSpec change `rust-backend-cutover-finish` implemented on this Phase 6 branch. Delete `codoxear/server.py`, `codoxear/broker.py`, `codoxear/pi_broker.py`, `codoxear/voice_push.py`, `codoxear/sessiond.py`, `codoxear/pi_*.py`, `codoxear/rollout_log.py`, `codoxear/agent_backend.py`, `codoxear/git_context.py`, `codoxear/util.py`, `codoxear/pty_util.py`, and the matching `tests/test_*.py`. Update `pyproject.toml` to either drop Python entry points or repurpose the wheel as static-asset-only. Update `README.md`/`AGENTS.md` to describe Rust-only deploy. Definition of Done: only `codoxear/static/` remains under `codoxear/`; `git grep -l 'codex_web\|VoicePushCoordinator'` returns 0 matches; no broken imports.
 
 ## 9. Cross-phase verification
 
-- [ ] 9.1 At the end of every phase change, append one row to `docs/cutover/cutover-log.md` (date, phase, env flags now safe to enable in production, rollback verified ✅/❌, link to PR). The umbrella change is "complete" only when this log is full through Phase 6.
+- [x] 9.1 At the end of every phase change, append one row to `docs/cutover/cutover-log.md` (date, phase, env flags now safe to enable in production, rollback verified ✅/❌, link to PR). The umbrella change is "complete" only when this log is full through Phase 6.
 - [ ] 9.2 Before archiving this umbrella change, confirm: (a) `openspec list` shows zero remaining `rust-backend-*` changes in flight; (b) `coding-agent` has run the contract suite and posted a green CI link; (c) `go-reviewer` is not used because there is no Go code, but `rust-reviewer` has signed off on the final state of `backend-rs/`.

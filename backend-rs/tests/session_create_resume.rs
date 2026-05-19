@@ -121,15 +121,22 @@ fn selected_broker_argv_uses_rust_bin_for_codex_and_pi_when_set() {
 }
 
 #[test]
-fn selected_broker_argv_keeps_python_fallback_when_rust_bin_blank() {
-    let argv = selected_broker_argv(
+fn selected_broker_argv_defaults_to_rust_broker_when_override_blank() {
+    let pi_argv = selected_broker_argv(
         "pi",
         Path::new("/repo"),
         Some(Path::new("/tmp/pi.jsonl")),
         Some("  "),
     );
-    assert!(argv.iter().any(|arg| arg == "codoxear.pi_broker"));
-    assert_eq!(argv[argv.len() - 1], "--");
+    assert_eq!(pi_argv[0], "codoxear-broker-rs");
+    assert!(pi_argv.iter().any(|arg| arg == "--session-file"));
+    assert_eq!(pi_argv[pi_argv.len() - 1], "--");
+
+    let codex_argv = selected_broker_argv("codex", Path::new("/repo"), None, None);
+    assert_eq!(
+        codex_argv,
+        vec!["codoxear-broker-rs", "--cwd", "/repo", "--"]
+    );
 }
 
 #[test]
@@ -153,7 +160,6 @@ fn tmux_shell_command_uses_selected_rust_broker_binary() {
     assert!(shell.contains("--session-file"));
     assert!(shell.contains("ask_user_bridge.ts"));
     assert!(shell.contains("CODEX_WEB_AGENT_BACKEND=pi"));
-    assert!(!shell.contains("codoxear.pi_broker"));
 }
 
 #[test]

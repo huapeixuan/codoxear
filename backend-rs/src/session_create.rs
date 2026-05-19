@@ -7,8 +7,8 @@ use crate::session_create_support::{
     find_codex_resume_candidate_in, find_pi_resume_session_file, internal_error,
     normalize_agent_backend, normalize_preferred_auth_method, normalize_reasoning_effort,
     normalize_requested_model, normalize_service_tier, parse_args, parse_optional_bool, pi_home,
-    pi_new_session_file_for_cwd, python_exe, repo_root, resolve_dir_target, rust_broker_bin,
-    spawn_nonce, spawn_python_broker,
+    pi_new_session_file_for_cwd, repo_root, resolve_dir_target, rust_broker_bin, spawn_nonce,
+    spawn_rust_broker_process,
 };
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -28,27 +28,15 @@ pub fn selected_broker_argv(
     session_file: Option<&Path>,
     rust_bin: Option<&str>,
 ) -> Vec<String> {
-    let mut argv = if let Some(rust_bin) = rust_bin.map(str::trim).filter(|value| !value.is_empty())
-    {
-        vec![
-            rust_bin.to_string(),
-            "--cwd".to_string(),
-            cwd.to_string_lossy().to_string(),
-        ]
-    } else {
-        let module = if backend == "pi" {
-            "codoxear.pi_broker"
-        } else {
-            "codoxear.broker"
-        };
-        vec![
-            python_exe(),
-            "-m".to_string(),
-            module.to_string(),
-            "--cwd".to_string(),
-            cwd.to_string_lossy().to_string(),
-        ]
-    };
+    let broker_bin = rust_bin
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("codoxear-broker-rs");
+    let mut argv = vec![
+        broker_bin.to_string(),
+        "--cwd".to_string(),
+        cwd.to_string_lossy().to_string(),
+    ];
     if backend == "pi" {
         if let Some(session_file) = session_file {
             argv.extend([
@@ -235,7 +223,7 @@ fn spawn_pi_session(
         "PI_HOME".to_string(),
         pi_home().to_string_lossy().to_string(),
     ));
-    spawn_python_broker(state, request, cwd_path, spawn_nonce, argv, envs)
+    spawn_rust_broker_process(state, request, cwd_path, spawn_nonce, argv, envs)
 }
 
 fn spawn_codex_session(
@@ -329,7 +317,7 @@ fn spawn_codex_session(
             candidate.session_id.clone(),
         ));
     }
-    let mut out = spawn_python_broker(state, request, &spawn_cwd, spawn_nonce, argv, envs)?;
+    let mut out = spawn_rust_broker_process(state, request, &spawn_cwd, spawn_nonce, argv, envs)?;
     if let Some(candidate) = &resume_candidate {
         seed_resumed_alias(state, &mut out, candidate.first_user_message.as_deref())?;
     }
@@ -366,7 +354,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_codex_create_request_matches_python_validation() {
+    fn parse_codex_create_request_matches_legacy_validation() {
         let parsed = parse_create_session_request(&json!({
             "cwd": "/tmp/project",
             "backend": "codex",
@@ -410,7 +398,7 @@ mod tests {
     }
 
     #[test]
-    fn worktree_slug_matches_python_shape() {
+    fn worktree_slug_matches_legacy_shape() {
         assert_eq!(
             crate::session_create_support::worktree_path_slug("feature/api v2"),
             "feature-api-v2"
