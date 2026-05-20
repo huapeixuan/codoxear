@@ -57,9 +57,10 @@ pub fn router_with_url_prefix(state: AppState, raw_prefix: &str) -> Result<Route
     }
 
     let exact_prefix = prefix.clone();
-    let exact_root = root.clone();
-    let prefixed_exact =
-        any(move |request| prefix_dispatch(request, exact_root, exact_prefix, None));
+    let prefixed_exact = get(move || {
+        let location = format!("{exact_prefix}/");
+        async move { Redirect::permanent(&location) }
+    });
 
     let slash_prefix = prefix.clone();
     let slash_root = root.clone();

@@ -29,6 +29,30 @@ def _response(
         )
 
 
+def _response_no_redirect(
+    base_url: str, path: str, cookie: str
+) -> tuple[int, dict[str, str], bytes]:
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+            return None
+
+    opener = urllib.request.build_opener(NoRedirect)
+    request = urllib.request.Request(f"{base_url}{path}", headers={"Cookie": cookie})
+    try:
+        with opener.open(request, timeout=5) as response:
+            return (
+                response.status,
+                {key.lower(): value for key, value in response.headers.items()},
+                response.read(),
+            )
+    except urllib.error.HTTPError as exc:
+        return (
+            exc.code,
+            {key.lower(): value for key, value in exc.headers.items()},
+            exc.read(),
+        )
+
+
 def _json(base_url: str, path: str, cookie: str) -> dict[str, Any]:
     status, _headers, body = _response(base_url, path, cookie)
     assert status == 200
@@ -144,6 +168,12 @@ def test_url_prefix_serves_ui_api_and_legacy_alias(
 ) -> None:
     if os.environ.get("CODEX_WEB_URL_PREFIX") != "/codoxear":
         return
+
+    bare_status, bare_headers, _bare_body = _response_no_redirect(
+        rust_server_url, "/codoxear", signed_auth_cookie
+    )
+    assert bare_status == 308
+    assert bare_headers.get("location") == "/codoxear/"
 
     for path in (
         "/codoxear/",

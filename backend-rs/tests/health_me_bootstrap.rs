@@ -99,6 +99,40 @@ async fn url_prefix_mounts_ui_canonical_api_and_legacy_alias() {
     };
     let app = router_with_url_prefix(state, "/codoxear").unwrap();
 
+    let redirect = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/codoxear")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(redirect.status(), StatusCode::PERMANENT_REDIRECT);
+    assert_eq!(
+        redirect
+            .headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok()),
+        Some("/codoxear/")
+    );
+
+    let prefixed_root = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/codoxear/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(prefixed_root.status(), StatusCode::OK);
+    let prefixed_root_body = response_text(prefixed_root).await;
+    assert!(prefixed_root_body.contains("<html"));
+    assert!(!prefixed_root_body.contains("./src/main.tsx"));
+
     for path in [
         "/codoxear/api/v1/health",
         "/codoxear/api/health",
