@@ -93,12 +93,16 @@ pub fn cookie_secure() -> bool {
 }
 
 pub fn cookie_path() -> Result<String, String> {
-    let prefix = normalize_url_prefix(env::var("CODEX_WEB_URL_PREFIX").ok().as_deref())?;
+    let prefix = url_prefix()?;
     Ok(if prefix.is_empty() {
         "/".to_string()
     } else {
         format!("{prefix}/")
     })
+}
+
+pub fn url_prefix() -> Result<String, String> {
+    normalize_url_prefix(env::var("CODEX_WEB_URL_PREFIX").ok().as_deref())
 }
 
 pub fn verify_auth_cookie(value: &str, secret: &[u8]) -> bool {
@@ -246,7 +250,7 @@ pub fn tmux_available() -> bool {
     })
 }
 
-fn normalize_url_prefix(raw: Option<&str>) -> Result<String, String> {
+pub fn normalize_url_prefix(raw: Option<&str>) -> Result<String, String> {
     let Some(value) = raw else {
         return Ok(String::new());
     };

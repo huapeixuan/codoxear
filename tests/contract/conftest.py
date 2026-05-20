@@ -25,7 +25,9 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _wait_for_http(url: str, *, timeout: float = 10.0) -> None:
+def _wait_for_http(
+    url: str, *, health_path: str = "/api/v1/health", timeout: float = 10.0
+) -> None:
     import urllib.error
     import urllib.request
 
@@ -33,7 +35,7 @@ def _wait_for_http(url: str, *, timeout: float = 10.0) -> None:
     last_error: Exception | None = None
     while time.time() < deadline:
         try:
-            with urllib.request.urlopen(f"{url}/api/v1/health", timeout=0.5):
+            with urllib.request.urlopen(f"{url}{health_path}", timeout=0.5):
                 return
         except urllib.error.HTTPError:
             return
@@ -80,6 +82,9 @@ def rust_server_url(shared_app_home: Path) -> Iterator[str]:
             "CODOXEAR_APP_DIR": str(shared_app_home / ".local/share/codoxear"),
         }
     )
+    url_prefix = os.environ.get("CODEX_WEB_URL_PREFIX")
+    if url_prefix:
+        env["CODEX_WEB_URL_PREFIX"] = url_prefix
     proc = subprocess.Popen(
         [str(bin_path)],
         cwd=str(repo_root),
@@ -90,7 +95,8 @@ def rust_server_url(shared_app_home: Path) -> Iterator[str]:
     )
     url = f"http://127.0.0.1:{port}"
     try:
-        _wait_for_http(url)
+        health_path = f"{url_prefix}/api/v1/health" if url_prefix else "/api/v1/health"
+        _wait_for_http(url, health_path=health_path)
         yield url
     finally:
         proc.terminate()

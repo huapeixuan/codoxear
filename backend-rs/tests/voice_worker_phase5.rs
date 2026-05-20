@@ -651,9 +651,10 @@ fn listener_runtime_tracks_ttl_drop_and_updates_voice_snapshot() {
     assert_eq!(runtime.snapshot(246.0).active_listener_count, 0);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn listener_route_updates_settings_snapshot_and_test_push_requires_worker_flag() {
     reset_runtime_registry_for_tests();
+    let _worker_guard = EnvGuard::set("CODOXEAR_ENABLE_VOICE_WORKER", "1");
     let (home, app) = test_app();
     let cookie = signed_cookie(&home);
 
@@ -800,7 +801,7 @@ fn webpush_message_builds_encrypted_payload_with_ttl_and_vapid_headers() {
     assert!(message.payload.is_some());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn enabled_test_announcement_enqueues_ledger_row() {
     reset_runtime_registry_for_tests();
     let _guard = EnvGuard::set("CODOXEAR_ENABLE_VOICE_WORKER", "1");
@@ -1261,7 +1262,7 @@ async fn hls_routes_are_authenticated_path_safe_and_use_existing_artifacts() {
     assert_eq!(wrong_ext, StatusCode::NOT_FOUND);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn voice_routes_preserve_v1_alias_auth_snapshots_and_disabled_debug_no_side_effects() {
     reset_runtime_registry_for_tests();
     let _worker_guard = EnvGuard::set("CODOXEAR_ENABLE_VOICE_WORKER", "");

@@ -30,18 +30,114 @@ use crate::voice_post::{
 };
 use crate::voice_worker::hls::{audio_playlist, audio_segment};
 use axum::body::Body;
-use axum::extract::{Request, State};
+use axum::extract::OriginalUri;
+use axum::extract::{Path as AxumPath, Request, State};
 use axum::http::header;
 use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::Response;
-use axum::routing::{get, post};
+use axum::response::{IntoResponse, Redirect, Response};
+use axum::routing::{any, get, post};
 use axum::Router;
 use serde_json::{json, Value};
 use std::fs;
+use std::path::Path;
+use tower::ServiceExt;
 use tower_http::services::{ServeDir, ServeFile};
 
 pub fn router(state: AppState) -> Router {
+    let prefix = crate::runtime::url_prefix().expect("invalid CODEX_WEB_URL_PREFIX");
+    router_with_url_prefix(state, &prefix).expect("invalid CODEX_WEB_URL_PREFIX")
+}
+
+pub fn router_with_url_prefix(state: AppState, raw_prefix: &str) -> Result<Router, String> {
+    let root = root_router(state.clone());
+    let prefix = crate::runtime::normalize_url_prefix(Some(raw_prefix))?;
+    if prefix.is_empty() {
+        return Ok(root);
+    }
+
+    let exact_prefix = prefix.clone();
+    let exact_root = root.clone();
+    let prefixed_exact =
+        any(move |request| prefix_dispatch(request, exact_root, exact_prefix, None));
+
+    let slash_prefix = prefix.clone();
+    let slash_root = root.clone();
+    let prefixed_slash =
+        any(move |request| prefix_dispatch(request, slash_root, slash_prefix, None));
+
+    let wildcard_prefix = prefix.clone();
+    let wildcard_root = root.clone();
+    let prefixed_wildcard = any(move |AxumPath(rest): AxumPath<String>, request| {
+        prefix_dispatch(request, wildcard_root, wildcard_prefix, Some(rest))
+    });
+
+    Ok(Router::new()
+        .route(&prefix, prefixed_exact)
+        .route(&format!("{prefix}/"), prefixed_slash)
+        .route(&format!("{prefix}/*rest"), prefixed_wildcard)
+        .merge(root))
+}
+
+async fn prefix_dispatch(
+    mut request: Request<Body>,
+    root: Router,
+    prefix: String,
+    wildcard_rest: Option<String>,
+) -> Response {
+    let original = request
+        .extensions()
+        .get::<OriginalUri>()
+        .map(|uri| uri.0.clone())
+        .unwrap_or_else(|| request.uri().clone());
+    let Some(path_and_query) = original.path_and_query() else {
+        return not_found().await;
+    };
+    let raw = path_and_query.as_str();
+    if let Some(rest) = wildcard_rest.as_deref() {
+        let query = original
+            .query()
+            .map(|query| format!("?{query}"))
+            .unwrap_or_default();
+        let rewritten = if rest.is_empty() {
+            format!("/{query}")
+        } else {
+            format!("/{rest}{query}")
+        };
+        let Ok(uri) = rewritten.parse() else {
+            return not_found().await;
+        };
+        *request.uri_mut() = uri;
+        return root.oneshot(request).await.unwrap_or_else(|_| {
+            json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({"error": "prefixed route dispatch failed"}),
+            )
+        });
+    }
+    let Some(rest) = raw.strip_prefix(&prefix) else {
+        return not_found().await;
+    };
+    let rewritten = if rest.is_empty() || rest == "/" || rest == "/*rest" {
+        "/".to_string()
+    } else if rest.starts_with('/') || rest.starts_with('?') {
+        rest.to_string()
+    } else {
+        return not_found().await;
+    };
+    let Ok(uri) = rewritten.parse() else {
+        return not_found().await;
+    };
+    *request.uri_mut() = uri;
+    root.oneshot(request).await.unwrap_or_else(|_| {
+        json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"error": "prefixed route dispatch failed"}),
+        )
+    })
+}
+
+fn root_router(state: AppState) -> Router {
     let static_dir = repo_static_dir();
     let protected_v1 = Router::new()
         .route("/api/v1/me", get(me))
@@ -168,6 +264,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/login", post(login))
         .route("/api/v1/hooks/notify", post(hooks_notify))
         .route("/", get(static_index))
+        .route("/:dist_asset", get(static_dist_asset_redirect))
         .nest_service("/static", ServeDir::new(static_dir.clone()))
         .nest_service("/assets", ServeDir::new(static_dir.join("dist/assets")))
         .route_service(
@@ -195,17 +292,7 @@ pub fn router(state: AppState) -> Router {
 async fn static_index() -> Response {
     let static_dir = repo_static_dir();
     let dist_index = static_dir.join("dist/index.html");
-    let source_index = static_dir
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|repo| repo.join("web/index.html"));
-    let bytes = fs::read(&dist_index).or_else(|_| {
-        source_index
-            .as_ref()
-            .map(fs::read)
-            .unwrap_or_else(|| fs::read(&dist_index))
-    });
-    match bytes {
+    match fs::read(&dist_index) {
         Ok(bytes) => {
             let mut response = Response::new(Body::from(bytes));
             response.headers_mut().insert(
@@ -216,6 +303,44 @@ async fn static_index() -> Response {
         }
         Err(_) => not_found().await,
     }
+}
+
+async fn static_dist_asset_redirect(AxumPath(dist_asset): AxumPath<String>) -> Response {
+    if !is_static_dist_asset_name(&dist_asset) {
+        return not_found().await;
+    }
+    Redirect::temporary(&format!("assets/{dist_asset}")).into_response()
+}
+
+fn is_static_dist_asset_name(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && !value.contains('/')
+        && !value.contains('\\')
+        && (value.ends_with(".js") || value.ends_with(".css") || value.ends_with(".map"))
+}
+
+pub fn assert_static_dist_ready() -> Result<(), String> {
+    let dist_index = repo_static_dir().join("dist/index.html");
+    let bytes = fs::read(&dist_index).map_err(|err| {
+        format!(
+            "missing production web bundle at {}: {err}; run `cd web && npm install && npm run build` before starting codoxear-backend-rs from a source checkout",
+            dist_index.display()
+        )
+    })?;
+    validate_dist_index_bytes(&dist_index, &bytes)
+}
+
+fn validate_dist_index_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let text = String::from_utf8_lossy(bytes);
+    if text.contains("./src/main.tsx") || text.contains("/src/main.tsx") {
+        return Err(format!(
+            "{} is a Vite source index, not a production bundle; run `cd web && npm run build`",
+            path.display()
+        ));
+    }
+    Ok(())
 }
 
 fn repo_static_dir() -> std::path::PathBuf {
@@ -377,4 +502,29 @@ pub fn json_response(status: StatusCode, value: Value) -> Response {
         HeaderValue::from_static("application/json; charset=utf-8"),
     );
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_dist_index_bytes;
+    use std::path::Path;
+
+    #[test]
+    fn dist_index_validator_rejects_vite_source_entrypoint() {
+        let err = validate_dist_index_bytes(
+            Path::new("index.html"),
+            br#"<script type="module" src="./src/main.tsx"></script>"#,
+        )
+        .unwrap_err();
+        assert!(err.contains("production bundle"));
+    }
+
+    #[test]
+    fn dist_index_validator_accepts_built_asset_entrypoint() {
+        validate_dist_index_bytes(
+            Path::new("index.html"),
+            br#"<script type="module" src="./assets/index-abcd.js"></script>"#,
+        )
+        .unwrap();
+    }
 }

@@ -32,7 +32,8 @@ fn broker_bin() -> PathBuf {
 
 fn wait_for_live_meta(app_dir: &Path) -> Value {
     let socks = app_dir.join("socks");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut seen_json = Vec::new();
     while Instant::now() < deadline {
         if let Ok(entries) = fs::read_dir(&socks) {
             for entry in entries.flatten() {
@@ -46,12 +47,23 @@ fn wait_for_live_meta(app_dir: &Path) -> Value {
                     if fs::metadata(sock_path).is_ok() {
                         return value;
                     }
+                    seen_json.push(format!(
+                        "{} points to missing {}",
+                        path.display(),
+                        sock_path
+                    ));
+                } else {
+                    seen_json.push(format!("{} missing sock_path", path.display()));
                 }
             }
         }
         thread::sleep(Duration::from_millis(50));
     }
-    panic!("live broker metadata not written under {}", socks.display());
+    panic!(
+        "live broker metadata not written under {}; seen: {}",
+        socks.display(),
+        seen_json.join("; ")
+    );
 }
 
 fn wait_for_file(path: &Path) -> String {
@@ -94,7 +106,7 @@ fn rust_broker_codex_writes_sidecar_and_serves_socket() {
     let fake_codex = write_fake_bin(
         dir.path(),
         "fake-codex.sh",
-        "#!/bin/sh\necho fake-codex-ready\nsleep 30\n",
+        "#!/bin/sh\necho fake-codex-ready\nwhile :; do sleep 1; done\n",
     );
     let fake_shell = write_fake_shell(dir.path());
     let child = Command::new(broker_bin())

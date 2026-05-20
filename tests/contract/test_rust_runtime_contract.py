@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import threading
 import urllib.error
@@ -9,7 +10,9 @@ from pathlib import Path
 from typing import Any
 
 
-def _response(base_url: str, path: str, cookie: str) -> tuple[int, dict[str, str], bytes]:
+def _response(
+    base_url: str, path: str, cookie: str
+) -> tuple[int, dict[str, str], bytes]:
     request = urllib.request.Request(f"{base_url}{path}", headers={"Cookie": cookie})
     try:
         with urllib.request.urlopen(request, timeout=5) as response:
@@ -112,11 +115,17 @@ def test_canonical_and_legacy_aliases_cover_core_routes(
         legacy_resp = _response(rust_server_url, legacy, signed_auth_cookie)
         canonical_resp = _response(rust_server_url, canonical, signed_auth_cookie)
         assert legacy_resp[0] == canonical_resp[0] == 200
-        assert legacy_resp[1].get("content-type") == canonical_resp[1].get("content-type")
+        assert legacy_resp[1].get("content-type") == canonical_resp[1].get(
+            "content-type"
+        )
 
 
-def test_static_root_and_manifest_are_served(rust_server_url: str, signed_auth_cookie: str) -> None:
-    root_status, root_headers, root_body = _response(rust_server_url, "/", signed_auth_cookie)
+def test_static_root_and_manifest_are_served(
+    rust_server_url: str, signed_auth_cookie: str
+) -> None:
+    root_status, root_headers, root_body = _response(
+        rust_server_url, "/", signed_auth_cookie
+    )
     assert root_status == 200
     assert "text/html" in root_headers.get("content-type", "")
     assert b"<" in root_body
@@ -125,7 +134,30 @@ def test_static_root_and_manifest_are_served(rust_server_url: str, signed_auth_c
         rust_server_url, "/manifest.webmanifest", signed_auth_cookie
     )
     assert manifest_status == 200
-    assert "json" in manifest_headers.get("content-type", "") or manifest_body.startswith(b"{")
+    assert "json" in manifest_headers.get(
+        "content-type", ""
+    ) or manifest_body.startswith(b"{")
+
+
+def test_url_prefix_serves_ui_api_and_legacy_alias(
+    rust_server_url: str, signed_auth_cookie: str
+) -> None:
+    if os.environ.get("CODEX_WEB_URL_PREFIX") != "/codoxear":
+        return
+
+    for path in (
+        "/codoxear/",
+        "/codoxear/api/v1/health",
+        "/codoxear/api/health",
+        "/api/v1/health",
+    ):
+        status, headers, body = _response(rust_server_url, path, signed_auth_cookie)
+        assert status == 200, path
+        if path.endswith("/"):
+            assert "text/html" in headers.get("content-type", "")
+            assert b"./src/main.tsx" not in body
+        else:
+            assert json.loads(body.decode("utf-8"))["ok"] is True
 
 
 def test_rust_reads_pre_cutover_sidecar_and_workspace_files(

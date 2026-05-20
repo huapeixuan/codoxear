@@ -1,7 +1,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use codoxear_backend_rs::app_state::AppState;
-use codoxear_backend_rs::routes::router;
+use codoxear_backend_rs::routes::{router, router_with_url_prefix};
 use codoxear_backend_rs::runtime::{
     load_or_create_hmac_secret, sign_auth_cookie_value, unix_now_seconds, RuntimeConfig,
 };
@@ -28,6 +28,10 @@ async fn response_bytes(response: axum::response::Response) -> Vec<u8> {
         .expect("collect body")
         .to_bytes()
         .to_vec()
+}
+
+async fn response_text(response: axum::response::Response) -> String {
+    String::from_utf8(response_bytes(response).await).expect("utf8 response")
 }
 
 fn signed_cookie(home: &TempDir) -> String {
@@ -82,6 +86,35 @@ async fn health_canonical_matches_legacy() {
         response_bytes(canonical).await,
         response_bytes(legacy).await
     );
+}
+
+#[tokio::test]
+async fn url_prefix_mounts_ui_canonical_api_and_legacy_alias() {
+    let home = TempDir::new().expect("temp home");
+    let app_dir = home.path().join(".local/share/codoxear");
+    let state = AppState {
+        config: RuntimeConfig { app_dir },
+        fake_spawn_for_tests: false,
+        fake_spawn_session_id_for_tests: None,
+    };
+    let app = router_with_url_prefix(state, "/codoxear").unwrap();
+
+    for path in [
+        "/codoxear/api/v1/health",
+        "/codoxear/api/health",
+        "/api/v1/health",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        assert_eq!(
+            response_text(response).await,
+            r#"{"ok":true,"service":"codoxear-backend-rs"}"#
+        );
+    }
 }
 
 #[tokio::test]

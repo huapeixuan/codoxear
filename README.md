@@ -39,8 +39,8 @@ Build the server and broker binaries:
 cargo build --manifest-path backend-rs/Cargo.toml --release --bins
 ```
 
-If you are running from a source checkout and want the latest frontend bundle,
-build the web app before starting the server:
+If you are running from a source checkout, build the web app before starting the
+server:
 
 ```sh
 cd web
@@ -49,7 +49,9 @@ npm run build
 ```
 
 `npm run build` writes the Vite production bundle to `web/dist/` and copies it to
-`codoxear/static/dist/`, which `codoxear-backend-rs` serves.
+`codoxear/static/dist/`, which `codoxear-backend-rs` serves. The Rust server
+refuses to start from a source checkout when this production bundle is missing or
+when `codoxear/static/dist/index.html` is still the Vite source index.
 
 1. Create `.env` or export environment variables:
 

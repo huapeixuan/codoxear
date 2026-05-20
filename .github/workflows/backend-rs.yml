@@ -5,12 +5,14 @@ on:
     paths:
       - "backend-rs/**"
       - "tests/contract/**"
+      - "web/**"
       - "pyproject.toml"
       - ".github/workflows/backend-rs.yml"
   pull_request:
     paths:
       - "backend-rs/**"
       - "tests/contract/**"
+      - "web/**"
       - "pyproject.toml"
       - ".github/workflows/backend-rs.yml"
 
@@ -24,6 +26,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy,rustfmt
@@ -55,6 +62,16 @@ jobs:
       - name: cargo build bins
         run: cargo build --release --bins
         working-directory: backend-rs
+      - name: web test
+        run: npm ci && npm run test
+        working-directory: web
+      - name: web build
+        run: npm run build
+        working-directory: web
+      - name: production web bundle gate
+        run: |
+          test -f codoxear/static/dist/index.html
+          ! grep -R "./src/main.tsx" codoxear/static/dist/index.html
       - name: source file line limit
         run: |
           oversized="$(find backend-rs/src -name '*.rs' -print0 | xargs -0 wc -l | awk '$2 != "total" && $1 > 800 {print}')"
