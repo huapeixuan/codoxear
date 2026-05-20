@@ -1,6 +1,6 @@
 use serde_json::Value;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -59,14 +59,18 @@ fn wait_for_live_meta(app_dir: &Path) -> Value {
 }
 
 fn wait_for_file(path: &Path) -> String {
+    wait_for_file_result(path).unwrap_or_else(|()| panic!("file not written: {}", path.display()))
+}
+
+fn wait_for_file_result(path: &Path) -> Result<String, ()> {
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         if let Ok(raw) = fs::read_to_string(path) {
-            return raw;
+            return Ok(raw);
         }
         thread::sleep(Duration::from_millis(50));
     }
-    panic!("file not written: {}", path.display());
+    Err(())
 }
 
 fn sock_call(sock_path: &str, payload: Value) -> Value {
@@ -118,7 +122,15 @@ exec tail -f /dev/null
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    wait_for_file(&ready);
+    if wait_for_file_result(&ready).is_err() {
+        let mut child = child;
+        let status = child.try_wait().ok().flatten();
+        let mut stderr = String::new();
+        if let Some(mut pipe) = child.stderr.take() {
+            let _ = pipe.read_to_string(&mut stderr);
+        }
+        panic!("fake codex did not start; child_status={status:?}; stderr={stderr}");
+    }
 
     let meta = wait_for_live_meta(&dir.path().join("app"));
     let sock_path = meta["sock_path"].as_str().unwrap().to_string();
