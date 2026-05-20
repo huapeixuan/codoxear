@@ -144,6 +144,7 @@ pub fn run(cli: BrokerCli) -> i32 {
 
 fn run_inner(cli: BrokerCli, env: BrokerEnv) -> Result<i32, String> {
     fs::create_dir_all(env.socks_dir()).map_err(|err| format!("create socks dir failed: {err}"))?;
+    reset_sigchld_for_child_wait();
     let start_ts = now_secs();
     let token = broker_token();
     let sock_path = env.socks_dir().join(format!("{token}.sock"));
@@ -215,6 +216,21 @@ fn run_inner(cli: BrokerCli, env: BrokerEnv) -> Result<i32, String> {
     stop.store(true, Ordering::SeqCst);
     let _ = fs::remove_file(&sock_path);
     Ok(code)
+}
+
+fn reset_sigchld_for_child_wait() {
+    // Some non-interactive launchers can invoke the broker with SIGCHLD ignored
+    // (or SA_NOCLDWAIT semantics). On Linux that makes waitpid(2) report
+    // ECHILD for the forkpty child immediately, so the broker exits before the
+    // child CLI can finish booting or the socket sidecar is useful. The broker
+    // owns exactly one foreground child and must be able to reap it itself.
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = libc::SIG_DFL;
+        action.sa_flags = 0;
+        libc::sigemptyset(&mut action.sa_mask);
+        libc::sigaction(libc::SIGCHLD, &action, std::ptr::null_mut());
+    }
 }
 
 fn spawn_pi_process(cli: &BrokerCli, env: &BrokerEnv) -> Result<ChildHandle, String> {
