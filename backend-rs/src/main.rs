@@ -1,5 +1,5 @@
 use codoxear_backend_rs::app_state::build_state;
-use codoxear_backend_rs::routes::router;
+use codoxear_backend_rs::routes::{assert_static_dist_ready, router};
 use codoxear_backend_rs::workers::spawn_enabled_workers;
 use std::env;
 use std::net::{IpAddr, SocketAddr};
@@ -12,6 +12,11 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
+
+    if let Err(message) = assert_static_dist_ready() {
+        eprintln!("codoxear-backend-rs: {message}");
+        std::process::exit(1);
+    }
 
     let state = build_state();
     spawn_enabled_workers(state.clone());
@@ -34,6 +39,6 @@ async fn main() {
         .unwrap_or(8743);
     let addr = SocketAddr::new(host, port);
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    tracing::info!("codoxear-backend-rs (phase 1) listening on http://{addr}");
+    tracing::info!("codoxear-backend-rs listening on http://{addr}");
     axum::serve(listener, app).await.unwrap();
 }

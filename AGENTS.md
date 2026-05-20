@@ -1,88 +1,156 @@
 # Codoxear architecture notes
 
-This repo is a Linux-first companion UI for continuing local CLI agent sessions on a phone/laptop browser.
+This repo is a Rust-only, Linux/macOS companion UI for continuing local CLI agent
+sessions from a phone or laptop browser.
 
-Currently supported agent backends:
+Supported agent backends:
 
 - `codex`
 - `pi`
 
 ## Components
 
-### `codoxear.server`
+### `codoxear-backend-rs`
 
-- HTTP server (single process) that serves the UI and a small JSON API under `/api/*`.
-- Auth: password gate using `CODEX_WEB_PASSWORD` (required). Cookie-based session (`codoxear_auth`).
-- Session discovery: scans `~/.local/share/codoxear/socks/*.sock` for broker control sockets and reads the adjacent `*.json` metadata.
-- Web-owned sessions: `/api/sessions` (POST) spawns a new broker process with `CODEX_WEB_OWNER=web` and a chosen `agent_backend`.
-- Terminal-owned sessions: created by running `codoxear-broker` with the desired backend environment (for example plain Codex broker wrappers or `CODEX_WEB_AGENT_BACKEND=pi` for Pi).
-- `GET /api/sessions` returns backend-aware launch defaults, including provider/model/reasoning choices per backend.
-- Runtime state directory: `~/.local/share/codoxear` (legacy `~/.local/share/codex-web` is no longer used).
-- Additional persisted UI state includes `session_sidebar.json`, `session_files.json`, `session_queues.json`, `harness.json`, and `session_aliases.json` under the same app dir.
+- Rust HTTP server built from `backend-rs/`.
+- Serves the UI/static assets from `codoxear/static/` and JSON APIs at both
+  canonical `/api/v1/*` and legacy alias `/api/*` paths.
+- Auth: password gate using `CODEX_WEB_PASSWORD` (required) and the
+  `codoxear_auth` cookie signed from `~/.local/share/codoxear/hmac_secret`.
+- Session discovery: scans `~/.local/share/codoxear/socks/*.sock` and adjacent
+  `*.json` sidecars, including pre-Phase-6 sidecars written by the removed
+  Python runtime.
+- Web-owned sessions: `POST /api/v1/sessions` or `/api/sessions` spawns
+  `codoxear-broker-rs` with `CODEX_WEB_OWNER=web` and the selected
+  `agent_backend`.
+- Runtime state directory: `~/.local/share/codoxear` by default;
+  `CODOXEAR_APP_DIR` may override it for tests/isolated deployments.
+- Persisted UI/worker state includes `session_sidebar.json`,
+  `session_files.json`, `session_queues.json`, `harness.json`,
+  `session_aliases.json`, `voice_settings.json`, `push_subscriptions.json`,
+  `voice_delivery_ledger.json`, VAPID PEM, and HLS artifacts.
 
-### `codoxear.broker`
+### `codoxear-broker-rs`
 
-- Foreground PTY wrapper intended to be run from a real terminal.
-- Starts the selected backend CLI (`codex` or `pi`), preserves terminal UX, and creates a Unix socket control channel under `~/.local/share/codoxear/socks/`.
-- Writes a `*.json` sidecar with: `agent_backend`, session/thread id, pid(s), cwd, log_path, sock_path, owner tag, and launch settings.
-- Detects the active session log and keeps `log_path` updated by scanning the process tree for open backend log files (`~/.codex/sessions/rollout-*.jsonl` for Codex, `~/.pi/agent/sessions/*.jsonl` for Pi) plus backend-specific resume/discovery fallbacks.
-- Ignores Codex sub-agent rollout logs (`session_meta.payload.source.subagent`) so the UI stays bound to the main session.
+- Rust PTY/RPC wrapper intended to be run from a real terminal or spawned by the
+  Rust server.
+- Starts the selected backend CLI (`codex` or `pi`), preserves terminal UX, and
+  creates a Unix socket control channel under `~/.local/share/codoxear/socks/`.
+- Writes a `*.json` sidecar with backend, session/thread id, pid(s), cwd,
+  log/session path, socket path, owner tag, launch settings, tmux metadata, and
+  spawn nonce.
+- Detects active Codex rollout logs and Pi session files through the Rust log
+  discovery/normalization modules.
 - Linux and macOS.
 
-### `codoxear.sessiond`
+### `codoxear/static` and `web/`
 
-- Headless session helper that can launch a backend session without an interactive terminal.
-- Writes the same `socks/*.sock` + `socks/*.json` metadata the server expects.
-- Linux and macOS.
+- `web/` is the Vite/Preact source tree.
+- `cd web && npm run build` writes `web/dist/` and copies it into
+  `codoxear/static/dist/`.
+- `codoxear/static/` is retained for Rust static serving and optional
+  static-assets-only Python packaging metadata. It is not a Python runtime.
 
-### `codoxear.git_context`
+## Removed legacy surface
 
-- Resolves the current git branch and the GitHub pull request (via `gh pr view`) for a session's `cwd`, with per-`cwd` TTL caching and a per-`cwd` lock to keep session-list polling cheap.
-- Powers the `pr_summary` field returned in `GET /api/sessions` and the new detail endpoint `GET /api/sessions/<id>/repo` (honors `?refresh=1`).
-- Degrades to `availability: "no-gh" | "no-pr" | "not-a-repo" | "error"` when `gh` is missing, the branch has no PR, the cwd is not a git tree, or a subprocess fails/timeouts.
+Phase 6 removed the Python backend runtime. The repository no longer supports:
 
-### `codoxear.rollout_log` and `codoxear.pi_log`
+- `codoxear/server.py`
+- `codoxear/broker.py`
+- `codoxear/pi_broker.py`
+- `codoxear/sessiond.py`
+- `codoxear/voice_push.py`
+- Legacy Python console scripts
 
-- Shared normalization layer that turns backend-native logs into the UI’s common event/token/busy model.
-- `rollout_log.py` handles chat-event extraction, delivery messages, idle detection, and token snapshots for both backends.
-- `pi_log.py` contains Pi-specific helpers for session headers, assistant/user text extraction, final-turn detection, run settings, and context usage derived from Pi `usage.totalTokens` plus `~/.pi/agent/models.json`.
+Do not reintroduce Python runtime wrappers or fallback paths. If rollback is
+needed, use git revert to the Phase 5 PASS baseline rather than an env flag.
 
-### UI (`codoxear/static/index.html`)
+## Data flow
 
-- UI shell served at `/` and `/static/index.html`, with assets under `codoxear/static/` (`app.css`, `app.js`).
-- Polls `/api/sessions` and `/api/sessions/<id>/messages`.
-- Supports creating web-owned sessions via the "New session" button with backend tabs for Codex/Pi.
-- Remembers the last backend choice and last provider choice per backend in browser local storage.
-- Shows backend status icons in the sidebar metadata line and backend logos in the new-session modal.
-- Also uses queue, diagnostics, file-read, and git-viewer endpoints for the current UI.
-
-## Data flow (high level)
-
-1. Terminal: `codoxear-broker` runs the selected backend CLI and registers a control socket + metadata file.
-2. Server: lists available sockets, reads metadata, and serves session content via `/api/*`.
-3. Browser: selects a session, sends prompts via `/api/sessions/<id>/send` or `/enqueue`, renders normalized messages from the backend log, and reads files/git state through `/api/sessions/<id>/*` helpers.
+1. Terminal: `codoxear-broker-rs` runs the selected backend CLI and registers a
+   control socket + metadata file.
+2. Server: `codoxear-backend-rs` lists sockets/metadata, serves session content,
+   and owns opted-in queue/harness/voice workers.
+3. Browser: selects a session, sends prompts via API routes, renders normalized
+   backend messages, and reads files/git state through Rust handlers.
 
 ## Development reminders
 
 - Do not commit secrets: `.env`, `env`, keys, tokens, logs.
-- Do not commit runtime artifacts: `codex-homes/`, `socks/`, `root-repo/`, `server.log`, `hmac_secret`, `__pycache__/`.
-- Keep shared helpers in `codoxear/util.py` (avoid duplicating log-scan and app-dir logic across modules).
-- When a subsystem is semantically wrong, replace it instead of layering more patches onto the broken structure.
-- Prefer the smallest invariant-preserving model over incremental adaptation of an already confused implementation.
-- Do not let internal pipeline stages redefine user-facing semantics. Define the semantic invariant first, then make the implementation mechanically preserve it.
-- For queueing/streaming features, write down the exact replacement/commit boundary first (for example what counts as "queued", what counts as "playing", and what is still replaceable) before writing code.
-- If the user provides a simpler design that preserves the invariant more directly, prefer that design over a more elaborate agent-invented state machine.
-- After modifying the web UI, run `cd web && npm run build` before considering the work complete.
-- Local dev:
-  - Install: `python3 -m pip install -e .`
-  - Run server: `codoxear-server` or `python3 -m codoxear.server`
-  - Broker (Codex): `codoxear-broker -- <codex args>`
-  - Broker (Pi): `CODEX_WEB_AGENT_BACKEND=pi codoxear-broker -- <pi args>`
+- Do not commit runtime artifacts: `codex-homes/`, `socks/`, `root-repo/`,
+  `server.log`, `hmac_secret`, `backend-rs/target/`.
+- Keep runtime behavior in Rust. Python may remain only for pytest or static
+  packaging helper metadata.
+- Do not remove `/api/*` aliases without a separate API deprecation change.
+- When a subsystem is semantically wrong, replace it instead of layering more
+  patches onto a broken structure.
+- After modifying the web UI, run `cd web && npm run build` before considering
+  the work complete.
+
+## Local dev
+
+Install/build:
+
+```sh
+cargo build --manifest-path backend-rs/Cargo.toml --release --bins
+```
+
+Run server:
+
+```sh
+CODEX_WEB_PASSWORD=... ./backend-rs/target/release/codoxear-backend-rs
+```
+
+Broker wrappers:
+
+```sh
+codox() {
+  /path/to/codoxear-broker-rs -- "$@"
+}
+
+piox() {
+  CODEX_WEB_AGENT_BACKEND=pi /path/to/codoxear-broker-rs -- "$@"
+}
+```
+
+Frontend:
+
+```sh
+cd web
+npm install
+npm run dev
+npm run build
+```
 
 ## Ops notes
 
-- Restarting `codoxear.server` does **not** lose session content. Sessions live in backend log files on disk; the server only reads them.
-- To avoid losing live sessions, **only** stop the server process. Do **not** kill `codoxear-broker` or the underlying backend CLI process.
-- Safe restart example (server only):
-  - `pgrep -f "python3 -m codoxear.server" | xargs -r kill`
-  - `CODEX_WEB_PASSWORD=... CODEX_WEB_PORT=13780 CODEX_WEB_HOST=0.0.0.0 nohup python3 -m codoxear.server >/tmp/codoxear-13780.log 2>&1 &`
+- Restarting `codoxear-backend-rs` does **not** lose session content. Sessions
+  live in backend log/session files and Rust sidecars on disk.
+- To avoid losing live sessions, stop only the server process. Do **not** kill
+  `codoxear-broker-rs` or the underlying backend CLI unless you intend to stop
+  the session.
+- Safe restart example:
+
+```sh
+pgrep -f "codoxear-backend-rs" | xargs -r kill
+CODEX_WEB_PASSWORD=... CODEX_WEB_PORT=13780 CODEX_WEB_HOST=0.0.0.0 \
+  ./backend-rs/target/release/codoxear-backend-rs >/tmp/codoxear-13780.log 2>&1 &
+```
+
+## Verification before handoff
+
+Run the relevant subset, and for Phase 6/final runtime changes prefer the full
+suite:
+
+```sh
+openspec validate rust-backend-cutover-finish --strict
+openspec validate rust-backend-cutover --strict
+openspec validate rust-backend-broker --strict
+openspec validate rust-backend-voice-push --strict
+cargo fmt --manifest-path backend-rs/Cargo.toml --all -- --check
+cargo clippy --manifest-path backend-rs/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path backend-rs/Cargo.toml --release
+cargo build --manifest-path backend-rs/Cargo.toml --release --bins
+pytest tests/contract -q
+(cd web && npm run test && npm run build)
+```

@@ -1,11 +1,12 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use codoxear_backend_rs::app_state::AppState;
-use codoxear_backend_rs::routes::router;
+use codoxear_backend_rs::routes::{router, router_with_url_prefix_and_static_dir};
 use codoxear_backend_rs::runtime::{
     load_or_create_hmac_secret, sign_auth_cookie_value, unix_now_seconds, RuntimeConfig,
 };
 use http_body_util::BodyExt;
+use std::fs;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -28,6 +29,10 @@ async fn response_bytes(response: axum::response::Response) -> Vec<u8> {
         .expect("collect body")
         .to_bytes()
         .to_vec()
+}
+
+async fn response_text(response: axum::response::Response) -> String {
+    String::from_utf8(response_bytes(response).await).expect("utf8 response")
 }
 
 fn signed_cookie(home: &TempDir) -> String {
@@ -82,6 +87,80 @@ async fn health_canonical_matches_legacy() {
         response_bytes(canonical).await,
         response_bytes(legacy).await
     );
+}
+
+#[tokio::test]
+async fn url_prefix_mounts_ui_canonical_api_and_legacy_alias() {
+    let home = TempDir::new().expect("temp home");
+    let app_dir = home.path().join(".local/share/codoxear");
+    let state = AppState {
+        config: RuntimeConfig { app_dir },
+        fake_spawn_for_tests: false,
+        fake_spawn_session_id_for_tests: None,
+    };
+    let static_dir = home.path().join("static");
+    fs::create_dir_all(static_dir.join("dist/assets")).unwrap();
+    fs::write(
+        static_dir.join("dist/index.html"),
+        concat!(
+            r#"<!doctype html><html><head><title>Codoxear</title>"#,
+            r#"<script type="module" src="./assets/index-test.js"></script>"#,
+            r#"</head><body><div id="app"></div></body></html>"#
+        ),
+    )
+    .unwrap();
+    let app = router_with_url_prefix_and_static_dir(state, "/codoxear", static_dir).unwrap();
+
+    let redirect = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/codoxear")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(redirect.status(), StatusCode::PERMANENT_REDIRECT);
+    assert_eq!(
+        redirect
+            .headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok()),
+        Some("/codoxear/")
+    );
+
+    let prefixed_root = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/codoxear/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(prefixed_root.status(), StatusCode::OK, "prefixed root");
+    let prefixed_root_body = response_text(prefixed_root).await;
+    assert!(prefixed_root_body.contains("<html"));
+    assert!(!prefixed_root_body.contains("./src/main.tsx"));
+
+    for path in [
+        "/codoxear/api/v1/health",
+        "/codoxear/api/health",
+        "/api/v1/health",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        assert_eq!(
+            response_text(response).await,
+            r#"{"ok":true,"service":"codoxear-backend-rs"}"#
+        );
+    }
 }
 
 #[tokio::test]

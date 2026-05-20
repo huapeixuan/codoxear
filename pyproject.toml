@@ -5,16 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "codoxear"
 version = "0.1.0"
-description = "Unofficial mobile handoff for Codex TUI sessions."
+description = "Rust-only mobile handoff UI assets and contract-test package for Codex/Pi sessions."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
-dependencies = ["Pillow>=9.0", "py-vapid>=1.9.2", "pywebpush>=2.3.0"]
-
-[project.scripts]
-codoxear-server = "codoxear.server:main"
-codoxear-broker = "codoxear.broker:main"
-codoxear-pi-broker = "codoxear.pi_broker:main"
+dependencies = []
 
 [tool.setuptools]
 packages = ["codoxear"]
@@ -25,8 +20,5 @@ codoxear = ["static/*", "static/dist/**/*", "static/dist/.vite/manifest.json"]
 
 [tool.pytest.ini_options]
 markers = [
-  "readonly: Phase 2 read-only endpoint parity tests",
-  "post: Phase 3 POST/write endpoint parity tests",
-  "unit: unit tests",
-  "integration: integration tests",
+  "contract: Rust-only HTTP/disk contract tests",
 ]

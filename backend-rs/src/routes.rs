@@ -30,16 +30,127 @@ use crate::voice_post::{
 };
 use crate::voice_worker::hls::{audio_playlist, audio_segment};
 use axum::body::Body;
-use axum::extract::{Request, State};
+use axum::extract::OriginalUri;
+use axum::extract::{Path as AxumPath, Request, State};
 use axum::http::header;
 use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::Response;
-use axum::routing::{get, post};
+use axum::response::{IntoResponse, Redirect, Response};
+use axum::routing::{any, get, post};
 use axum::Router;
 use serde_json::{json, Value};
+use std::fs;
+use std::path::{Path, PathBuf};
+use tower::{ServiceBuilder, ServiceExt};
+use tower_http::services::{ServeDir, ServeFile};
+use tower_http::set_header::SetResponseHeaderLayer;
+
+const IMMUTABLE_ASSET_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
 
 pub fn router(state: AppState) -> Router {
+    let prefix = crate::runtime::url_prefix().expect("invalid CODEX_WEB_URL_PREFIX");
+    router_with_url_prefix(state, &prefix).expect("invalid CODEX_WEB_URL_PREFIX")
+}
+
+pub fn router_with_url_prefix(state: AppState, raw_prefix: &str) -> Result<Router, String> {
+    router_with_url_prefix_and_static_dir(state, raw_prefix, repo_static_dir())
+}
+
+pub fn router_with_url_prefix_and_static_dir(
+    state: AppState,
+    raw_prefix: &str,
+    static_dir: PathBuf,
+) -> Result<Router, String> {
+    let root = root_router(state.clone(), static_dir);
+    let prefix = crate::runtime::normalize_url_prefix(Some(raw_prefix))?;
+    if prefix.is_empty() {
+        return Ok(root);
+    }
+
+    let exact_prefix = prefix.clone();
+    let prefixed_exact = get(move || {
+        let location = format!("{exact_prefix}/");
+        async move { Redirect::permanent(&location) }
+    });
+
+    let slash_prefix = prefix.clone();
+    let slash_root = root.clone();
+    let prefixed_slash =
+        any(move |request| prefix_dispatch(request, slash_root, slash_prefix, None));
+
+    let wildcard_prefix = prefix.clone();
+    let wildcard_root = root.clone();
+    let prefixed_wildcard = any(move |AxumPath(rest): AxumPath<String>, request| {
+        prefix_dispatch(request, wildcard_root, wildcard_prefix, Some(rest))
+    });
+
+    Ok(Router::new()
+        .route(&prefix, prefixed_exact)
+        .route(&format!("{prefix}/"), prefixed_slash)
+        .route(&format!("{prefix}/*rest"), prefixed_wildcard)
+        .merge(root))
+}
+
+async fn prefix_dispatch(
+    mut request: Request<Body>,
+    root: Router,
+    prefix: String,
+    wildcard_rest: Option<String>,
+) -> Response {
+    let original = request
+        .extensions()
+        .get::<OriginalUri>()
+        .map(|uri| uri.0.clone())
+        .unwrap_or_else(|| request.uri().clone());
+    let Some(path_and_query) = original.path_and_query() else {
+        return not_found().await;
+    };
+    let raw = path_and_query.as_str();
+    if let Some(rest) = wildcard_rest.as_deref() {
+        let query = original
+            .query()
+            .map(|query| format!("?{query}"))
+            .unwrap_or_default();
+        let rewritten = if rest.is_empty() {
+            format!("/{query}")
+        } else {
+            format!("/{rest}{query}")
+        };
+        let Ok(uri) = rewritten.parse() else {
+            return not_found().await;
+        };
+        *request.uri_mut() = uri;
+        return root.oneshot(request).await.unwrap_or_else(|_| {
+            json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({"error": "prefixed route dispatch failed"}),
+            )
+        });
+    }
+    let Some(rest) = raw.strip_prefix(&prefix) else {
+        return not_found().await;
+    };
+    let rewritten = if rest.is_empty() || rest == "/" || rest == "/*rest" {
+        "/".to_string()
+    } else if rest.starts_with('/') || rest.starts_with('?') {
+        rest.to_string()
+    } else {
+        return not_found().await;
+    };
+    let Ok(uri) = rewritten.parse() else {
+        return not_found().await;
+    };
+    *request.uri_mut() = uri;
+    root.oneshot(request).await.unwrap_or_else(|_| {
+        json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"error": "prefixed route dispatch failed"}),
+        )
+    })
+}
+
+fn root_router(state: AppState, static_dir: PathBuf) -> Router {
+    let index_static_dir = static_dir.clone();
     let protected_v1 = Router::new()
         .route("/api/v1/me", get(me))
         .route("/api/v1/sessions/bootstrap", get(sessions_bootstrap))
@@ -164,10 +275,113 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/health", get(health))
         .route("/api/v1/login", post(login))
         .route("/api/v1/hooks/notify", post(hooks_notify))
+        .route(
+            "/",
+            get(move || {
+                let static_dir = index_static_dir.clone();
+                async move { static_index(static_dir).await }
+            }),
+        )
+        .route("/:dist_asset", get(static_dist_asset_redirect))
+        .nest_service("/static", ServeDir::new(static_dir.clone()))
+        .nest_service(
+            "/assets",
+            ServiceBuilder::new()
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::CACHE_CONTROL,
+                    |response: &axum::http::Response<_>| {
+                        response
+                            .status()
+                            .is_success()
+                            .then(|| HeaderValue::from_static(IMMUTABLE_ASSET_CACHE_CONTROL))
+                    },
+                ))
+                .service(ServeDir::new(static_dir.join("dist/assets"))),
+        )
+        .route_service(
+            "/manifest.webmanifest",
+            ServeFile::new(static_dir.join("manifest.webmanifest")),
+        )
+        .route_service(
+            "/service-worker.js",
+            ServeFile::new(static_dir.join("service-worker.js")),
+        )
+        .route_service(
+            "/favicon.ico",
+            ServeFile::new(static_dir.join("favicon.png")),
+        )
+        .route_service(
+            "/favicon.png",
+            ServeFile::new(static_dir.join("favicon.png")),
+        )
         .merge(protected_v1)
         .nest("/api", public_api_router(state.clone()))
         .fallback(not_found)
         .with_state(state)
+}
+
+async fn static_index(static_dir: PathBuf) -> Response {
+    let dist_index = static_dir.join("dist/index.html");
+    match read_static_dist_index(&dist_index) {
+        Ok(bytes) => {
+            let mut response = Response::new(Body::from(bytes));
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/html;charset=utf-8"),
+            );
+            response
+        }
+        Err(_) => not_found().await,
+    }
+}
+
+fn read_static_dist_index(dist_index: &Path) -> std::io::Result<Vec<u8>> {
+    fs::read(dist_index)
+}
+
+async fn static_dist_asset_redirect(AxumPath(dist_asset): AxumPath<String>) -> Response {
+    if !is_static_dist_asset_name(&dist_asset) {
+        return not_found().await;
+    }
+    Redirect::temporary(&format!("assets/{dist_asset}")).into_response()
+}
+
+fn is_static_dist_asset_name(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && !value.contains('/')
+        && !value.contains('\\')
+        && (value.ends_with(".js") || value.ends_with(".css") || value.ends_with(".map"))
+}
+
+pub fn assert_static_dist_ready() -> Result<(), String> {
+    let dist_index = repo_static_dir().join("dist/index.html");
+    let bytes = read_static_dist_index(&dist_index).map_err(|err| {
+        format!(
+            "missing production web bundle at {}: {err}; run `cd web && npm install && npm run build` before starting codoxear-backend-rs from a source checkout",
+            dist_index.display()
+        )
+    })?;
+    validate_dist_index_bytes(&dist_index, &bytes)
+}
+
+fn validate_dist_index_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let text = String::from_utf8_lossy(bytes);
+    if text.contains("./src/main.tsx") || text.contains("/src/main.tsx") {
+        return Err(format!(
+            "{} is a Vite source index, not a production bundle; run `cd web && npm run build`",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn repo_static_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("codoxear/static")
 }
 
 fn public_api_router(state: AppState) -> Router<AppState> {
@@ -322,4 +536,82 @@ pub fn json_response(status: StatusCode, value: Value) -> Response {
         HeaderValue::from_static("application/json; charset=utf-8"),
     );
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{router_with_url_prefix_and_static_dir, validate_dist_index_bytes};
+    use crate::app_state::AppState;
+    use crate::runtime::RuntimeConfig;
+    use axum::body::Body;
+    use axum::http::{header, Request, StatusCode};
+    use std::path::Path;
+    use tempfile::TempDir;
+    use tower::ServiceExt;
+
+    #[test]
+    fn dist_index_validator_rejects_vite_source_entrypoint() {
+        let err = validate_dist_index_bytes(
+            Path::new("index.html"),
+            br#"<script type="module" src="./src/main.tsx"></script>"#,
+        )
+        .unwrap_err();
+        assert!(err.contains("production bundle"));
+    }
+
+    #[test]
+    fn dist_index_validator_accepts_built_asset_entrypoint() {
+        validate_dist_index_bytes(
+            Path::new("index.html"),
+            br#"<script type="module" src="./assets/index-abcd.js"></script>"#,
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn vite_hashed_assets_are_served_with_immutable_cache_control() {
+        let home = TempDir::new().expect("temp home");
+        let static_dir = home.path().join("static");
+        std::fs::create_dir_all(static_dir.join("dist/assets")).unwrap();
+        std::fs::write(
+            static_dir.join("dist/assets/index-abcd1234.js"),
+            "console.log('ok');",
+        )
+        .unwrap();
+
+        let state = AppState {
+            config: RuntimeConfig {
+                app_dir: home.path().join(".local/share/codoxear"),
+            },
+            fake_spawn_for_tests: false,
+            fake_spawn_session_id_for_tests: None,
+        };
+        let app = router_with_url_prefix_and_static_dir(state, "", static_dir).unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/assets/index-abcd1234.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some(super::IMMUTABLE_ASSET_CACHE_CONTROL)
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/javascript")
+        );
+    }
 }

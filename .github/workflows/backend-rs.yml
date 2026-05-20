@@ -5,12 +5,14 @@ on:
     paths:
       - "backend-rs/**"
       - "tests/contract/**"
+      - "web/**"
       - "pyproject.toml"
       - ".github/workflows/backend-rs.yml"
   pull_request:
     paths:
       - "backend-rs/**"
       - "tests/contract/**"
+      - "web/**"
       - "pyproject.toml"
       - ".github/workflows/backend-rs.yml"
 
@@ -24,6 +26,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy,rustfmt
@@ -50,11 +57,23 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
         working-directory: backend-rs
       - name: cargo test
-        run: cargo test --release
+        run: cargo test --release -- --test-threads=1
         working-directory: backend-rs
       - name: cargo build bins
         run: cargo build --release --bins
         working-directory: backend-rs
+      - name: web test
+        run: npm ci && npm run test
+        working-directory: web
+      - name: web build
+        run: npm run build
+        working-directory: web
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+      - name: production web bundle gate
+        run: |
+          test -f codoxear/static/dist/index.html
+          ! grep -R "./src/main.tsx" codoxear/static/dist/index.html
       - name: source file line limit
         run: |
           oversized="$(find backend-rs/src -name '*.rs' -print0 | xargs -0 wc -l | awk '$2 != "total" && $1 > 800 {print}')"
@@ -65,9 +84,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: install Python contract dependencies
-        run: python -m pip install -e . pytest
-      - name: contract phase1 parity
-        run: pytest tests/contract -q -k 'parity and not readonly'
-      - name: contract readonly parity
-        run: pytest tests/contract -q -k 'parity and readonly'
+      - name: install contract test runner
+        run: python -m pip install pytest
+      - name: rust-only contract tests
+        run: pytest tests/contract -q

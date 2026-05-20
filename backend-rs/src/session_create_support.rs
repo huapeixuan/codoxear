@@ -13,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const TMUX_SESSION_NAME: &str = "codoxear";
 const SPAWN_META_WAIT_SECONDS: f64 = 3.0;
 
-pub(crate) fn spawn_python_broker(
+pub(crate) fn spawn_rust_broker_process(
     state: &AppState,
     request: &CreateSessionRequest,
     cwd_path: &Path,
@@ -381,10 +381,6 @@ pub(crate) fn base_spawn_env(backend: &str, spawn_nonce: &str) -> Vec<(String, S
         ("CODEX_WEB_AGENT_BACKEND".to_string(), backend.to_string()),
         ("CODEX_WEB_SPAWN_NONCE".to_string(), spawn_nonce.to_string()),
     ]
-}
-
-pub(crate) fn python_exe() -> String {
-    std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_string())
 }
 
 pub(crate) fn rust_broker_bin() -> Option<String> {

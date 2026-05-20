@@ -1,6 +1,6 @@
 use serde_json::Value;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -18,13 +18,87 @@ fn write_fake_bin(dir: &Path, name: &str, body: &str) -> PathBuf {
     path
 }
 
+fn write_fake_codex_bin(dir: &Path, ready: &Path) -> PathBuf {
+    let source = dir.join("fake-codex.c");
+    let bin = dir.join("fake-codex");
+    let ready_literal = ready
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    fs::write(
+        &source,
+        format!(
+            r#"#include <signal.h>
+#include <stdio.h>
+#include <unistd.h>
+
+static volatile sig_atomic_t done = 0;
+
+static void stop(int sig) {{
+  (void)sig;
+  done = 1;
+}}
+
+int main(void) {{
+  FILE *file = fopen("{ready_literal}", "w");
+  if (!file) return 10;
+  fputs("ready", file);
+  fclose(file);
+  signal(SIGTERM, stop);
+  signal(SIGINT, stop);
+  while (!done) pause();
+  return 0;
+}}
+"#
+        ),
+    )
+    .unwrap();
+    let status = Command::new("cc")
+        .arg(&source)
+        .arg("-o")
+        .arg(&bin)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    bin
+}
+
 fn broker_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_codoxear-broker-rs"))
 }
 
-fn wait_for_meta(app_dir: &Path) -> Value {
+#[cfg(target_os = "linux")]
+fn ignore_sigchld_then_exec_broker_bin(dir: &Path) -> PathBuf {
+    let source = dir.join("ignore-sigchld-then-exec.c");
+    let bin = dir.join("ignore-sigchld-then-exec");
+    fs::write(
+        &source,
+        r#"#include <signal.h>
+#include <unistd.h>
+
+int main(int argc, char **argv) {
+  if (argc < 2) return 64;
+  signal(SIGCHLD, SIG_IGN);
+  execv(argv[1], argv + 1);
+  return 127;
+}
+"#,
+    )
+    .unwrap();
+    let status = Command::new("cc")
+        .arg(&source)
+        .arg("-o")
+        .arg(&bin)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    bin
+}
+
+fn wait_for_live_meta(app_dir: &Path) -> Value {
     let socks = app_dir.join("socks");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut seen_json = Vec::new();
     while Instant::now() < deadline {
         if let Ok(entries) = fs::read_dir(&socks) {
             for entry in entries.flatten() {
@@ -33,23 +107,101 @@ fn wait_for_meta(app_dir: &Path) -> Value {
                     continue;
                 }
                 let raw = fs::read_to_string(&path).unwrap();
-                return serde_json::from_str(&raw).unwrap();
+                let value: Value = serde_json::from_str(&raw).unwrap();
+                if let Some(sock_path) = value["sock_path"].as_str() {
+                    if fs::metadata(sock_path).is_ok() {
+                        return value;
+                    }
+                    seen_json.push(format!(
+                        "{} points to missing {}",
+                        path.display(),
+                        sock_path
+                    ));
+                } else {
+                    seen_json.push(format!("{} missing sock_path", path.display()));
+                }
             }
         }
         thread::sleep(Duration::from_millis(50));
     }
-    panic!("broker metadata not written under {}", socks.display());
+    panic!(
+        "live broker metadata not written under {}; seen: {}",
+        socks.display(),
+        seen_json.join("; ")
+    );
 }
 
 fn wait_for_file(path: &Path) -> String {
+    wait_for_file_result(path).unwrap_or_else(|()| panic!("file not written: {}", path.display()))
+}
+
+fn wait_for_file_result(path: &Path) -> Result<String, ()> {
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         if let Ok(raw) = fs::read_to_string(path) {
-            return raw;
+            return Ok(raw);
         }
         thread::sleep(Duration::from_millis(50));
     }
-    panic!("file not written: {}", path.display());
+    Err(())
+}
+
+fn collect_child_failure(mut child: Child) -> String {
+    let status = child.try_wait().ok().flatten();
+    let mut stdout = String::new();
+    if let Some(mut pipe) = child.stdout.take() {
+        let _ = pipe.read_to_string(&mut stdout);
+    }
+    let mut stderr = String::new();
+    if let Some(mut pipe) = child.stderr.take() {
+        let _ = pipe.read_to_string(&mut stderr);
+    }
+    format!("child_status={status:?}; stdout={stdout}; stderr={stderr}")
+}
+
+fn broker_spawn_debug(dir: &Path, fake_codex: &Path, ready: &Path) -> String {
+    let fake_meta = fs::metadata(fake_codex)
+        .map(|meta| {
+            format!(
+                "exists=true file={} mode={:o}",
+                meta.is_file(),
+                meta.permissions().mode() & 0o777
+            )
+        })
+        .unwrap_or_else(|err| format!("metadata_error={err}"));
+    format!(
+        "cwd={} broker_bin={} fake_codex={} fake_codex_meta={} ready={} app_dir={} CODEX_HOME={} CODEX_WEB_AGENT_BACKEND=codex",
+        dir.display(),
+        broker_bin().display(),
+        fake_codex.display(),
+        fake_meta,
+        ready.display(),
+        dir.join("app").display(),
+        dir.join("codex-home").display()
+    )
+}
+
+fn wait_for_ready_or_broker_exit(ready: &Path, child: &mut Child) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if fs::read_to_string(ready).is_ok() {
+            return Ok(());
+        }
+        if let Some(status) = child.try_wait().map_err(|err| err.to_string())? {
+            return Err(format!("broker exited before fake codex ready: {status}"));
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Err("fake codex readiness file was not written before timeout".to_string())
+}
+
+fn wait_for_ready_or_fail(ready: &Path, child: Child, debug: String) -> Child {
+    let mut child = child;
+    if let Err(reason) = wait_for_ready_or_broker_exit(ready, &mut child) {
+        let details = collect_child_failure(child);
+        panic!("fake codex did not start: {reason}; {details}; {debug}");
+    }
+    child
 }
 
 fn sock_call(sock_path: &str, payload: Value) -> Value {
@@ -78,29 +230,31 @@ fn stop_child(mut child: Child, sock_path: Option<&str>) {
 #[test]
 fn rust_broker_codex_writes_sidecar_and_serves_socket() {
     let dir = TempDir::new().unwrap();
-    let fake_codex = write_fake_bin(
-        dir.path(),
-        "fake-codex.sh",
-        "#!/bin/sh\necho fake-codex-ready\nsleep 30\n",
-    );
+    let ready = dir.path().join("codex-ready");
+    let fake_codex = write_fake_codex_bin(dir.path(), &ready);
     let child = Command::new(broker_bin())
         .args(["--cwd", dir.path().to_str().unwrap(), "--"])
         .env("CODOXEAR_APP_DIR", dir.path().join("app"))
+        .env("CODEX_WEB_AGENT_BACKEND", "codex")
         .env("CODEX_BIN", &fake_codex)
         .env("CODEX_HOME", dir.path().join("codex-home"))
-        .env("CODEX_WEB_OWNER", "web")
         .env("CODEX_WEB_SPAWN_NONCE", "nonce-codex")
+        .env("CODEX_WEB_BROKER_DEBUG", "1")
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    let child = wait_for_ready_or_fail(
+        &ready,
+        child,
+        broker_spawn_debug(dir.path(), &fake_codex, &ready),
+    );
 
-    let meta = wait_for_meta(&dir.path().join("app"));
+    let meta = wait_for_live_meta(&dir.path().join("app"));
     let sock_path = meta["sock_path"].as_str().unwrap().to_string();
     assert_eq!(meta["backend"], "codex");
     assert_eq!(meta["agent_backend"], "codex");
-    assert_eq!(meta["owner"], "web");
     assert_eq!(meta["spawn_nonce"], "nonce-codex");
     assert_eq!(meta["log_path"], Value::Null);
     assert!(meta["codex_pid"].as_i64().unwrap() > 0);
@@ -124,6 +278,51 @@ fn rust_broker_codex_writes_sidecar_and_serves_socket() {
     stop_child(child, Some(&sock_path));
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn rust_broker_codex_resets_ignored_sigchld_before_waiting_for_pty_child() {
+    let dir = TempDir::new().unwrap();
+    let ready = dir.path().join("codex-ready");
+    let fake_codex = write_fake_codex_bin(dir.path(), &ready);
+    let wrapper = ignore_sigchld_then_exec_broker_bin(dir.path());
+    let mut child = Command::new(wrapper)
+        .arg(broker_bin())
+        .args(["--cwd", dir.path().to_str().unwrap(), "--"])
+        .env("CODOXEAR_APP_DIR", dir.path().join("app"))
+        .env("CODEX_WEB_AGENT_BACKEND", "codex")
+        .env("CODEX_BIN", &fake_codex)
+        .env("CODEX_HOME", dir.path().join("codex-home"))
+        .env("CODEX_WEB_SPAWN_NONCE", "nonce-sigchld")
+        .env("CODEX_WEB_BROKER_DEBUG", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    if let Err(reason) = wait_for_ready_or_broker_exit(&ready, &mut child) {
+        let details = collect_child_failure(child);
+        panic!(
+            "fake codex did not start when broker inherited ignored SIGCHLD: {reason}; {details}; {}",
+            broker_spawn_debug(dir.path(), &fake_codex, &ready)
+        );
+    }
+    let status = child.try_wait().unwrap();
+    assert!(
+        status.is_none(),
+        "broker exited early after inherited ignored SIGCHLD: {status:?}"
+    );
+    let meta = wait_for_live_meta(&dir.path().join("app"));
+    let sock_path = meta["sock_path"].as_str().unwrap().to_string();
+    assert_eq!(meta["spawn_nonce"], "nonce-sigchld");
+    assert_eq!(
+        sock_call(&sock_path, serde_json::json!({"cmd":"state"}))["queue_len"],
+        0
+    );
+
+    stop_child(child, Some(&sock_path));
+}
+
 #[test]
 fn rust_broker_pi_writes_session_path_and_pi_socket_commands() {
     let dir = TempDir::new().unwrap();
@@ -131,7 +330,7 @@ fn rust_broker_pi_writes_session_path_and_pi_socket_commands() {
         dir.path(),
         "fake-pi.sh",
         &format!(
-            "#!/bin/sh\nprintf '%s\n' \"$@\" > {}\necho fake-pi-ready\nsleep 30\n",
+            "#!/bin/sh\nprintf '%s\n' \"$@\" > {}\necho fake-pi-ready\nexec tail -f /dev/null\n",
             dir.path().join("pi-args.txt").display()
         ),
     );
@@ -157,7 +356,7 @@ fn rust_broker_pi_writes_session_path_and_pi_socket_commands() {
         .spawn()
         .unwrap();
 
-    let meta = wait_for_meta(&dir.path().join("app"));
+    let meta = wait_for_live_meta(&dir.path().join("app"));
     let sock_path = meta["sock_path"].as_str().unwrap().to_string();
     assert_eq!(meta["backend"], "pi");
     assert_eq!(meta["transport"], "pi-rpc");

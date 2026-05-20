@@ -38,7 +38,7 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -46,6 +46,7 @@ use tower::ServiceExt;
 struct EnvGuard {
     key: &'static str,
     previous: Option<String>,
+    _lock: MutexGuard<'static, ()>,
 }
 
 #[derive(Clone)]
@@ -140,11 +141,16 @@ impl WebPushSender for FakePushSender {
 
 impl EnvGuard {
     fn set(key: &'static str, value: &str) -> Self {
+        let lock = env_lock().lock().unwrap();
         let previous = std::env::var(key).ok();
         unsafe {
             std::env::set_var(key, value);
         }
-        Self { key, previous }
+        Self {
+            key,
+            previous,
+            _lock: lock,
+        }
     }
 }
 
@@ -158,6 +164,11 @@ impl Drop for EnvGuard {
             }
         }
     }
+}
+
+fn env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn test_app() -> (TempDir, axum::Router) {
@@ -389,48 +400,6 @@ fn rust_created_vapid_pem_is_reloaded_with_stable_public_key() {
     let pem = dir.path().join(VAPID_PRIVATE_KEY_FILE);
     assert!(pem.exists());
     assert_eq!(load_or_create_public_key(dir.path()).unwrap(), first);
-}
-
-#[test]
-fn rust_created_vapid_pem_is_python_py_vapid_readable() {
-    let dir = TempDir::new().unwrap();
-    let rust_public_key = load_or_create_public_key(dir.path()).unwrap();
-    let script = r#"
-import base64
-import sys
-from cryptography.hazmat.primitives import serialization
-from py_vapid import Vapid
-
-vapid = Vapid.from_file(sys.argv[1])
-public = vapid.public_key.public_bytes(
-    encoding=serialization.Encoding.X962,
-    format=serialization.PublicFormat.UncompressedPoint,
-)
-print(base64.urlsafe_b64encode(public).rstrip(b'=').decode('ascii'))
-"#;
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let venv_python = manifest_dir.parent().unwrap().join(".venv/bin/python");
-    let python = if venv_python.exists() {
-        venv_python
-    } else {
-        PathBuf::from("python3")
-    };
-    let output = std::process::Command::new(python)
-        .arg("-c")
-        .arg(script)
-        .arg(dir.path().join(VAPID_PRIVATE_KEY_FILE))
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("run python with py_vapid");
-    assert!(
-        output.status.success(),
-        "py_vapid failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout).trim(),
-        rust_public_key
-    );
 }
 
 #[test]
@@ -693,9 +662,10 @@ fn listener_runtime_tracks_ttl_drop_and_updates_voice_snapshot() {
     assert_eq!(runtime.snapshot(246.0).active_listener_count, 0);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn listener_route_updates_settings_snapshot_and_test_push_requires_worker_flag() {
     reset_runtime_registry_for_tests();
+    let _worker_guard = EnvGuard::set("CODOXEAR_ENABLE_VOICE_WORKER", "1");
     let (home, app) = test_app();
     let cookie = signed_cookie(&home);
 
@@ -842,7 +812,7 @@ fn webpush_message_builds_encrypted_payload_with_ttl_and_vapid_headers() {
     assert!(message.payload.is_some());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn enabled_test_announcement_enqueues_ledger_row() {
     reset_runtime_registry_for_tests();
     let _guard = EnvGuard::set("CODOXEAR_ENABLE_VOICE_WORKER", "1");
@@ -1303,7 +1273,7 @@ async fn hls_routes_are_authenticated_path_safe_and_use_existing_artifacts() {
     assert_eq!(wrong_ext, StatusCode::NOT_FOUND);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn voice_routes_preserve_v1_alias_auth_snapshots_and_disabled_debug_no_side_effects() {
     reset_runtime_registry_for_tests();
     let _worker_guard = EnvGuard::set("CODOXEAR_ENABLE_VOICE_WORKER", "");

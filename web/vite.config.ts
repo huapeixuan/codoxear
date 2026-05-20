@@ -34,8 +34,10 @@ export default defineConfig(({ mode }) => {
     };
   }
 
+  const productionBase = urlPrefix ? `${urlPrefix}/` : "./";
+
   return {
-    base: urlPrefix ? `${urlPrefix}/` : "/",
+    base: mode === "production" ? productionBase : urlPrefix ? `${urlPrefix}/` : "/",
     plugins: [preact()],
     resolve: {
       alias: {

@@ -4,230 +4,118 @@
   <img src="codoxear/static/codoxear-icon.png" alt="Codoxear icon" width="140" />
 </p>
 
-Unofficial mobile handoff for local CLI agent sessions.
+Codoxear is a Rust-only local web companion for Codex and Pi CLI agent sessions.
+It runs on your computer, serves a phone-friendly UI, and keeps filesystem,
+tools, credentials, and agent logs local to that machine.
 
-Codoxear runs a small web server on your computer and exposes a phone-friendly UI for continuing the same live CLI agent session from mobile. Your environment stays local (filesystem, tools, credentials). The phone is a view/controller.
-
-Currently supported agent backends:
+Supported agent backends:
 
 - Codex
 - Pi
 
-It now also includes an MVP Pi backend for browser-created `pi-coding-agent` sessions. The Pi path currently focuses on web-owned sessions started from the UI; it does not yet attach to an already-running interactive Pi TUI session.
-
-Name: "codoxear" = "codex dogear" (dog-ear a page so you can pick up where you left off), meaning you can seamlessly continue the same work from different devices.
-
-Not affiliated with OpenAI or the Pi Coding Agent project. "Codex" and "Pi" are referenced only for CLI compatibility.
+Not affiliated with OpenAI or the Pi Coding Agent project. "Codex" and "Pi" are
+referenced only for CLI compatibility.
 
 ## Platform support
 
 Supported:
 
-- Linux (uses `/proc`, PTYs)
-- macOS (uses `lsof`/`pgrep`, PTYs)
+- Linux (PTYs, `/proc`-based Codex log discovery)
+- macOS (PTYs, `pgrep`/`lsof` discovery paths)
 
 Not supported:
 
-- Windows (no POSIX PTY/termios model; use WSL2 if you want a Linux environment)
+- Windows native terminals. Use WSL2 for a Linux environment.
 
 ## Quick start
 
-Requires Python 3.10+.
+Requires a Rust toolchain and the `codex` and/or `pi` CLI you want to control.
+Python is not a supported backend runtime after Phase 6; it is used only as an
+optional test runner/static-assets packaging helper.
 
-Install Codoxear (installs `codoxear-server` and `codoxear-broker`):
+Build the server and broker binaries:
 
-- `python3 -m pip install .`
+```sh
+cargo build --manifest-path backend-rs/Cargo.toml --release --bins
+```
 
-If you are running from a source checkout and want the latest frontend bundle, build the web app before starting the server:
+If you are running from a source checkout, build the web app before starting the
+server:
 
-- `cd web && npm install && npm run build`
-- `npm run build` writes the production bundle to `web/dist/` and copies it into `codoxear/static/dist/`, which is what `codoxear-server` serves
+```sh
+cd web
+npm install
+npm run build
+```
 
-1. Create `.env`:
+`npm run build` writes the Vite production bundle to `web/dist/` and copies it to
+`codoxear/static/dist/`, which `codoxear-backend-rs` serves. The Rust server
+refuses to start from a source checkout when this production bundle is missing or
+when `codoxear/static/dist/index.html` is still the Vite source index.
 
-   - Copy `.env.example` to `.env`
-   - Set `CODEX_WEB_PASSWORD`
-   - Codoxear reads `.env` from your current working directory
+1. Create `.env` or export environment variables:
 
-2. Start the server:
+   - Set `CODEX_WEB_PASSWORD` (required).
+   - Optional: set `CODEX_WEB_HOST` (default `::`) and `CODEX_WEB_PORT` (default `8743`).
 
-   - `codoxear-server`
-    - Default bind: `::` (IPv6, usually reachable on LAN)
-    - Default port: `8743`
+2. Start the Rust server from the repository root or a deployment directory that
+   can locate `codoxear/static`:
 
-   For Pi support, make sure `pi` is installed and available in `PATH` on the same machine that runs the server.
+   ```sh
+   ./backend-rs/target/release/codoxear-backend-rs
+   ```
 
-3. Add separate wrappers for terminal-owned brokered sessions (zsh/bash function, not an alias):
+   Default bind is `[::]:8743`.
 
-   Never wrap or replace `codex()` or `pi()` themselves. Web-owned sessions launch the underlying CLI directly, so wrapping the original command to call `codoxear-broker` can recurse back into the broker and create an unbounded session-spawn loop.
-
-   Add to `~/.zshrc` or `~/.bashrc`:
+3. Add separate wrappers for terminal-owned brokered sessions (zsh/bash
+   functions, not aliases):
 
    ```sh
    codox() {
-     codoxear-broker -- "$@"
+     /path/to/codoxear-broker-rs -- "$@"
    }
 
    piox() {
-     CODEX_WEB_AGENT_BACKEND=pi codoxear-broker -- "$@"
+     CODEX_WEB_AGENT_BACKEND=pi /path/to/codoxear-broker-rs -- "$@"
    }
    ```
 
-   Restart your shell or `source` your rc file.
+   Do not wrap or replace `codex()` or `pi()` themselves. Web-owned sessions
+   launch the underlying CLI directly through `codoxear-broker-rs`; wrapping the
+   original command can recurse back into the broker.
 
-4. Use `codox` for terminal-owned Codex sessions and `piox` for terminal-owned Pi sessions when you want them registered with Codoxear. Leave plain `codex` and `pi` unwrapped.
+4. Use `codox` for terminal-owned Codex sessions and `piox` for terminal-owned
+   Pi sessions when you want them registered with Codoxear. Leave plain `codex`
+   and `pi` unwrapped.
 
-5. On your phone, open `http://<your-computer>:8743`, enter the password, and select the session.
+5. On your phone, open `http://<your-computer>:8743`, enter the password, and
+   select or create a session.
 
-   The New session dialog can start either a Codex-backed session or a Pi-backed session. Codex remains the default.
+## Runtime model
 
-6. (Optional) Enable Harness mode for a session:
+- `codoxear-backend-rs` is the only supported HTTP server.
+- `codoxear-broker-rs` is the only supported broker/session launcher.
+- `/api/v1/*` is the canonical API namespace.
+- `/api/*` remains a legacy compatibility alias served by the Rust server.
+- Runtime state lives under `~/.local/share/codoxear` by default. Set
+  `CODOXEAR_APP_DIR` to override it for tests or isolated deployments.
+- Existing pre-Phase-6 sidecars and JSON state files are still readable by Rust.
+  New sidecars are written by `codoxear-broker-rs`.
 
-   - Click the Harness icon in the top bar, toggle it on, tune cooldown minutes and injection count, and edit the optional extra request.
-   - Harness runs in the server process (not the browser tab), so it continues even if you close the web page.
-   - Settings are per session; each injection decrements the remaining count and harness turns itself off at zero. Enabled sessions show a `harness` badge in the sidebar.
-
-### Rust backend (Phase 1 preview)
-
-`backend-rs/` is the in-progress Rust port of the Codoxear backend. Phase 1 is a preview skeleton only: it serves `/api/health`, `/api/me`, and `/api/sessions/bootstrap` (plus canonical `/api/v1/*` aliases) and does not replace the Python backend.
-
-Build it with:
-
-```sh
-cd backend-rs && cargo build --release --bins
-```
-
-Run the HTTP server from the repository root with:
-
-```sh
-./backend-rs/target/release/codoxear-backend-rs
-```
-
-By default it binds to `[::]:8743`, matching the Python server. Rollback is simply not running the Rust binary (or reverting the additive Phase 1 files); the Python backend remains unchanged.
-
-### Rust worker handoff flags (cutover preview)
-
-The Rust backend can own selected background sweeps only when explicitly enabled. By default these flags are unset, so the Python server remains the writer for the same state files.
-
-- `CODOXEAR_ENABLE_QUEUE_SWEEP=1` — Rust drains `session_queues.json` after broker/log idle plus `CODEX_WEB_QUEUE_IDLE_GRACE_SECONDS`; Python does not start its queue sweep thread when this flag is truthy.
-- `CODOXEAR_ENABLE_HARNESS_SWEEP=1` — Rust performs harness injections and writes `harness.json`; Python does not start its harness sweep thread when this flag is truthy.
-- `CODOXEAR_ENABLE_VOICE_SCAN=1` — enables the Rust-owned voice scan path during Phase 5 experiments and makes Python yield its `voice-push-scan` thread. The Rust scan path writes Python-compatible `voice_delivery_ledger.json` rows from existing Codex/Pi log normalizers. Keep unset for Python fallback.
-- `CODOXEAR_ENABLE_VOICE_WORKER=1` — enables the Rust-owned voice delivery/HLS/WebPush worker path during Phase 5 experiments and makes Python skip its `voice-push` / `voice-push-keepalive` delivery threads. The Rust worker is still opt-in and guarded by a single-writer lock; enabled debug endpoints and final-response delivery use the Rust OpenAI-compatible TTS, ffmpeg/ffprobe HLS, and WebPush/VAPID path. Keep unset for Python fallback.
-- WebPush VAPID subject selection matches the Python fallback: `CODEX_WEB_PUSH_VAPID_SUBJECT` wins when set, otherwise Rust best-effort reads `tailscale status --json` and uses `https://<Self.DNSName>` when available, falling back to `https://localhost`. Rust-created `webpush_vapid_private.pem` is PKCS#8 PEM and is covered by a `py_vapid.Vapid.from_file` compatibility test.
-
-Safe handoff order:
-
-1. Stop the currently running Codoxear server.
-2. Set only the Rust worker flag(s) you want Rust to own.
-3. Start the Rust backend.
-4. Verify the Python server is not running with the same writer enabled.
-
-Rollback order:
-
-1. Stop the Rust backend.
-2. Unset the corresponding `CODOXEAR_ENABLE_*` flag(s).
-3. Restart `codoxear-server` (Python).
-4. Confirm the Python worker thread is active by observing normal queue/harness behavior and that no Rust backend process is still running.
-
-Never run Python and Rust with the same queue/harness/voice writer enabled at the same time; `session_queues.json`, `harness.json`, and voice state files are single-writer during the cutover.
-
-Phase 3 POST contract selector: `pytest tests/contract -q -k 'parity and post'`.
-
-## Tailscale HTTPS
-
-If you want browser notifications or iOS Web Push, use HTTPS instead of plain `http://<host>:8743`.
-
-The simplest setup is Tailscale Serve on port `8443`:
-
-```sh
-tailscale serve --bg --yes --https=8443 http://127.0.0.1:8743
-```
-
-Then open Codoxear at:
-
-```text
-https://<device>.<tailnet>.ts.net:8443/
-```
-
-Example:
-
-```text
-https://yiwen-workstation.tail0de6f7.ts.net:8443/
-```
-
-Notes:
-
-- Browser notification APIs require a secure context (`https://...` or `http://localhost`).
-- iOS Web Push requires an installed Home Screen web app on HTTPS; a normal Safari tab is not enough.
-- Tailscale-issued HTTPS works for the `*.ts.net` name, not for a bare local hostname.
-
-If you run Codoxear as a user systemd service, you can attach Tailscale Serve to the same lifecycle with:
-
-```ini
-[Service]
-ExecStartPost=/usr/bin/tailscale serve --bg --yes --https=8443 http://127.0.0.1:8743
-ExecStopPost=-/usr/bin/tailscale serve --bg --yes --https=8443 off
-```
-
-Then reload and restart:
-
-```sh
-systemctl --user daemon-reload
-systemctl --user restart codoxear-server.service
-tailscale serve status
-```
-
-## User stories
-
-- Desktop Linux: start Codex or Pi in your GUI terminal emulator, then continue the same live session on your phone or a laptop browser.
-- Headless Linux: start Codex or Pi inside `tmux`, then attach from your phone or a laptop browser. This avoids using a mobile terminal emulator for TUI interaction (for example Termius).
-- Web-owned sessions: start a new Codex or Pi session from the Codoxear UI, use it from mobile, and kill it from the UI when finished.
-- Web-owned tmux sessions: start a new Codex or Pi session from the Codoxear UI with `Create in tmux` enabled to run it inside tmux session `codoxear` for shell-side observability.
-
-## Session ownership
-
-Codoxear shows three kinds of sessions:
-
-- Terminal-owned: sessions started from your local terminal via `codox` or `piox` (the broker wrappers). They are marked `T` in the UI.
-- Web-owned: sessions started from the Codoxear UI ("New session"). They are marked `W` in the UI.
-- Web-owned tmux: sessions started from the Codoxear UI with `Create in tmux` enabled. They are marked with the tmux split-pane icon in the UI and run under tmux session `codoxear`.
-
-The current UI offers Delete for all session kinds. Delete sends a shutdown request to the underlying broker, so deleting a terminal-owned session also stops the corresponding terminal session.
-
-If you start a web-owned session and later want to continue it in your terminal while keeping it registered with Codoxear, use the matching backend workflow: Codex sessions resume through `codox ...`, Pi sessions through `piox ...` or plain `pi --session <session-file>` if you want to continue the same Pi session file directly.
-
-## Known limitations
-
-### Codex confirmation prompts still need a terminal
-
-Codoxear cannot drive Codex confirmation prompts in `default` mode or `plan` mode from the browser UI.
-
-For full remote interaction, run Codex in YOLO mode so confirmations do not block on interactive terminal prompts.
-
-### `/new` may show as pending until first prompt
-
-Codex does not always materialize (open) the new `rollout-*.jsonl` file immediately after `/new`. Codoxear tracks the active rollout by scanning the Codex process tree for open rollout-log file descriptors, so the UI may show the session as pending until the first prompt is sent and the rollout file is created/opened.
-
-## Security model
-
-This project intentionally keeps security out of scope. It provides password gating only and does not provide TLS.
-
-Assume anyone who can reach the port can:
-
-- observe traffic (including the password)
-- modify traffic
-
-Use your own secure channel (VPN, SSH port-forward, reverse proxy with TLS) if you need network security.
+There is no Python fallback. Legacy Python entry points are not part of the supported runtime after Phase 6.
 
 ## Configuration
 
-Set these in `.env` (or in the process environment):
+Set these in `.env` or the process environment:
 
 - `CODEX_WEB_PASSWORD` (required)
 - `CODEX_WEB_HOST` (default `::`)
 - `CODEX_WEB_PORT` (default `8743`)
-- `CODEX_WEB_URL_PREFIX` (default empty). Example: `/codoxear` serves the UI at `/codoxear/` and the API under `/codoxear/api/*`.
-- `CODEX_WEB_DEFAULT_AGENT_BACKEND` (default `codex`) - default backend tab for new web-owned sessions
+- `CODOXEAR_BIND_HOST` / `CODOXEAR_BIND_PORT` (fallback aliases when the
+  `CODEX_WEB_*` bind variables are unset)
+- `CODEX_WEB_URL_PREFIX` (default empty). Example: `/codoxear` serves the UI at
+  `/codoxear/` and the API under `/codoxear/api/v1/*` and `/codoxear/api/*`.
+- `CODEX_WEB_DEFAULT_AGENT_BACKEND` (default `codex`)
 - `CODEX_HOME` (default `~/.codex`)
 - `CODEX_BIN` (default `codex`)
 - `PI_HOME` (default `~/.pi`)
@@ -244,42 +132,102 @@ Set these in `.env` (or in the process environment):
 - `CODEX_WEB_GIT_DIFF_MAX_BYTES` (default `819200`)
 - `CODEX_WEB_GIT_DIFF_TIMEOUT_SECONDS` (default `4.0`)
 - `CODEX_WEB_GIT_CHANGED_FILES_MAX` (default `400`)
-- `CODEX_WEB_BRANCH_TIMEOUT_S` (default `2.0`) - git branch subprocess timeout for session repo badges
-- `CODEX_WEB_PR_TIMEOUT_S` (default `4.0`) - `gh pr view` subprocess timeout for session repo badges
-- `CODEX_WEB_GH_AUTH_TTL_S` (default `300`) - GitHub CLI auth/error cache TTL used by repo summary resolution
-- `CODEX_WEB_FD_POLL_SECONDS` (default `1.0`) - how often the broker scans `/proc` to detect the active `rollout-*.jsonl`
+- `CODEX_WEB_BRANCH_TIMEOUT_S` (default `2.0`)
+- `CODEX_WEB_PR_TIMEOUT_S` (default `4.0`)
+- `CODEX_WEB_GH_AUTH_TTL_S` (default `300`)
+- `CODEX_WEB_FD_POLL_SECONDS` (default `1.0`)
+- `CODOXEAR_ENABLE_QUEUE_SWEEP=1` to enable the Rust queue worker
+- `CODOXEAR_ENABLE_HARNESS_SWEEP=1` to enable the Rust harness worker
+- `CODOXEAR_ENABLE_VOICE_SCAN=1` to enable voice scan
+- `CODOXEAR_ENABLE_VOICE_WORKER=1` to enable voice delivery/HLS/WebPush
 
-Runtime state is stored under `~/.local/share/codoxear` (legacy `~/.local/share/codex-web` is no longer used).
+Worker flags remain individually opt-in. Disabling a flag disables that Rust side
+effect; it does not restore a Python worker.
 
-Backend-specific session logs live under the backend home:
+## Tailscale HTTPS
 
-- Codex: `~/.codex/sessions/rollout-*.jsonl`
-- Pi: `~/.pi/agent/sessions/*.jsonl`
-
-### Rust broker rollout (Phase 4)
-
-The Rust broker binary builds as part of the Rust backend bins:
-
-```sh
-cd backend-rs
-cargo build --release --bins
-```
-
-Set `CODOXEAR_RUST_BROKER_BIN` to grey-release new web-owned sessions through the Rust broker path from either the Python server or the Rust server:
+Browser notifications and iOS Web Push require HTTPS (or localhost). One simple
+setup is Tailscale Serve on port `8443`:
 
 ```sh
-export CODOXEAR_RUST_BROKER_BIN="$(pwd)/target/release/codoxear-broker-rs"
-codoxear-server
+tailscale serve --bg --yes --https=8443 http://127.0.0.1:8743
 ```
 
-Rollback is intentionally simple: unset `CODOXEAR_RUST_BROKER_BIN` and restart the server. Existing broker sessions can be deleted/shutdown normally; new sessions return to the Python broker fallback. The Python broker entry points remain supported in this phase.
+Then open:
 
-### Frontend development
+```text
+https://<device>.<tailnet>.ts.net:8443/
+```
 
-1. Start the Python server: `python3 -m codoxear.server`
-2. Start Vite: `cd web && npm install && npm run dev`
-3. Open the Vite URL for frontend work; `/api/*` is proxied to Python.
-4. Build production assets with `cd web && npm run build`.
+Systemd user service example:
+
+```ini
+[Service]
+ExecStart=/path/to/codoxear-backend-rs
+ExecStartPost=/usr/bin/tailscale serve --bg --yes --https=8443 http://127.0.0.1:8743
+ExecStopPost=-/usr/bin/tailscale serve --bg --yes --https=8443 off
+```
+
+## Session ownership
+
+Codoxear shows:
+
+- Terminal-owned sessions started through `codox` or `piox`.
+- Web-owned sessions started from the UI.
+- Web-owned tmux sessions started from the UI with `Create in tmux` enabled.
+
+Delete sends a shutdown request to the Rust broker. Deleting a terminal-owned
+session stops the corresponding terminal session.
+
+## Frontend development
+
+1. Start the Rust server:
+
+   ```sh
+   ./backend-rs/target/release/codoxear-backend-rs
+   ```
+
+2. Start Vite:
+
+   ```sh
+   cd web
+   npm install
+   npm run dev
+   ```
+
+3. Open the Vite URL for frontend work; `/api/*` proxies to the Rust server.
+4. Build production assets with `npm run build` before handing off UI changes.
+
+## Verification
+
+Local full check:
+
+```sh
+openspec validate rust-backend-cutover-finish --strict
+openspec validate rust-backend-cutover --strict
+openspec validate rust-backend-broker --strict
+openspec validate rust-backend-voice-push --strict
+cargo fmt --manifest-path backend-rs/Cargo.toml --all -- --check
+cargo clippy --manifest-path backend-rs/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path backend-rs/Cargo.toml --release
+cargo build --manifest-path backend-rs/Cargo.toml --release --bins
+pytest tests/contract -q
+(cd web && npm run test && npm run build)
+```
+
+## Rollback
+
+Phase 6 has no environment-flag rollback to Python. Operational rollback is a
+git revert of the Phase 6 commit(s) to the Phase 5 PASS baseline (or a descendant
+known-good commit), followed by the Phase 5 verification suite. Do not delete
+`~/.local/share/codoxear` state files during rollback.
+
+## Security model
+
+Codoxear provides password gating only and does not provide TLS by itself.
+Assume anyone who can reach the plain HTTP port can observe or modify traffic.
+Use VPN, SSH port-forwarding, Tailscale HTTPS, or another TLS reverse proxy for
+network security.
 
 ## License
 

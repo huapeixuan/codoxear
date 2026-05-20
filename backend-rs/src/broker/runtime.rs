@@ -4,14 +4,13 @@ use crate::broker::codex_state::start_codex_log_watcher;
 use crate::broker::config::{normalize_backend, BrokerCli};
 use crate::broker::pi_live::{PiLiveRuntime, PiLiveState};
 use crate::broker::runtime_support::{
-    broker_token, clean_env, home_dir, now_secs, resume_session_id_from_args, shell_quote,
+    broker_token, clean_env, home_dir, now_secs, resume_session_id_from_args,
     terminate_process_group, write_meta,
 };
 use serde_json::{json, Value};
-use std::ffi::CString;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -118,7 +117,7 @@ pub struct State {
 pub type BrokerStateHandle = Arc<Mutex<State>>;
 
 #[derive(Debug)]
-enum ChildHandle {
+pub(crate) enum ChildHandle {
     Pty { pid: u32, master: std::fs::File },
     Process { child: Child },
 }
@@ -144,6 +143,7 @@ pub fn run(cli: BrokerCli) -> i32 {
 
 fn run_inner(cli: BrokerCli, env: BrokerEnv) -> Result<i32, String> {
     fs::create_dir_all(env.socks_dir()).map_err(|err| format!("create socks dir failed: {err}"))?;
+    reset_sigchld_for_child_wait()?;
     let start_ts = now_secs();
     let token = broker_token();
     let sock_path = env.socks_dir().join(format!("{token}.sock"));
@@ -153,7 +153,7 @@ fn run_inner(cli: BrokerCli, env: BrokerEnv) -> Result<i32, String> {
     let mut child = if env.backend == "pi" {
         spawn_pi_process(&cli, &env)?
     } else {
-        spawn_codex_pty(&cli, &env)?
+        crate::broker::codex_spawn::spawn_codex(&cli, &env)?
     };
     let (child_pid, child_stdin, pty_master) = match &mut child {
         ChildHandle::Pty { pid, master } => (
@@ -194,10 +194,9 @@ fn run_inner(cli: BrokerCli, env: BrokerEnv) -> Result<i32, String> {
             state.lock().map_err(|_| "broker state poisoned")?.pi_rpc = Some(rpc);
         }
     }
-    write_meta(&state, &env)?;
-
     let stop = Arc::new(AtomicBool::new(false));
     start_socket_server(state.clone(), env.clone(), stop.clone())?;
+    write_meta(&state, &env)?;
     start_output_reader(&mut child, state.clone(), stop.clone());
     if let ChildHandle::Pty { master, .. } = &child {
         if let Ok(stdin_master) = master.try_clone() {
@@ -212,10 +211,41 @@ fn run_inner(cli: BrokerCli, env: BrokerEnv) -> Result<i32, String> {
         start_codex_log_watcher(state.clone(), env.clone(), stop.clone());
     }
 
-    let code = wait_child(child, stop.clone());
+    let code = wait_child(child, stop.clone(), env.debug);
+    if code != 0 && env.debug {
+        if let Ok(st) = state.lock() {
+            eprintln!(
+                "codoxear-broker-rs: child exited code={code} pid={} output_tail={}",
+                st.child_pid, st.output_tail
+            );
+        }
+    }
     stop.store(true, Ordering::SeqCst);
     let _ = fs::remove_file(&sock_path);
     Ok(code)
+}
+
+fn reset_sigchld_for_child_wait() -> Result<(), String> {
+    // Some non-interactive launchers can invoke the broker with SIGCHLD ignored
+    // (or SA_NOCLDWAIT semantics). On Linux that makes waitpid(2) report
+    // ECHILD for the forkpty child immediately, so the broker exits before the
+    // child CLI can finish booting or the socket sidecar is useful. The broker
+    // owns exactly one foreground child and must be able to reap it itself.
+    let rc = unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = libc::SIG_DFL;
+        action.sa_flags = 0;
+        libc::sigemptyset(&mut action.sa_mask);
+        libc::sigaction(libc::SIGCHLD, &action, std::ptr::null_mut())
+    };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "reset SIGCHLD handler failed: {}",
+            std::io::Error::last_os_error()
+        ))
+    }
 }
 
 fn spawn_pi_process(cli: &BrokerCli, env: &BrokerEnv) -> Result<ChildHandle, String> {
@@ -273,111 +303,46 @@ fn repo_pi_ask_user_bridge_path() -> String {
         .to_string()
 }
 
-fn spawn_codex_pty(cli: &BrokerCli, env: &BrokerEnv) -> Result<ChildHandle, String> {
-    let (rows, cols) = crate::broker::pty::terminal_size();
-    let argv = codex_exec_argv(cli, env);
-    let mut master_fd: libc::c_int = -1;
-    let mut winsize = libc::winsize {
-        ws_row: rows,
-        ws_col: cols,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    let pid = unsafe {
-        libc::forkpty(
-            &mut master_fd,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &mut winsize,
-        )
-    };
-    if pid < 0 {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
-    if pid == 0 {
-        child_exec(&argv, &cli.cwd, env, rows, cols);
-    }
-    unsafe { libc::setpgid(pid, pid) };
-    let master = unsafe { std::fs::File::from_raw_fd(master_fd) };
-    Ok(ChildHandle::Pty {
-        pid: pid as u32,
-        master,
-    })
-}
-
-fn codex_exec_argv(cli: &BrokerCli, env: &BrokerEnv) -> Vec<String> {
-    if env.owner.as_deref() == Some("web") {
-        let shell = clean_env("SHELL").unwrap_or_else(|| "/bin/zsh".to_string());
-        let mut parts = vec![shell, "-l".to_string(), "-i".to_string(), "-c".to_string()];
-        let mut cmd = vec![env.codex_bin.clone()];
-        cmd.extend(cli.agent_args.iter().cloned());
-        parts.push(format!(
-            "exec {}",
-            cmd.iter()
-                .map(|arg| shell_quote(arg))
-                .collect::<Vec<_>>()
-                .join(" ")
-        ));
-        parts
-    } else {
-        let mut argv = vec![env.codex_bin.clone()];
-        argv.extend(cli.agent_args.iter().cloned());
-        argv
-    }
-}
-
-fn child_exec(argv: &[String], cwd: &Path, env: &BrokerEnv, rows: u16, cols: u16) -> ! {
-    unsafe { libc::setpgid(0, 0) };
-    let _ = std::env::set_current_dir(cwd);
-    std::env::set_var(
-        "TERM",
-        clean_env("TERM").unwrap_or_else(|| "xterm-256color".to_string()),
-    );
-    std::env::set_var("COLUMNS", cols.to_string());
-    std::env::set_var("LINES", rows.to_string());
-    std::env::set_var("CODEX_HOME", &env.codex_home);
-    if argv.is_empty() {
-        unsafe { libc::_exit(127) }
-    }
-    let cstrings = match argv
-        .iter()
-        .map(|arg| CString::new(arg.as_bytes()))
-        .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(v) => v,
-        Err(_) => unsafe { libc::_exit(127) },
-    };
-    let mut ptrs: Vec<*const libc::c_char> = cstrings.iter().map(|s| s.as_ptr()).collect();
-    ptrs.push(std::ptr::null());
-    unsafe {
-        libc::execvp(cstrings[0].as_ptr(), ptrs.as_ptr());
-        libc::_exit(127);
-    }
-}
-
 fn start_output_reader(child: &mut ChildHandle, state: Arc<Mutex<State>>, stop: Arc<AtomicBool>) {
     match child {
         ChildHandle::Pty { master, .. } => {
             let Ok(reader_file) = master.try_clone() else {
                 return;
             };
-            thread::spawn(move || {
-                let mut reader = std::io::BufReader::new(reader_file);
-                let mut buf = [0u8; 4096];
-                loop {
-                    if stop.load(Ordering::SeqCst) {
-                        break;
-                    }
-                    match std::io::Read::read(&mut reader, &mut buf) {
-                        Ok(0) => break,
-                        Ok(n) => append_tail(&state, &String::from_utf8_lossy(&buf[..n])),
-                        Err(_) => break,
-                    }
-                }
-            });
+            start_pipe_tail_reader(reader_file, state, stop);
         }
-        ChildHandle::Process { .. } => {}
+        ChildHandle::Process { child } => {
+            if let Some(stdout) = child.stdout.take() {
+                let reader_file = unsafe { std::fs::File::from_raw_fd(stdout.into_raw_fd()) };
+                start_pipe_tail_reader(reader_file, state.clone(), stop.clone());
+            }
+            if let Some(stderr) = child.stderr.take() {
+                let reader_file = unsafe { std::fs::File::from_raw_fd(stderr.into_raw_fd()) };
+                start_pipe_tail_reader(reader_file, state, stop);
+            }
+        }
     }
+}
+
+fn start_pipe_tail_reader(
+    reader_file: std::fs::File,
+    state: Arc<Mutex<State>>,
+    stop: Arc<AtomicBool>,
+) {
+    thread::spawn(move || {
+        let mut reader = std::io::BufReader::new(reader_file);
+        let mut buf = [0u8; 4096];
+        loop {
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+            match std::io::Read::read(&mut reader, &mut buf) {
+                Ok(0) => break,
+                Ok(n) => append_tail(&state, &String::from_utf8_lossy(&buf[..n])),
+                Err(_) => break,
+            }
+        }
+    });
 }
 
 fn append_tail(state: &Arc<Mutex<State>>, text: &str) {
@@ -616,28 +581,76 @@ pub(super) fn drain_pi_output(state: &Arc<Mutex<State>>) {
     }
 }
 
-fn wait_child(child: ChildHandle, stop: Arc<AtomicBool>) -> i32 {
+fn wait_child(child: ChildHandle, stop: Arc<AtomicBool>, debug: bool) -> i32 {
     match child {
-        ChildHandle::Pty { pid, .. } => loop {
-            if stop.load(Ordering::SeqCst) {
-                terminate_process_group(pid);
-            }
-            let mut status: libc::c_int = 0;
-            let result = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
-            if result == pid as libc::pid_t {
-                if libc::WIFEXITED(status) {
-                    return libc::WEXITSTATUS(status);
+        ChildHandle::Pty { pid, master } => {
+            let _keep_master_open = master;
+            let mut logged_wait_error = false;
+            loop {
+                if stop.load(Ordering::SeqCst) {
+                    terminate_process_group(pid);
                 }
-                if libc::WIFSIGNALED(status) {
-                    return 128 + libc::WTERMSIG(status);
+                let mut status: libc::c_int = 0;
+                let result =
+                    unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
+                if result == pid as libc::pid_t {
+                    if libc::WIFEXITED(status) {
+                        return libc::WEXITSTATUS(status);
+                    }
+                    if libc::WIFSIGNALED(status) {
+                        return 128 + libc::WTERMSIG(status);
+                    }
+                    if libc::WIFSTOPPED(status) {
+                        if debug {
+                            eprintln!(
+                                "codoxear-broker-rs: child pid={pid} stopped by signal {}; continuing",
+                                libc::WSTOPSIG(status)
+                            );
+                        }
+                        unsafe { libc::kill(pid as libc::pid_t, libc::SIGCONT) };
+                        thread::sleep(Duration::from_millis(100));
+                        continue;
+                    }
+                    if libc::WIFCONTINUED(status) {
+                        thread::sleep(Duration::from_millis(100));
+                        continue;
+                    }
+                    if debug {
+                        eprintln!(
+                            "codoxear-broker-rs: waitpid returned unhandled status for pid={pid}: raw={status}"
+                        );
+                    }
+                    let alive = unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };
+                    if alive {
+                        thread::sleep(Duration::from_millis(100));
+                        continue;
+                    }
+                    return 1;
                 }
-                return 1;
+                if result < 0 {
+                    let err = std::io::Error::last_os_error();
+                    if err.raw_os_error() == Some(libc::ECHILD) {
+                        let alive = unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };
+                        if debug && !logged_wait_error {
+                            eprintln!(
+                            "codoxear-broker-rs: waitpid reported ECHILD for pid={pid}; alive={alive}; continuing while child is alive"
+                        );
+                            logged_wait_error = true;
+                        }
+                        if alive {
+                            thread::sleep(Duration::from_millis(100));
+                            continue;
+                        }
+                        return if stop.load(Ordering::SeqCst) { 0 } else { 1 };
+                    }
+                    if debug {
+                        eprintln!("codoxear-broker-rs: waitpid failed for pid={pid}: {err}");
+                    }
+                    return 1;
+                }
+                thread::sleep(Duration::from_millis(100));
             }
-            if result < 0 {
-                return 1;
-            }
-            thread::sleep(Duration::from_millis(100));
-        },
+        }
         ChildHandle::Process { mut child } => loop {
             if stop.load(Ordering::SeqCst) {
                 terminate_process_group(child.id());
