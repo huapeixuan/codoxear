@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build && rm -rf ../codoxear/static/dist && mkdir -p ../codoxear/static/dist && cp -R dist/. ../codoxear/static/dist/",
+    "build": "tsc -b && vite build && rm -rf ../codoxear/static/dist && mkdir -p ../codoxear/static/dist && cp -R dist/. ../codoxear/static/dist/ && find ../codoxear/static/dist -name '*.map' -delete && cp public/*.png public/*.webmanifest public/service-worker.js ../codoxear/static/dist/",
     "preview": "vite preview",
     "test": "tsc --noEmit -p tsconfig.test.json && vitest run",
     "test:watch": "vitest"

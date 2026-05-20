@@ -38,7 +38,7 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -158,6 +158,11 @@ impl Drop for EnvGuard {
             }
         }
     }
+}
+
+fn env_lock() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
 }
 
 fn test_app() -> (TempDir, axum::Router) {
@@ -651,40 +656,43 @@ fn listener_runtime_tracks_ttl_drop_and_updates_voice_snapshot() {
     assert_eq!(runtime.snapshot(246.0).active_listener_count, 0);
 }
 
-#[tokio::test]
-async fn listener_route_updates_settings_snapshot_and_test_push_requires_worker_flag() {
+#[test]
+fn listener_route_updates_settings_snapshot_and_test_push_requires_worker_flag() {
+    let _lock = env_lock();
     reset_runtime_registry_for_tests();
-    let (home, app) = test_app();
-    let cookie = signed_cookie(&home);
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let (home, app) = test_app();
+        let cookie = signed_cookie(&home);
 
-    let (status, body) = post_json(
-        app.clone(),
-        "/api/audio/listener",
-        Some(&cookie),
-        json!({"client_id":"c1", "enabled": true}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["active_listener_count"], 1);
+        let (status, body) = post_json(
+            app.clone(),
+            "/api/audio/listener",
+            Some(&cookie),
+            json!({"client_id":"c1", "enabled": true}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["active_listener_count"], 1);
 
-    let (settings_status, _, settings_body) =
-        get(app.clone(), "/api/settings/voice", Some(&cookie)).await;
-    assert_eq!(settings_status, StatusCode::OK);
-    let settings: Value = serde_json::from_slice(&settings_body).unwrap();
-    assert_eq!(settings["audio"]["active_listener_count"], 1);
+        let (settings_status, _, settings_body) =
+            get(app.clone(), "/api/settings/voice", Some(&cookie)).await;
+        assert_eq!(settings_status, StatusCode::OK);
+        let settings: Value = serde_json::from_slice(&settings_body).unwrap();
+        assert_eq!(settings["audio"]["active_listener_count"], 1);
 
-    let (disabled_status, disabled_body) = post_json(
-        app,
-        "/api/notifications/test_push",
-        Some(&cookie),
-        json!({}),
-    )
-    .await;
-    assert_eq!(disabled_status, StatusCode::BAD_REQUEST);
-    assert!(disabled_body["error"]
-        .as_str()
-        .unwrap()
-        .contains("no enabled mobile"));
+        let (disabled_status, disabled_body) = post_json(
+            app,
+            "/api/notifications/test_push",
+            Some(&cookie),
+            json!({}),
+        )
+        .await;
+        assert_eq!(disabled_status, StatusCode::NOT_IMPLEMENTED);
+        assert!(disabled_body["error"]
+            .as_str()
+            .unwrap()
+            .contains("CODOXEAR_ENABLE_VOICE_WORKER=1"));
+    });
 }
 
 #[test]
@@ -800,47 +808,50 @@ fn webpush_message_builds_encrypted_payload_with_ttl_and_vapid_headers() {
     assert!(message.payload.is_some());
 }
 
-#[tokio::test]
-async fn enabled_test_announcement_enqueues_ledger_row() {
+#[test]
+fn enabled_test_announcement_enqueues_ledger_row() {
+    let _lock = env_lock();
     reset_runtime_registry_for_tests();
     let _guard = EnvGuard::set("CODOXEAR_ENABLE_VOICE_WORKER", "1");
-    let (home, app) = test_app();
-    let cookie = signed_cookie(&home);
-    let app_dir = app_dir(&home);
-    fs::write(
-        app_dir.join("voice_settings.json"),
-        serde_json::to_string(&json!({
-            "tts_enabled_for_final_response": true,
-            "tts_base_url": "http://127.0.0.1:1/v1",
-            "tts_api_key": "test-key"
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-    let (listener_status, _) = post_json(
-        app.clone(),
-        "/api/audio/listener",
-        Some(&cookie),
-        json!({"client_id":"c1", "enabled": true}),
-    )
-    .await;
-    assert_eq!(listener_status, StatusCode::OK);
-    let (status, body) = post_json(
-        app,
-        "/api/audio/test_announcement",
-        Some(&cookie),
-        json!({}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(body["message_id"].as_str().unwrap().starts_with("test-"));
-    assert_eq!(body["queue_depth"], 1);
-    let ledger: Value =
-        serde_json::from_slice(&fs::read(app_dir.join(DELIVERY_LEDGER_FILE)).unwrap()).unwrap();
-    assert_eq!(
-        ledger[body["message_id"].as_str().unwrap()]["narrated_status"],
-        "pending"
-    );
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let (home, app) = test_app();
+        let cookie = signed_cookie(&home);
+        let app_dir = app_dir(&home);
+        fs::write(
+            app_dir.join("voice_settings.json"),
+            serde_json::to_string(&json!({
+                "tts_enabled_for_final_response": true,
+                "tts_base_url": "http://127.0.0.1:1/v1",
+                "tts_api_key": "test-key"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let (listener_status, _) = post_json(
+            app.clone(),
+            "/api/audio/listener",
+            Some(&cookie),
+            json!({"client_id":"c1", "enabled": true}),
+        )
+        .await;
+        assert_eq!(listener_status, StatusCode::OK);
+        let (status, body) = post_json(
+            app,
+            "/api/audio/test_announcement",
+            Some(&cookie),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["message_id"].as_str().unwrap().starts_with("test-"));
+        assert_eq!(body["queue_depth"], 1);
+        let ledger: Value =
+            serde_json::from_slice(&fs::read(app_dir.join(DELIVERY_LEDGER_FILE)).unwrap()).unwrap();
+        assert_eq!(
+            ledger[body["message_id"].as_str().unwrap()]["narrated_status"],
+            "pending"
+        );
+    });
 }
 
 #[test]

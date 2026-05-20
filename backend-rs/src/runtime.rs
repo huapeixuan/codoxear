@@ -246,6 +246,10 @@ pub fn tmux_available() -> bool {
     })
 }
 
+pub fn url_prefix() -> Result<String, String> {
+    normalize_url_prefix(env::var("CODEX_WEB_URL_PREFIX").ok().as_deref())
+}
+
 fn normalize_url_prefix(raw: Option<&str>) -> Result<String, String> {
     let Some(value) = raw else {
         return Ok(String::new());

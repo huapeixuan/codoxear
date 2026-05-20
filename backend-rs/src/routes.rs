@@ -21,7 +21,7 @@ use crate::post_handlers::{
     session_enqueue, session_harness, session_interrupt, session_rename, session_send,
     session_ui_response,
 };
-use crate::runtime::{cookie_name, load_or_create_hmac_secret, verify_auth_cookie};
+use crate::runtime::{cookie_name, load_or_create_hmac_secret, url_prefix, verify_auth_cookie};
 use crate::session_create::session_create;
 use crate::takeover_post::takeover_open;
 use crate::voice_post::{
@@ -34,15 +34,41 @@ use axum::extract::{Request, State};
 use axum::http::header;
 use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::Response;
-use axum::routing::{get, post};
+use axum::response::{Redirect, Response};
+use axum::routing::{any, get, post};
 use axum::Router;
 use serde_json::{json, Value};
 use std::fs;
-use tower_http::services::{ServeDir, ServeFile};
+use std::path::{Path, PathBuf};
+use tower::ServiceExt;
+use tower_http::services::ServeDir;
 
 pub fn router(state: AppState) -> Router {
     let static_dir = repo_static_dir();
+    let app = unprefixed_router(state.clone(), static_dir.clone());
+    match url_prefix().expect("resolve CODEX_WEB_URL_PREFIX") {
+        prefix if prefix.is_empty() => app,
+        prefix => Router::new()
+            .route(&prefix, get(Redirect::permanent(&format!("{prefix}/"))))
+            .route(
+                &format!("{prefix}/"),
+                get({
+                    let app = app.clone();
+                    move |request| prefixed_request(request, app.clone())
+                }),
+            )
+            .route(
+                &format!("{prefix}/*path"),
+                any({
+                    let app = app.clone();
+                    move |request| prefixed_request(request, app.clone())
+                }),
+            )
+            .merge(app),
+    }
+}
+
+fn unprefixed_router(state: AppState, static_dir: PathBuf) -> Router {
     let protected_v1 = Router::new()
         .route("/api/v1/me", get(me))
         .route("/api/v1/sessions/bootstrap", get(sessions_bootstrap))
@@ -167,24 +193,68 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/health", get(health))
         .route("/api/v1/login", post(login))
         .route("/api/v1/hooks/notify", post(hooks_notify))
-        .route("/", get(static_index))
+        .route(
+            "/",
+            get({
+                let static_dir = static_dir.clone();
+                move || static_index(static_dir.clone())
+            }),
+        )
         .nest_service("/static", ServeDir::new(static_dir.clone()))
         .nest_service("/assets", ServeDir::new(static_dir.join("dist/assets")))
-        .route_service(
+        .route(
             "/manifest.webmanifest",
-            ServeFile::new(static_dir.join("manifest.webmanifest")),
+            get({
+                let static_dir = static_dir.clone();
+                move || {
+                    static_file(
+                        static_dir.clone(),
+                        "manifest.webmanifest",
+                        "application/manifest+json",
+                    )
+                }
+            }),
         )
-        .route_service(
+        .route(
             "/service-worker.js",
-            ServeFile::new(static_dir.join("service-worker.js")),
+            get({
+                let static_dir = static_dir.clone();
+                move || {
+                    static_file(
+                        static_dir.clone(),
+                        "service-worker.js",
+                        "text/javascript;charset=utf-8",
+                    )
+                }
+            }),
         )
-        .route_service(
+        .route(
             "/favicon.ico",
-            ServeFile::new(static_dir.join("favicon.png")),
+            get({
+                let static_dir = static_dir.clone();
+                move || static_file(static_dir.clone(), "favicon.png", "image/png")
+            }),
         )
-        .route_service(
+        .route(
             "/favicon.png",
-            ServeFile::new(static_dir.join("favicon.png")),
+            get({
+                let static_dir = static_dir.clone();
+                move || static_file(static_dir.clone(), "favicon.png", "image/png")
+            }),
+        )
+        .route(
+            "/codoxear-icon.png",
+            get({
+                let static_dir = static_dir.clone();
+                move || static_file(static_dir.clone(), "codoxear-icon.png", "image/png")
+            }),
+        )
+        .route(
+            "/codoxear-icon-192.png",
+            get({
+                let static_dir = static_dir.clone();
+                move || static_file(static_dir.clone(), "codoxear-icon-192.png", "image/png")
+            }),
         )
         .merge(protected_v1)
         .nest("/api", public_api_router(state.clone()))
@@ -192,37 +262,114 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn static_index() -> Response {
-    let static_dir = repo_static_dir();
+async fn static_index(static_dir: PathBuf) -> Response {
     let dist_index = static_dir.join("dist/index.html");
-    let source_index = static_dir
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|repo| repo.join("web/index.html"));
-    let bytes = fs::read(&dist_index).or_else(|_| {
-        source_index
-            .as_ref()
-            .map(fs::read)
-            .unwrap_or_else(|| fs::read(&dist_index))
-    });
-    match bytes {
-        Ok(bytes) => {
-            let mut response = Response::new(Body::from(bytes));
-            response.headers_mut().insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("text/html;charset=utf-8"),
+    match fs::read(&dist_index) {
+        Ok(bytes) => bytes_response(
+            StatusCode::OK,
+            prefix_index_asset_urls(bytes),
+            "text/html;charset=utf-8",
+        ),
+        Err(_) => {
+            let body = format!(
+                "<!doctype html><title>Codoxear UI bundle missing</title><h1>Codoxear UI bundle missing</h1><p>Missing <code>{}</code>.</p><p>Run <code>cd web && npm ci && npm run build</code> before starting codoxear-backend-rs from a source checkout, or deploy a package that includes <code>codoxear/static/dist</code>.</p>",
+                dist_index.display()
             );
-            response
+            bytes_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                body.into_bytes(),
+                "text/html;charset=utf-8",
+            )
         }
-        Err(_) => not_found().await,
     }
 }
 
+fn prefix_index_asset_urls(bytes: Vec<u8>) -> Vec<u8> {
+    let Ok(prefix) = url_prefix() else {
+        return bytes;
+    };
+    if prefix.is_empty() {
+        return bytes;
+    }
+    let Ok(html) = String::from_utf8(bytes) else {
+        return Vec::new();
+    };
+    html.replace("href=\"/", &format!("href=\"{prefix}/"))
+        .replace("src=\"/", &format!("src=\"{prefix}/"))
+        .replace("href=\"./", &format!("href=\"{prefix}/"))
+        .replace("src=\"./", &format!("src=\"{prefix}/"))
+        .into_bytes()
+}
+
+async fn prefixed_request(mut request: Request<Body>, app: Router) -> Response {
+    let Some(prefix) = url_prefix().ok().filter(|prefix| !prefix.is_empty()) else {
+        return not_found().await;
+    };
+    let uri = request.uri().clone();
+    let Some(path_and_query) = uri.path_and_query() else {
+        return not_found().await;
+    };
+    let Some(rest) = path_and_query.path().strip_prefix(&prefix) else {
+        return not_found().await;
+    };
+    let stripped_path = if rest.is_empty() { "/" } else { rest };
+    let stripped_path_and_query = match path_and_query.query() {
+        Some(query) => format!("{stripped_path}?{query}"),
+        None => stripped_path.to_string(),
+    };
+    let mut parts = uri.into_parts();
+    let Ok(new_path_and_query) = stripped_path_and_query.parse() else {
+        return not_found().await;
+    };
+    parts.path_and_query = Some(new_path_and_query);
+    let Ok(new_uri) = axum::http::Uri::from_parts(parts) else {
+        return not_found().await;
+    };
+    *request.uri_mut() = new_uri;
+    match app.oneshot(request).await {
+        Ok(response) => response,
+        Err(_) => internal_error("prefixed request dispatch failed".to_string()),
+    }
+}
+
+async fn static_file(
+    static_dir: PathBuf,
+    name: &'static str,
+    content_type: &'static str,
+) -> Response {
+    let dist_path = static_dir.join("dist").join(name);
+    let static_path = static_dir.join(name);
+    match read_existing_file(&dist_path).or_else(|| read_existing_file(&static_path)) {
+        Some(bytes) => bytes_response(StatusCode::OK, bytes, content_type),
+        None => not_found().await,
+    }
+}
+
+fn read_existing_file(path: &Path) -> Option<Vec<u8>> {
+    fs::read(path).ok()
+}
+
+fn bytes_response(status: StatusCode, bytes: Vec<u8>, content_type: &'static str) -> Response {
+    let mut response = Response::new(Body::from(bytes));
+    *response.status_mut() = status;
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    response
+}
+
 fn repo_static_dir() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .join("codoxear/static")
+    std::env::var("CODOXEAR_STATIC_DIR")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("codoxear/static")
+        })
 }
 
 fn public_api_router(state: AppState) -> Router<AppState> {
