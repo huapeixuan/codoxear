@@ -40,7 +40,7 @@ use axum::routing::{any, get, post};
 use axum::Router;
 use serde_json::{json, Value};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tower::ServiceExt;
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -50,7 +50,15 @@ pub fn router(state: AppState) -> Router {
 }
 
 pub fn router_with_url_prefix(state: AppState, raw_prefix: &str) -> Result<Router, String> {
-    let root = root_router(state.clone());
+    router_with_url_prefix_and_static_dir(state, raw_prefix, repo_static_dir())
+}
+
+pub fn router_with_url_prefix_and_static_dir(
+    state: AppState,
+    raw_prefix: &str,
+    static_dir: PathBuf,
+) -> Result<Router, String> {
+    let root = root_router(state.clone(), static_dir);
     let prefix = crate::runtime::normalize_url_prefix(Some(raw_prefix))?;
     if prefix.is_empty() {
         return Ok(root);
@@ -138,8 +146,8 @@ async fn prefix_dispatch(
     })
 }
 
-fn root_router(state: AppState) -> Router {
-    let static_dir = repo_static_dir();
+fn root_router(state: AppState, static_dir: PathBuf) -> Router {
+    let index_static_dir = static_dir.clone();
     let protected_v1 = Router::new()
         .route("/api/v1/me", get(me))
         .route("/api/v1/sessions/bootstrap", get(sessions_bootstrap))
@@ -264,7 +272,13 @@ fn root_router(state: AppState) -> Router {
         .route("/api/v1/health", get(health))
         .route("/api/v1/login", post(login))
         .route("/api/v1/hooks/notify", post(hooks_notify))
-        .route("/", get(static_index))
+        .route(
+            "/",
+            get(move || {
+                let static_dir = index_static_dir.clone();
+                async move { static_index(static_dir).await }
+            }),
+        )
         .route("/:dist_asset", get(static_dist_asset_redirect))
         .nest_service("/static", ServeDir::new(static_dir.clone()))
         .nest_service("/assets", ServeDir::new(static_dir.join("dist/assets")))
@@ -290,10 +304,9 @@ fn root_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn static_index() -> Response {
-    let static_dir = repo_static_dir();
+async fn static_index(static_dir: PathBuf) -> Response {
     let dist_index = static_dir.join("dist/index.html");
-    match fs::read(&dist_index) {
+    match read_static_dist_index(&dist_index) {
         Ok(bytes) => {
             let mut response = Response::new(Body::from(bytes));
             response.headers_mut().insert(
@@ -304,6 +317,10 @@ async fn static_index() -> Response {
         }
         Err(_) => not_found().await,
     }
+}
+
+fn read_static_dist_index(dist_index: &Path) -> std::io::Result<Vec<u8>> {
+    fs::read(dist_index)
 }
 
 async fn static_dist_asset_redirect(AxumPath(dist_asset): AxumPath<String>) -> Response {
@@ -324,7 +341,7 @@ fn is_static_dist_asset_name(value: &str) -> bool {
 
 pub fn assert_static_dist_ready() -> Result<(), String> {
     let dist_index = repo_static_dir().join("dist/index.html");
-    let bytes = fs::read(&dist_index).map_err(|err| {
+    let bytes = read_static_dist_index(&dist_index).map_err(|err| {
         format!(
             "missing production web bundle at {}: {err}; run `cd web && npm install && npm run build` before starting codoxear-backend-rs from a source checkout",
             dist_index.display()

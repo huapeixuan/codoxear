@@ -1,11 +1,12 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use codoxear_backend_rs::app_state::AppState;
-use codoxear_backend_rs::routes::{router, router_with_url_prefix};
+use codoxear_backend_rs::routes::{router, router_with_url_prefix_and_static_dir};
 use codoxear_backend_rs::runtime::{
     load_or_create_hmac_secret, sign_auth_cookie_value, unix_now_seconds, RuntimeConfig,
 };
 use http_body_util::BodyExt;
+use std::fs;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -97,7 +98,18 @@ async fn url_prefix_mounts_ui_canonical_api_and_legacy_alias() {
         fake_spawn_for_tests: false,
         fake_spawn_session_id_for_tests: None,
     };
-    let app = router_with_url_prefix(state, "/codoxear").unwrap();
+    let static_dir = home.path().join("static");
+    fs::create_dir_all(static_dir.join("dist/assets")).unwrap();
+    fs::write(
+        static_dir.join("dist/index.html"),
+        concat!(
+            r#"<!doctype html><html><head><title>Codoxear</title>"#,
+            r#"<script type="module" src="./assets/index-test.js"></script>"#,
+            r#"</head><body><div id="app"></div></body></html>"#
+        ),
+    )
+    .unwrap();
+    let app = router_with_url_prefix_and_static_dir(state, "/codoxear", static_dir).unwrap();
 
     let redirect = app
         .clone()
@@ -128,7 +140,7 @@ async fn url_prefix_mounts_ui_canonical_api_and_legacy_alias() {
         )
         .await
         .unwrap();
-    assert_eq!(prefixed_root.status(), StatusCode::OK);
+    assert_eq!(prefixed_root.status(), StatusCode::OK, "prefixed root");
     let prefixed_root_body = response_text(prefixed_root).await;
     assert!(prefixed_root_body.contains("<html"));
     assert!(!prefixed_root_body.contains("./src/main.tsx"));
