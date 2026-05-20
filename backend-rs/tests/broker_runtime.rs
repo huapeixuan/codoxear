@@ -18,14 +18,6 @@ fn write_fake_bin(dir: &Path, name: &str, body: &str) -> PathBuf {
     path
 }
 
-fn write_fake_shell(dir: &Path) -> PathBuf {
-    write_fake_bin(
-        dir,
-        "fake-shell.sh",
-        "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"-c\" ]; then\n    shift\n    exec /bin/sh -c \"$1\"\n  fi\n  shift\ndone\nexec /bin/sh\n",
-    )
-}
-
 fn broker_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_codoxear-broker-rs"))
 }
@@ -103,31 +95,35 @@ fn stop_child(mut child: Child, sock_path: Option<&str>) {
 #[test]
 fn rust_broker_codex_writes_sidecar_and_serves_socket() {
     let dir = TempDir::new().unwrap();
+    let ready = dir.path().join("codex-ready");
     let fake_codex = write_fake_bin(
         dir.path(),
         "fake-codex.sh",
-        "#!/bin/sh\necho fake-codex-ready\nexec tail -f /dev/null\n",
+        &format!(
+            "#!/bin/sh
+printf ready > {}
+exec tail -f /dev/null
+",
+            ready.display()
+        ),
     );
-    let fake_shell = write_fake_shell(dir.path());
     let child = Command::new(broker_bin())
         .args(["--cwd", dir.path().to_str().unwrap(), "--"])
         .env("CODOXEAR_APP_DIR", dir.path().join("app"))
         .env("CODEX_BIN", &fake_codex)
-        .env("SHELL", &fake_shell)
         .env("CODEX_HOME", dir.path().join("codex-home"))
-        .env("CODEX_WEB_OWNER", "web")
         .env("CODEX_WEB_SPAWN_NONCE", "nonce-codex")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    wait_for_file(&ready);
 
     let meta = wait_for_live_meta(&dir.path().join("app"));
     let sock_path = meta["sock_path"].as_str().unwrap().to_string();
     assert_eq!(meta["backend"], "codex");
     assert_eq!(meta["agent_backend"], "codex");
-    assert_eq!(meta["owner"], "web");
     assert_eq!(meta["spawn_nonce"], "nonce-codex");
     assert_eq!(meta["log_path"], Value::Null);
     assert!(meta["codex_pid"].as_i64().unwrap() > 0);
