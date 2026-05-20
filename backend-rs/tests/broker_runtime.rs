@@ -9,10 +9,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
-fn shell_loop(seconds: u64) -> String {
-    format!("end=$(( $(date +%s) + {seconds} )); while [ $(date +%s) -lt $end ]; do sleep 1; done")
-}
-
 fn write_fake_bin(dir: &Path, name: &str, body: &str) -> PathBuf {
     let path = dir.join(name);
     fs::write(&path, body).unwrap();
@@ -110,7 +106,7 @@ fn rust_broker_codex_writes_sidecar_and_serves_socket() {
     let fake_codex = write_fake_bin(
         dir.path(),
         "fake-codex.sh",
-        &format!("#!/bin/sh\necho fake-codex-ready\n{}\n", shell_loop(60)),
+        "#!/bin/sh\necho fake-codex-ready\nexec tail -f /dev/null\n",
     );
     let fake_shell = write_fake_shell(dir.path());
     let child = Command::new(broker_bin())
@@ -162,9 +158,8 @@ fn rust_broker_pi_writes_session_path_and_pi_socket_commands() {
         dir.path(),
         "fake-pi.sh",
         &format!(
-            "#!/bin/sh\nprintf '%s\n' \"$@\" > {}\necho fake-pi-ready\n{}\n",
-            dir.path().join("pi-args.txt").display(),
-            shell_loop(60)
+            "#!/bin/sh\nprintf '%s\n' \"$@\" > {}\necho fake-pi-ready\nexec tail -f /dev/null\n",
+            dir.path().join("pi-args.txt").display()
         ),
     );
     let session_file = dir.path().join("session.jsonl");

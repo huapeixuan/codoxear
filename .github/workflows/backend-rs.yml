@@ -57,7 +57,7 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
         working-directory: backend-rs
       - name: cargo test
-        run: cargo test --release
+        run: cargo test --release -- --test-threads=1
         working-directory: backend-rs
       - name: cargo build bins
         run: cargo build --release --bins
