@@ -68,6 +68,8 @@ jobs:
       - name: web build
         run: npm run build
         working-directory: web
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
       - name: production web bundle gate
         run: |
           test -f codoxear/static/dist/index.html

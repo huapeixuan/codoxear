@@ -41,8 +41,11 @@ use axum::Router;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tower::ServiceExt;
+use tower::{ServiceBuilder, ServiceExt};
 use tower_http::services::{ServeDir, ServeFile};
+use tower_http::set_header::SetResponseHeaderLayer;
+
+const IMMUTABLE_ASSET_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
 
 pub fn router(state: AppState) -> Router {
     let prefix = crate::runtime::url_prefix().expect("invalid CODEX_WEB_URL_PREFIX");
@@ -281,7 +284,20 @@ fn root_router(state: AppState, static_dir: PathBuf) -> Router {
         )
         .route("/:dist_asset", get(static_dist_asset_redirect))
         .nest_service("/static", ServeDir::new(static_dir.clone()))
-        .nest_service("/assets", ServeDir::new(static_dir.join("dist/assets")))
+        .nest_service(
+            "/assets",
+            ServiceBuilder::new()
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::CACHE_CONTROL,
+                    |response: &axum::http::Response<_>| {
+                        response
+                            .status()
+                            .is_success()
+                            .then(|| HeaderValue::from_static(IMMUTABLE_ASSET_CACHE_CONTROL))
+                    },
+                ))
+                .service(ServeDir::new(static_dir.join("dist/assets"))),
+        )
         .route_service(
             "/manifest.webmanifest",
             ServeFile::new(static_dir.join("manifest.webmanifest")),
@@ -524,8 +540,14 @@ pub fn json_response(status: StatusCode, value: Value) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_dist_index_bytes;
+    use super::{router_with_url_prefix_and_static_dir, validate_dist_index_bytes};
+    use crate::app_state::AppState;
+    use crate::runtime::RuntimeConfig;
+    use axum::body::Body;
+    use axum::http::{header, Request, StatusCode};
     use std::path::Path;
+    use tempfile::TempDir;
+    use tower::ServiceExt;
 
     #[test]
     fn dist_index_validator_rejects_vite_source_entrypoint() {
@@ -544,5 +566,52 @@ mod tests {
             br#"<script type="module" src="./assets/index-abcd.js"></script>"#,
         )
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn vite_hashed_assets_are_served_with_immutable_cache_control() {
+        let home = TempDir::new().expect("temp home");
+        let static_dir = home.path().join("static");
+        std::fs::create_dir_all(static_dir.join("dist/assets")).unwrap();
+        std::fs::write(
+            static_dir.join("dist/assets/index-abcd1234.js"),
+            "console.log('ok');",
+        )
+        .unwrap();
+
+        let state = AppState {
+            config: RuntimeConfig {
+                app_dir: home.path().join(".local/share/codoxear"),
+            },
+            fake_spawn_for_tests: false,
+            fake_spawn_session_id_for_tests: None,
+        };
+        let app = router_with_url_prefix_and_static_dir(state, "", static_dir).unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/assets/index-abcd1234.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some(super::IMMUTABLE_ASSET_CACHE_CONTROL)
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/javascript")
+        );
     }
 }
