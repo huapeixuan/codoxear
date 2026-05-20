@@ -38,7 +38,7 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -46,6 +46,7 @@ use tower::ServiceExt;
 struct EnvGuard {
     key: &'static str,
     previous: Option<String>,
+    _lock: MutexGuard<'static, ()>,
 }
 
 #[derive(Clone)]
@@ -140,11 +141,16 @@ impl WebPushSender for FakePushSender {
 
 impl EnvGuard {
     fn set(key: &'static str, value: &str) -> Self {
+        let lock = env_lock().lock().unwrap();
         let previous = std::env::var(key).ok();
         unsafe {
             std::env::set_var(key, value);
         }
-        Self { key, previous }
+        Self {
+            key,
+            previous,
+            _lock: lock,
+        }
     }
 }
 
@@ -158,6 +164,11 @@ impl Drop for EnvGuard {
             }
         }
     }
+}
+
+fn env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn test_app() -> (TempDir, axum::Router) {

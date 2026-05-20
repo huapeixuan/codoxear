@@ -148,11 +148,37 @@ fn wait_for_file_result(path: &Path) -> Result<String, ()> {
 
 fn collect_child_failure(mut child: Child) -> String {
     let status = child.try_wait().ok().flatten();
+    let mut stdout = String::new();
+    if let Some(mut pipe) = child.stdout.take() {
+        let _ = pipe.read_to_string(&mut stdout);
+    }
     let mut stderr = String::new();
     if let Some(mut pipe) = child.stderr.take() {
         let _ = pipe.read_to_string(&mut stderr);
     }
-    format!("child_status={status:?}; stderr={stderr}")
+    format!("child_status={status:?}; stdout={stdout}; stderr={stderr}")
+}
+
+fn broker_spawn_debug(dir: &Path, fake_codex: &Path, ready: &Path) -> String {
+    let fake_meta = fs::metadata(fake_codex)
+        .map(|meta| {
+            format!(
+                "exists=true file={} mode={:o}",
+                meta.is_file(),
+                meta.permissions().mode() & 0o777
+            )
+        })
+        .unwrap_or_else(|err| format!("metadata_error={err}"));
+    format!(
+        "cwd={} broker_bin={} fake_codex={} fake_codex_meta={} ready={} app_dir={} CODEX_HOME={} CODEX_WEB_AGENT_BACKEND=codex",
+        dir.display(),
+        broker_bin().display(),
+        fake_codex.display(),
+        fake_meta,
+        ready.display(),
+        dir.join("app").display(),
+        dir.join("codex-home").display()
+    )
 }
 
 fn wait_for_ready_or_broker_exit(ready: &Path, child: &mut Child) -> Result<(), String> {
@@ -169,11 +195,11 @@ fn wait_for_ready_or_broker_exit(ready: &Path, child: &mut Child) -> Result<(), 
     Err("fake codex readiness file was not written before timeout".to_string())
 }
 
-fn wait_for_ready_or_fail(ready: &Path, child: Child) -> Child {
+fn wait_for_ready_or_fail(ready: &Path, child: Child, debug: String) -> Child {
     let mut child = child;
     if let Err(reason) = wait_for_ready_or_broker_exit(ready, &mut child) {
         let details = collect_child_failure(child);
-        panic!("fake codex did not start: {reason}; {details}");
+        panic!("fake codex did not start: {reason}; {details}; {debug}");
     }
     child
 }
@@ -213,12 +239,17 @@ fn rust_broker_codex_writes_sidecar_and_serves_socket() {
         .env("CODEX_BIN", &fake_codex)
         .env("CODEX_HOME", dir.path().join("codex-home"))
         .env("CODEX_WEB_SPAWN_NONCE", "nonce-codex")
+        .env("CODEX_WEB_BROKER_DEBUG", "1")
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let child = wait_for_ready_or_fail(&ready, child);
+    let child = wait_for_ready_or_fail(
+        &ready,
+        child,
+        broker_spawn_debug(dir.path(), &fake_codex, &ready),
+    );
 
     let meta = wait_for_live_meta(&dir.path().join("app"));
     let sock_path = meta["sock_path"].as_str().unwrap().to_string();
@@ -262,8 +293,9 @@ fn rust_broker_codex_resets_ignored_sigchld_before_waiting_for_pty_child() {
         .env("CODEX_BIN", &fake_codex)
         .env("CODEX_HOME", dir.path().join("codex-home"))
         .env("CODEX_WEB_SPAWN_NONCE", "nonce-sigchld")
+        .env("CODEX_WEB_BROKER_DEBUG", "1")
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
@@ -271,7 +303,8 @@ fn rust_broker_codex_resets_ignored_sigchld_before_waiting_for_pty_child() {
     if let Err(reason) = wait_for_ready_or_broker_exit(&ready, &mut child) {
         let details = collect_child_failure(child);
         panic!(
-            "fake codex did not start when broker inherited ignored SIGCHLD: {reason}; {details}"
+            "fake codex did not start when broker inherited ignored SIGCHLD: {reason}; {details}; {}",
+            broker_spawn_debug(dir.path(), &fake_codex, &ready)
         );
     }
     let status = child.try_wait().unwrap();
